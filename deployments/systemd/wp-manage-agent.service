@@ -1,0 +1,19 @@
+[Unit]
+Description=WP Manage Agent
+After=network.target nginx.service mariadb.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/wp-manage-agent --api-url=${WPM_API_URL} --api-key=${WPM_API_KEY}
+Restart=always
+RestartSec=5
+LimitNOFILE=65535
+EnvironmentFile=/etc/wp-agent/agent.env
+
+# Health check - rollback if agent crashes within 10s
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Install]
+WantedBy=multi-user.target

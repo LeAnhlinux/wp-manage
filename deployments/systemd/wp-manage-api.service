@@ -1,0 +1,24 @@
+[Unit]
+Description=WP Manage API Server
+After=network.target mariadb.service redis.service
+Wants=mariadb.service redis.service
+
+[Service]
+Type=simple
+User=wpmanage
+Group=wpmanage
+WorkingDirectory=/opt/wp-manage
+ExecStart=/opt/wp-manage/wp-manage-api
+Restart=always
+RestartSec=5
+LimitNOFILE=65535
+EnvironmentFile=/opt/wp-manage/.env
+
+# Security
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/wp-manage /var/log/wp-manage
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,22 @@
+# Ignore everything by default
+*
+
+# Allow gitignore itself
+!.gitignore
+!README.md
+!Makefile
+
+# Allow deployment binaries (Linux amd64)
+!wp-manage-api
+!wp-manage-agent
+
+# Allow web/dist/ (panel build) - force included via git add -f
+!web/
+!web/dist/
+!web/dist/**
+
+# Allow deployment scripts
+!scripts/
+!scripts/**
+!deployments/
+!deployments/**
