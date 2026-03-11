@@ -2237,14 +2237,14 @@ function SecurityPanel({ siteId, canManage }: { siteId: number; canManage: boole
       {canManage && (
         <button onClick={handleHarden} disabled={harden.isPending || !Object.values(options).some(v => v)}
           className="flex items-center gap-2 px-4 py-2.5 text-sm text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:opacity-50">
-          <Shield size={16} />
-          {harden.isPending ? 'Applying...' : 'Apply Hardening'}
+          {harden.isPending ? <Loader2 size={16} className="animate-spin" /> : <Shield size={16} />}
+          {harden.isPending ? 'Applying on server…' : 'Apply Hardening'}
         </button>
       )}
 
       {harden.isSuccess && (
         <div className="mt-4 p-3 bg-green-50 border border-green-200 rounded-lg">
-          <p className="text-sm text-green-700">Hardening task queued successfully. Changes will be applied shortly.</p>
+          <p className="text-sm text-green-700">✓ Hardening applied successfully. All selected measures are now active on the server.</p>
         </div>
       )}
 

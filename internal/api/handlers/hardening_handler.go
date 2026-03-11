@@ -33,6 +33,6 @@ func (h *HardeningHandler) Harden(c *fiber.Ctx) error {
 
 	return c.JSON(models.APIResponse{
 		Success: true,
-		Message: "WordPress hardening task queued",
+		Message: "WordPress hardening applied successfully",
 	})
 }
