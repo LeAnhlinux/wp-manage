@@ -1,0 +1,40 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build frontend
+        working-directory: web
+        run: npm ci && npm run build
+
+      - name: Build binaries
+        run: |
+          for GOARCH in amd64 arm64; do
+            GOOS=linux GOARCH=$GOARCH CGO_ENABLED=0 go build -ldflags="-s -w" -o wp-manage-api-linux-$GOARCH ./cmd/api
+            GOOS=linux GOARCH=$GOARCH CGO_ENABLED=0 go build -ldflags="-s -w" -o wp-manage-agent-linux-$GOARCH ./cmd/agent
+          done
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            wp-manage-api-*
+            wp-manage-agent-*
+          generate_release_notes: true

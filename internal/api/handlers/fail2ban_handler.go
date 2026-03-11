@@ -1,0 +1,49 @@
+package handlers
+
+import (
+	"strconv"
+
+	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber-team/wp-manage/internal/api/services"
+	"github.com/gofiber-team/wp-manage/internal/models"
+)
+
+type Fail2BanHandler struct {
+	service *services.Fail2BanService
+}
+
+func NewFail2BanHandler(service *services.Fail2BanService) *Fail2BanHandler {
+	return &Fail2BanHandler{service: service}
+}
+
+func (h *Fail2BanHandler) GetStatus(c *fiber.Ctx) error {
+	serverID, _ := strconv.ParseUint(c.Params("id"), 10, 64)
+	if err := h.service.GetStatus(serverID); err != nil {
+		return c.Status(500).JSON(fiber.Map{"success": false, "error": err.Error()})
+	}
+	return c.JSON(fiber.Map{"success": true, "message": "Fail2Ban status request queued"})
+}
+
+func (h *Fail2BanHandler) UnbanIP(c *fiber.Ctx) error {
+	serverID, _ := strconv.ParseUint(c.Params("id"), 10, 64)
+	var req models.Fail2BanUnbanRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"success": false, "error": "Invalid request"})
+	}
+	if err := h.service.UnbanIP(serverID, req.Jail, req.IP); err != nil {
+		return c.Status(500).JSON(fiber.Map{"success": false, "error": err.Error()})
+	}
+	return c.JSON(fiber.Map{"success": true, "message": "Unban request queued"})
+}
+
+func (h *Fail2BanHandler) UpdateJail(c *fiber.Ctx) error {
+	serverID, _ := strconv.ParseUint(c.Params("id"), 10, 64)
+	var req models.Fail2BanUpdateJailRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"success": false, "error": "Invalid request"})
+	}
+	if err := h.service.UpdateJail(serverID, req); err != nil {
+		return c.Status(500).JSON(fiber.Map{"success": false, "error": err.Error()})
+	}
+	return c.JSON(fiber.Map{"success": true, "message": "Jail update queued"})
+}

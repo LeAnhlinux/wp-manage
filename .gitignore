@@ -1,22 +1,59 @@
-# Ignore everything by default
-*
+# ===========================
+# Binaries & Build Output
+# ===========================
+bin/
+*.exe
+*.out
 
-# Allow gitignore itself
-!.gitignore
-!README.md
-!Makefile
+# Root-level compiled binaries (deployed separately)
+wp-manage-api
+wp-manage-agent
+/api
+/agent
 
-# Allow deployment binaries (Linux amd64)
-!wp-manage-api
-!wp-manage-agent
+# ===========================
+# Go
+# ===========================
+vendor/
+*.test
+*.prof
+coverage.out
 
-# Allow web/dist/ (panel build) - force included via git add -f
-!web/
-!web/dist/
-!web/dist/**
+# ===========================
+# Node / Frontend
+# ===========================
+web/node_modules/
+web/dist/
+web/.vite/
+node_modules/
 
-# Allow deployment scripts
-!scripts/
-!scripts/**
-!deployments/
-!deployments/**
+# ===========================
+# Secrets & Credentials
+# ===========================
+.env
+.env.*
+!.env.example
+.deploy-credentials-*
+
+# ===========================
+# OS / Editor junk
+# ===========================
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+~$*
+ziotWqsH
+
+# ===========================
+# Project docs (large binary)
+# ===========================
+*.xlsx
+*.docx
+
+# ===========================
+# Claude internal
+# ===========================
+.claude/

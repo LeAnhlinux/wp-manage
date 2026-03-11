@@ -1,0 +1,124 @@
+package handlers
+
+import (
+	"strconv"
+
+	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber-team/wp-manage/internal/api/services"
+	"github.com/gofiber-team/wp-manage/internal/models"
+)
+
+type SecurityHandler struct {
+	svc *services.SecurityService
+}
+
+func NewSecurityHandler(svc *services.SecurityService) *SecurityHandler {
+	return &SecurityHandler{svc: svc}
+}
+
+// --- WAF ---
+
+func (h *SecurityHandler) GetWAFConfig(c *fiber.Ctx) error {
+	siteID, _ := strconv.ParseUint(c.Params("siteId"), 10, 64)
+	config, err := h.svc.GetWAFConfig(siteID)
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Error: "Failed to get WAF config"})
+	}
+	return c.JSON(models.APIResponse{Success: true, Data: config})
+}
+
+func (h *SecurityHandler) UpdateWAFConfig(c *fiber.Ctx) error {
+	siteID, _ := strconv.ParseUint(c.Params("siteId"), 10, 64)
+	var req models.UpdateWAFRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(models.APIResponse{Error: "Invalid request body"})
+	}
+
+	config, err := h.svc.UpdateWAFConfig(siteID, req)
+	if err != nil {
+		return c.Status(400).JSON(models.APIResponse{Error: err.Error()})
+	}
+	return c.JSON(models.APIResponse{Success: true, Message: "WAF config updated", Data: config})
+}
+
+// --- Malware Scan ---
+
+func (h *SecurityHandler) StartScan(c *fiber.Ctx) error {
+	siteID, _ := strconv.ParseUint(c.Params("siteId"), 10, 64)
+	var req models.StartMalwareScanRequest
+	if err := c.BodyParser(&req); err != nil {
+		req = models.StartMalwareScanRequest{ScanType: "full"}
+	}
+
+	scan, err := h.svc.StartMalwareScan(siteID, req)
+	if err != nil {
+		return c.Status(400).JSON(models.APIResponse{Error: err.Error()})
+	}
+	return c.Status(201).JSON(models.APIResponse{Success: true, Message: "Malware scan started", Data: scan})
+}
+
+func (h *SecurityHandler) GetScan(c *fiber.Ctx) error {
+	id, _ := strconv.ParseUint(c.Params("id"), 10, 64)
+	scan, err := h.svc.GetScan(id)
+	if err != nil {
+		return c.Status(404).JSON(models.APIResponse{Error: "Scan not found"})
+	}
+	return c.JSON(models.APIResponse{Success: true, Data: scan})
+}
+
+func (h *SecurityHandler) ListSiteScans(c *fiber.Ctx) error {
+	siteID, _ := strconv.ParseUint(c.Params("siteId"), 10, 64)
+	page, _ := strconv.Atoi(c.Query("page", "1"))
+	perPage, _ := strconv.Atoi(c.Query("per_page", "20"))
+
+	scans, total, err := h.svc.ListScans(siteID, page, perPage)
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Error: "Failed to fetch scans"})
+	}
+
+	totalPages := int(total) / perPage
+	if int(total)%perPage > 0 {
+		totalPages++
+	}
+
+	return c.JSON(models.PaginatedResponse{
+		Success: true,
+		Data:    scans,
+		Meta:    models.PaginationMeta{Page: page, PerPage: perPage, Total: total, TotalPages: totalPages},
+	})
+}
+
+func (h *SecurityHandler) ListAllScans(c *fiber.Ctx) error {
+	userID := c.Locals("user_id").(uint64)
+	role, _ := c.Locals("role").(string)
+	page, _ := strconv.Atoi(c.Query("page", "1"))
+	perPage, _ := strconv.Atoi(c.Query("per_page", "20"))
+
+	scans, total, err := h.svc.ListAllScans(userID, role, page, perPage)
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Error: "Failed to fetch scans"})
+	}
+
+	totalPages := int(total) / perPage
+	if int(total)%perPage > 0 {
+		totalPages++
+	}
+
+	return c.JSON(models.PaginatedResponse{
+		Success: true,
+		Data:    scans,
+		Meta:    models.PaginationMeta{Page: page, PerPage: perPage, Total: total, TotalPages: totalPages},
+	})
+}
+
+// ScanComplete is called by the agent to report scan results
+func (h *SecurityHandler) ScanComplete(c *fiber.Ctx) error {
+	var result models.AgentMalwareScanResult
+	if err := c.BodyParser(&result); err != nil {
+		return c.Status(400).JSON(models.APIResponse{Error: "Invalid request"})
+	}
+	if err := h.svc.UpdateScanResult(result); err != nil {
+		return c.Status(500).JSON(models.APIResponse{Error: err.Error()})
+	}
+	return c.JSON(models.APIResponse{Success: true})
+}

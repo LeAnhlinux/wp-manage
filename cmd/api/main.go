@@ -1,0 +1,180 @@
+package main
+
+import (
+	"fmt"
+	"log"
+	"log/slog"
+
+	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/cors"
+	"github.com/gofiber/fiber/v2/middleware/logger"
+	"github.com/gofiber/fiber/v2/middleware/recover"
+
+	"github.com/gofiber-team/wp-manage/internal/api/handlers"
+	appMiddleware "github.com/gofiber-team/wp-manage/internal/api/middleware"
+	"github.com/gofiber-team/wp-manage/internal/api/routes"
+	"github.com/gofiber-team/wp-manage/internal/api/services"
+	ws "github.com/gofiber-team/wp-manage/internal/api/websocket"
+	"github.com/gofiber-team/wp-manage/internal/api/workers"
+	"github.com/gofiber-team/wp-manage/internal/config"
+	"github.com/gofiber-team/wp-manage/internal/database"
+	pkglogger "github.com/gofiber-team/wp-manage/pkg/logger"
+)
+
+func main() {
+	cfg := config.Load()
+	pkglogger.Init(cfg.Server.Mode)
+
+	// Database
+	db, err := database.Connect(cfg.Database)
+	if err != nil {
+		log.Fatalf("Database connection failed: %v", err)
+	}
+	if err := database.AutoMigrate(db); err != nil {
+		log.Fatalf("Database migration failed: %v", err)
+	}
+	database.RunManualMigrations(db)
+
+	// Services
+	authService := services.NewAuthService(db, cfg)
+	serverService := services.NewServerService(db)
+	siteService := services.NewSiteService(db)
+	deployService := services.NewDeployService(db, cfg)
+	fileService := services.NewFileService(db)
+	userService := services.NewUserService(db)
+	apiKeyService := services.NewAPIKeyService(db)
+	backupService := services.NewBackupService(db)
+	migrationService := services.NewMigrationService(db)
+	securityService := services.NewSecurityService(db)
+	wordpressService := services.NewWordPressService(db)
+	rolloutService := services.NewRolloutService(db)
+	performanceService := services.NewPerformanceService(db, cfg)
+	multisiteService := services.NewMultisiteService(db)
+	imageOptService := services.NewImageOptService(db)
+	teamService := services.NewTeamService(db)
+	activityService := services.NewActivityService(db)
+	cronService := services.NewCronService(db)
+	domainService := services.NewDomainService(db)
+	redisService := services.NewRedisService(db)
+	infraService := services.NewInfrastructureService(db)
+	sshService := services.NewSSHService(db)
+	sftpService := services.NewSFTPService(db)
+	hardeningService := services.NewHardeningService(db)
+	uptimeService := services.NewUptimeService(db)
+	alertService := services.NewAlertService(db)
+	wpcliService := services.NewWPCLIService(db)
+	cacheService := services.NewCacheService(db)
+	importService := services.NewImportService(db)
+	dnsService := services.NewDNSService(db)
+	sslService := services.NewSSLService(db)
+	storageService := services.NewStorageService(db)
+	fail2banService := services.NewFail2BanService(db)
+	panelUpdateService := services.NewPanelUpdateService(db, "1.0.0")
+
+	// WebSocket Hub
+	hub := ws.NewHub()
+	go hub.Run()
+
+	// Rate Limiter
+	rateLimiter := appMiddleware.NewRateLimiter()
+
+	// Handlers
+	authHandler := handlers.NewAuthHandler(authService)
+	serverHandler := handlers.NewServerHandler(serverService, siteService, backupService, cfg, hub)
+	siteHandler := handlers.NewSiteHandler(siteService, serverService)
+	deployHandler := handlers.NewDeployHandler(deployService, hub)
+	fileHandler := handlers.NewFileHandler(fileService)
+	userHandler := handlers.NewUserHandler(userService)
+	apiKeyHandler := handlers.NewAPIKeyHandler(apiKeyService)
+	backupHandler := handlers.NewBackupHandler(backupService)
+	migrationHandler := handlers.NewMigrationHandler(migrationService)
+	securityHandler := handlers.NewSecurityHandler(securityService)
+	wordpressHandler := handlers.NewWordPressHandler(wordpressService)
+	rolloutHandler := handlers.NewRolloutHandler(rolloutService)
+	performanceHandler := handlers.NewPerformanceHandler(performanceService)
+	multisiteHandler := handlers.NewMultisiteHandler(multisiteService)
+	imageOptHandler := handlers.NewImageOptHandler(imageOptService)
+	teamHandler := handlers.NewTeamHandler(teamService)
+	activityHandler := handlers.NewActivityHandler(activityService)
+	cronHandler := handlers.NewCronHandler(cronService)
+	domainHandler := handlers.NewDomainHandler(domainService)
+	redisHandler := handlers.NewRedisHandler(redisService)
+	infraHandler := handlers.NewInfrastructureHandler(infraService)
+	sshHandler := handlers.NewSSHHandler(sshService)
+	sftpHandler := handlers.NewSFTPHandler(sftpService)
+	hardeningHandler := handlers.NewHardeningHandler(hardeningService)
+	uptimeHandler := handlers.NewUptimeHandler(uptimeService)
+	alertHandler := handlers.NewAlertHandler(alertService, siteService)
+	wpcliHandler := handlers.NewWPCLIHandler(wpcliService, siteService)
+	cacheHandler := handlers.NewCacheHandler(cacheService)
+	importHandler := handlers.NewImportHandler(importService)
+	dnsHandler := handlers.NewDNSHandler(dnsService)
+	sslHandler := handlers.NewSSLHandler(sslService)
+	storageHandler := handlers.NewStorageHandler(storageService)
+	fail2banHandler := handlers.NewFail2BanHandler(fail2banService)
+	panelUpdateHandler := handlers.NewPanelUpdateHandler(panelUpdateService)
+
+	// Fiber app
+	app := fiber.New(fiber.Config{
+		AppName:                      "WP Manage API v1.0",
+		BodyLimit:                    2 * 1024 * 1024 * 1024, // 2GB for file uploads
+		StreamRequestBody:            true,
+		DisablePreParseMultipartForm: true,
+		ErrorHandler:                 errorHandler,
+	})
+
+	app.Use(recover.New())
+	app.Use(logger.New())
+	app.Use(cors.New(cors.Config{
+		AllowOrigins: "*",
+		AllowMethods: "GET,POST,PUT,DELETE,PATCH,OPTIONS",
+		AllowHeaders: "Origin,Content-Type,Accept,Authorization,X-Agent-Key,X-API-Key",
+	}))
+
+	// Activity logging middleware for mutating requests
+	app.Use(appMiddleware.ActivityMiddleware(activityService))
+
+	// WebSocket endpoint
+	app.Get("/ws", hub.Handler())
+
+	// API routes
+	routes.Setup(app, cfg, authHandler, serverHandler, siteHandler, deployHandler, fileHandler,
+		userHandler, apiKeyHandler, backupHandler, migrationHandler, securityHandler, wordpressHandler, rolloutHandler, performanceHandler, multisiteHandler, imageOptHandler, teamHandler, infraHandler, activityHandler, cronHandler, domainHandler, redisHandler, sshHandler, sftpHandler, hardeningHandler, uptimeHandler, alertHandler, wpcliHandler, cacheHandler, importHandler, dnsHandler, sslHandler, storageHandler, fail2banHandler, panelUpdateHandler, userService, apiKeyService, rateLimiter)
+
+	// Background workers
+	uptimeWorker := workers.NewUptimeWorker(uptimeService, alertService, hub)
+	go uptimeWorker.Start()
+
+	alertWorker := workers.NewAlertWorker(db, alertService)
+	_ = alertWorker // Used via ServerHandler on heartbeat
+
+	sslExpiryWorker := workers.NewSSLExpiryWorker(db, alertService)
+	go sslExpiryWorker.Start()
+
+	backupRotationWorker := workers.NewBackupRotationWorker(db)
+	backupRotationWorker.Start()
+
+	// Integrate alert worker with server handler
+	serverHandler.SetAlertWorker(alertWorker)
+
+	// Health check
+	app.Get("/health", func(c *fiber.Ctx) error {
+		return c.JSON(fiber.Map{"status": "ok", "version": "1.0.0"})
+	})
+
+	// Start
+	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
+	slog.Info("Starting WP Manage API", "address", addr, "mode", cfg.Server.Mode)
+	log.Fatal(app.Listen(addr))
+}
+
+func errorHandler(c *fiber.Ctx, err error) error {
+	code := fiber.StatusInternalServerError
+	if e, ok := err.(*fiber.Error); ok {
+		code = e.Code
+	}
+	return c.Status(code).JSON(fiber.Map{
+		"success": false,
+		"error":   err.Error(),
+	})
+}

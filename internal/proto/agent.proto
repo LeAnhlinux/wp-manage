@@ -1,0 +1,235 @@
+syntax = "proto3";
+
+package wpmanage;
+
+option go_package = "github.com/gofiber-team/wp-manage/internal/proto";
+
+// Agent service - runs on each VPS, called by Central API
+service AgentService {
+  // System
+  rpc GetSystemInfo(Empty) returns (SystemInfo);
+  rpc GetSystemMetrics(Empty) returns (SystemMetrics);
+
+  // Provisioning
+  rpc ProvisionServer(ProvisionRequest) returns (stream ProvisionProgress);
+
+  // Site management
+  rpc CreateSite(CreateSiteCommand) returns (stream TaskProgress);
+  rpc DeleteSite(DeleteSiteCommand) returns (TaskResult);
+  rpc RestartSite(SiteCommand) returns (TaskResult);
+  rpc SuspendSite(SiteCommand) returns (TaskResult);
+  rpc UnsuspendSite(SiteCommand) returns (TaskResult);
+
+  // PHP
+  rpc ChangePHPVersion(ChangePHPCommand) returns (TaskResult);
+  rpc AutoTunePHPFPM(AutoTuneCommand) returns (AutoTuneResult);
+  rpc ToggleOPcache(OPcacheCommand) returns (TaskResult);
+
+  // SSL
+  rpc IssuSSL(SSLCommand) returns (TaskResult);
+  rpc RenewSSL(SSLCommand) returns (TaskResult);
+
+  // Nginx
+  rpc TestNginxConfig(Empty) returns (ConfigTestResult);
+  rpc ReloadNginx(Empty) returns (TaskResult);
+
+  // Config management
+  rpc RebuildConfig(RebuildConfigCommand) returns (TaskResult);
+  rpc HealthCheckConfig(Empty) returns (HealthCheckResult);
+  rpc GetConfigDiff(ConfigDiffRequest) returns (ConfigDiff);
+
+  // Firewall
+  rpc GetFirewallRules(Empty) returns (FirewallRules);
+  rpc AddFirewallRule(FirewallRule) returns (TaskResult);
+  rpc RemoveFirewallRule(FirewallRule) returns (TaskResult);
+
+  // Logs
+  rpc StreamLogs(LogStreamRequest) returns (stream LogEntry);
+
+  // Backup
+  rpc CreateBackup(BackupCommand) returns (stream TaskProgress);
+  rpc RestoreBackup(RestoreCommand) returns (stream TaskProgress);
+}
+
+message Empty {}
+
+message SystemInfo {
+  string hostname = 1;
+  string os = 2;
+  string os_version = 3;
+  int32 cpu_cores = 4;
+  int64 ram_mb = 5;
+  int64 disk_gb = 6;
+  string agent_version = 7;
+  repeated string php_versions = 8;
+  string nginx_version = 9;
+  string mariadb_version = 10;
+}
+
+message SystemMetrics {
+  double cpu_usage = 1;
+  double ram_usage = 2;
+  double ram_used_mb = 3;
+  double ram_total_mb = 4;
+  double disk_usage = 5;
+  double disk_used_gb = 6;
+  double disk_total_gb = 7;
+  double network_in_bytes = 8;
+  double network_out_bytes = 9;
+  int64 uptime_seconds = 10;
+  double load_1m = 11;
+  double load_5m = 12;
+  double load_15m = 13;
+}
+
+message ProvisionRequest {
+  string api_url = 1;
+  string api_key = 2;
+}
+
+message ProvisionProgress {
+  string step = 1;
+  int32 progress = 2;
+  string message = 3;
+  bool completed = 4;
+  string error = 5;
+}
+
+message CreateSiteCommand {
+  string domain = 1;
+  string php_version = 2;
+  bool ssl_enabled = 3;
+  bool redis_enabled = 4;
+  string db_name = 5;
+  string db_user = 6;
+  string db_password = 7;
+  string wp_admin_user = 8;
+  string wp_admin_email = 9;
+  string wp_admin_password = 10;
+}
+
+message DeleteSiteCommand {
+  string domain = 1;
+  string db_name = 2;
+  string db_user = 3;
+}
+
+message SiteCommand {
+  string domain = 1;
+  string php_version = 2;
+}
+
+message ChangePHPCommand {
+  string domain = 1;
+  string from_version = 2;
+  string to_version = 3;
+}
+
+message AutoTuneCommand {
+  int32 total_sites = 1;
+}
+
+message AutoTuneResult {
+  string pm_type = 1;
+  int32 max_children = 2;
+  int32 start_servers = 3;
+  int32 min_spare_servers = 4;
+  int32 max_spare_servers = 5;
+  int32 memory_limit_mb = 6;
+  bool applied = 7;
+}
+
+message OPcacheCommand {
+  string domain = 1;
+  bool enable = 2;
+}
+
+message SSLCommand {
+  string domain = 1;
+  string email = 2;
+}
+
+message ConfigTestResult {
+  bool success = 1;
+  string output = 2;
+}
+
+message RebuildConfigCommand {
+  repeated string config_types = 1;
+  string site_domain = 2;
+  map<string, string> config_data = 3;
+}
+
+message HealthCheckResult {
+  repeated ConfigStatus configs = 1;
+  bool all_ok = 2;
+}
+
+message ConfigStatus {
+  string config_type = 1;
+  string file_path = 2;
+  string status = 3; // ok, warning, error
+  string message = 4;
+  string diff = 5;
+}
+
+message ConfigDiffRequest {
+  string config_type = 1;
+  string site_domain = 2;
+}
+
+message ConfigDiff {
+  string current = 1;
+  string expected = 2;
+  string diff = 3;
+}
+
+message FirewallRules {
+  repeated FirewallRule rules = 1;
+}
+
+message FirewallRule {
+  string action = 1;  // allow, deny
+  string port = 2;
+  string protocol = 3; // tcp, udp
+  string from_ip = 4;
+  string comment = 5;
+}
+
+message LogStreamRequest {
+  string log_type = 1; // nginx_access, nginx_error, php_fpm, mariadb, system
+  string domain = 2;
+  int32 lines = 3;
+}
+
+message LogEntry {
+  string timestamp = 1;
+  string level = 2;
+  string message = 3;
+  string source = 4;
+}
+
+message BackupCommand {
+  string domain = 1;
+  string type = 2;
+  string storage = 3;
+}
+
+message RestoreCommand {
+  string domain = 1;
+  string backup_path = 2;
+}
+
+message TaskProgress {
+  string step = 1;
+  int32 progress = 2;
+  string message = 3;
+  bool completed = 4;
+  string error = 5;
+}
+
+message TaskResult {
+  bool success = 1;
+  string message = 2;
+  string error = 3;
+}
