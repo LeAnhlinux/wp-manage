@@ -32,6 +32,13 @@ func NewHandler(apiKey string) *Handler {
 	return &Handler{apiKey: apiKey}
 }
 
+// siteUser derives the Linux username for a WordPress site.
+// Matches the convention in internal/agent/site/manager.go SiteUser().
+func siteUser(domain string) string {
+	r := strings.NewReplacer(".", "_", "-", "_")
+	return "wp_" + r.Replace(domain)
+}
+
 // RegisterRoutes registers file manager routes on the given mux
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/files/list", h.authMiddleware(h.handleList))
@@ -163,7 +170,8 @@ func (h *Handler) handleUploadMerge(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	exec.Command("chown", "www-data:www-data", destFile).Run()
+	su := siteUser(domain)
+	exec.Command("chown", su+":"+su, destFile).Run()
 	writeJSON(w, 200, models.APIResponse{Success: true, Message: "File uploaded successfully", Data: req.Filename})
 }
 
@@ -237,7 +245,8 @@ func (h *Handler) handleExtract(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	exec.Command("chown", "-R", "www-data:www-data", destDir).Run()
+	su := siteUser(domain)
+	exec.Command("chown", "-R", su+":"+su, destDir).Run()
 	writeJSON(w, 200, models.APIResponse{Success: true, Message: "Extracted successfully"})
 }
 
@@ -399,8 +408,9 @@ func (h *Handler) handleSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fix ownership to www-data
-	exec.Command("chown", "www-data:www-data", fullPath).Run()
+	// Fix ownership to site user
+	su := siteUser(domain)
+	exec.Command("chown", su+":"+su, fullPath).Run()
 
 	writeJSON(w, 200, models.APIResponse{Success: true, Message: "File saved"})
 }
@@ -433,6 +443,7 @@ func (h *Handler) handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	su := siteUser(domain)
 	uploaded := []string{}
 	for _, fileHeaders := range r.MultipartForm.File {
 		for _, fh := range fileHeaders {
@@ -457,7 +468,7 @@ func (h *Handler) handleUpload(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 
-			exec.Command("chown", "www-data:www-data", destFile).Run()
+			exec.Command("chown", su+":"+su, destFile).Run()
 			uploaded = append(uploaded, fh.Filename)
 		}
 	}
@@ -570,7 +581,8 @@ func (h *Handler) handleMkdir(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	exec.Command("chown", "www-data:www-data", fullPath).Run()
+	su := siteUser(domain)
+	exec.Command("chown", su+":"+su, fullPath).Run()
 	writeJSON(w, 200, models.APIResponse{Success: true, Message: "Directory created"})
 }
 
@@ -807,7 +819,8 @@ func (h *Handler) handleCopy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	exec.Command("chown", "-R", "www-data:www-data", destDirFull).Run() //nolint
+	su := siteUser(domain)
+	exec.Command("chown", "-R", su+":"+su, destDirFull).Run() //nolint
 	writeJSON(w, 200, models.APIResponse{Success: true, Message: "Copied successfully"})
 }
 
