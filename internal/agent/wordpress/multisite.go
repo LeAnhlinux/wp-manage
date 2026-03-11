@@ -19,7 +19,7 @@ func EnableMultisite(task models.AgentEnableMultisiteTask) models.AgentEnableMul
 	}
 
 	wpPath := fmt.Sprintf("/var/www/%s/public", task.Domain)
-	wpUser := strings.ReplaceAll(strings.ReplaceAll(task.Domain, ".", "_"), "-", "_")
+	wpUser := "wp_" + strings.ReplaceAll(strings.ReplaceAll(task.Domain, ".", "_"), "-", "_")
 
 	// Check if multisite is already installed
 	checkCmd := exec.Command("sudo", "-u", wpUser, "wp", "core", "is-installed", "--network", "--path="+wpPath)
@@ -103,7 +103,7 @@ func CreateSubsite(task models.AgentCreateSubsiteTask) models.AgentCreateSubsite
 	}
 
 	wpPath := fmt.Sprintf("/var/www/%s/public", task.Domain)
-	wpUser := strings.ReplaceAll(strings.ReplaceAll(task.Domain, ".", "_"), "-", "_")
+	wpUser := "wp_" + strings.ReplaceAll(strings.ReplaceAll(task.Domain, ".", "_"), "-", "_")
 
 	// Create subsite via WP-CLI
 	cmd := exec.Command("sudo", "-u", wpUser, "wp", "site", "create",
@@ -160,7 +160,7 @@ func CreateSubsite(task models.AgentCreateSubsiteTask) models.AgentCreateSubsite
 // DeleteSubsite deletes a subsite using WP-CLI
 func DeleteSubsite(task models.AgentDeleteSubsiteTask) error {
 	wpPath := fmt.Sprintf("/var/www/%s/public", task.Domain)
-	wpUser := strings.ReplaceAll(strings.ReplaceAll(task.Domain, ".", "_"), "-", "_")
+	wpUser := "wp_" + strings.ReplaceAll(strings.ReplaceAll(task.Domain, ".", "_"), "-", "_")
 
 	cmd := exec.Command("sudo", "-u", wpUser, "wp", "site", "delete",
 		fmt.Sprintf("%d", task.WPBlogID),
@@ -184,7 +184,7 @@ func ListSubsites(task models.AgentListSubsitesTask) models.AgentListSubsitesRes
 	}
 
 	wpPath := fmt.Sprintf("/var/www/%s/public", task.Domain)
-	wpUser := strings.ReplaceAll(strings.ReplaceAll(task.Domain, ".", "_"), "-", "_")
+	wpUser := "wp_" + strings.ReplaceAll(strings.ReplaceAll(task.Domain, ".", "_"), "-", "_")
 
 	cmd := exec.Command("sudo", "-u", wpUser, "wp", "site", "list",
 		"--path="+wpPath,

@@ -10,6 +10,26 @@ import (
 	"strings"
 )
 
+// siteUser derives the Linux username for a WordPress site (matches site/manager.go).
+func siteUser(domain string) string {
+	return "wp_" + strings.NewReplacer(".", "_", "-", "_").Replace(domain)
+}
+
+// ensureSiteUser creates the site Linux user if it doesn't already exist.
+func ensureSiteUser(domain string) {
+	user := siteUser(domain)
+	siteDir := fmt.Sprintf("/var/www/%s", domain)
+	cmd := exec.Command("useradd", "--system", "--no-create-home",
+		"--shell", "/usr/sbin/nologin",
+		"--home-dir", siteDir,
+		user,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil && !strings.Contains(string(out), "already exists") {
+		slog.Warn("Could not create site Linux user during restore", "user", user, "error", string(out))
+	}
+}
+
 type RestoreParams struct {
 	BackupID   uint64
 	Domain     string
@@ -111,11 +131,14 @@ func RunRestore(params RestoreParams) (*Manifest, error) {
 		return nil, fmt.Errorf("database restore failed: %w", err)
 	}
 
-	// Fix permissions & reload services
+	// Fix permissions & reload services — use the site's dedicated Linux user
 	siteDir := fmt.Sprintf("/var/www/%s", manifest.Domain)
-	exec.Command("chown", "-R", "www-data:www-data", siteDir).Run()
-	exec.Command("find", siteDir, "-type", "d", "-exec", "chmod", "755", "{}", "+").Run()
+	su := siteUser(manifest.Domain)
+	owner := fmt.Sprintf("%s:%s", su, su)
+	exec.Command("chown", "-R", owner, siteDir).Run()
+	exec.Command("find", siteDir, "-type", "d", "-exec", "chmod", "2755", "{}", "+").Run()
 	exec.Command("find", siteDir, "-type", "f", "-exec", "chmod", "644", "{}", "+").Run()
+	exec.Command("chmod", "640", fmt.Sprintf("%s/public/wp-config.php", siteDir)).Run()
 
 	// Ensure PHP version is recorded in manifest for caller
 	if manifest.PHPVersion == "" {
@@ -159,6 +182,9 @@ func RunRestore(params RestoreParams) (*Manifest, error) {
 func recreateSite(extractRoot string, m *Manifest, phpVer string) error {
 	slog.Info("Recreating site infrastructure", "domain", m.Domain)
 
+	// Ensure the site's Linux user exists before setting up PHP-FPM / permissions
+	ensureSiteUser(m.Domain)
+
 	// 1) Create database + user (use ALTER USER to reset password if user already exists)
 	createDBSQL := fmt.Sprintf(
 		"CREATE DATABASE IF NOT EXISTS `%s` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"+
@@ -187,7 +213,8 @@ func recreateSite(extractRoot string, m *Manifest, phpVer string) error {
 	for _, dir := range []string{siteDir + "/public", siteDir + "/logs"} {
 		os.MkdirAll(dir, 0755)
 	}
-	exec.Command("chown", "-R", "www-data:www-data", siteDir).Run()
+	su := siteUser(m.Domain)
+	exec.Command("chown", "-R", fmt.Sprintf("%s:%s", su, su), siteDir).Run()
 
 	// 3) Restore Nginx config from backup, or generate minimal.
 	// Strategy:
@@ -525,17 +552,11 @@ func runCertbot(domain string) error {
 
 // writeMinimalPhpfpmConf generates a basic PHP-FPM pool when no backup config exists.
 func writeMinimalPhpfpmConf(path, domain, phpVer string) {
-	// Derive a short pool name (max 20 chars to avoid socket path limits)
-	poolName := domain
-	if len(poolName) > 20 {
-		poolName = poolName[:20]
-	}
-	// Replace dots/dashes for pool name
-	safePool := strings.NewReplacer(".", "_", "-", "_").Replace(poolName)
+	su := siteUser(domain)
 
 	cfg := fmt.Sprintf(`[%s]
-user  = www-data
-group = www-data
+user  = %s
+group = %s
 
 listen = /run/php/php%s-fpm-%s.sock
 listen.owner = www-data
@@ -552,6 +573,8 @@ pm.max_requests      = 500
 php_admin_value[error_log]    = /var/www/%s/logs/php-error.log
 php_admin_flag[log_errors]    = on
 php_admin_value[memory_limit] = 256M
-`, safePool, phpVer, domain, domain)
+php_admin_value[open_basedir] = /var/www/%s/:/tmp/:/usr/share/php/
+php_admin_value[disable_functions] = exec,passthru,shell_exec,system,proc_open,popen,parse_ini_file,show_source
+`, domain, su, su, phpVer, domain, domain, domain)
 	os.WriteFile(path, []byte(cfg), 0644)
 }

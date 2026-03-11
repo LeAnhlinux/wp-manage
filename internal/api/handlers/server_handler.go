@@ -252,6 +252,11 @@ func (h *ServerHandler) TaskComplete(c *fiber.Ctx) error {
 		h.siteSvc.UpdateAutologinSecret(result.SiteID, result.AutologinSecret)
 	}
 
+	// Save the per-site Linux user if reported (set during site creation)
+	if result.SiteID > 0 && result.LinuxUser != "" {
+		h.siteSvc.UpdateLinuxUser(result.SiteID, result.LinuxUser)
+	}
+
 	// Update SSL expiry if reported (after issue or renew)
 	if result.SiteID > 0 && result.SSLExpiresAt != nil {
 		h.siteSvc.UpdateSSLExpiry(result.SiteID, result.SSLExpiresAt)

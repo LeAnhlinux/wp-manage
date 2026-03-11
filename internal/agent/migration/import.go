@@ -4,7 +4,13 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"strings"
 )
+
+// siteUser derives the Linux username for a WordPress site (matches site/manager.go).
+func siteUser(domain string) string {
+	return "wp_" + strings.NewReplacer(".", "_", "-", "_").Replace(domain)
+}
 
 type ImportRunner struct {
 	apiURL string
@@ -69,11 +75,12 @@ func (r *ImportRunner) RunImport(domain, sourceIP, sshUser string, sshPort int, 
 		}
 	}
 
-	// Step 4: Fix permissions
+	// Step 4: Fix permissions — use the site's dedicated Linux user
 	slog.Info("Fixing permissions", "domain", domain)
-	exec.Command("chown", "-R", "www-data:www-data", wpPath).Run()
+	su := siteUser(domain)
+	exec.Command("chown", "-R", fmt.Sprintf("%s:%s", su, su), wpPath).Run()
 	exec.Command("find", wpPath, "-type", "f", "-exec", "chmod", "644", "{}", ";").Run()
-	exec.Command("find", wpPath, "-type", "d", "-exec", "chmod", "755", "{}", ";").Run()
+	exec.Command("find", wpPath, "-type", "d", "-exec", "chmod", "2755", "{}", ";").Run()
 
 	// Step 5: Search-replace if domain changed
 	slog.Info("Running search-replace", "domain", domain)

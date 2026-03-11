@@ -14,6 +14,42 @@ import (
 	"text/template"
 )
 
+// SiteUser returns the Linux username for a WordPress site.
+// Convention: "wp_" + domain with dots and hyphens replaced by underscores.
+// e.g. "example.com" → "wp_example_com", "my-site.co.uk" → "wp_my_site_co_uk"
+func SiteUser(domain string) string {
+	return "wp_" + strings.NewReplacer(".", "_", "-", "_").Replace(domain)
+}
+
+// createSiteUser creates a system user for the site (no login shell, no home dir creation).
+func createSiteUser(domain string) error {
+	user := SiteUser(domain)
+	cmd := exec.Command("useradd",
+		"--system",
+		"--no-create-home",
+		"--shell", "/usr/sbin/nologin",
+		"--home-dir", fmt.Sprintf("/var/www/%s", domain),
+		user,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		if strings.Contains(string(out), "already exists") {
+			return nil // idempotent
+		}
+		return fmt.Errorf("useradd failed for %s: %s", user, string(out))
+	}
+	slog.Info("Created site Linux user", "user", user, "domain", domain)
+	return nil
+}
+
+// deleteSiteUser removes the site's Linux user and group.
+func deleteSiteUser(domain string) {
+	user := SiteUser(domain)
+	exec.Command("userdel", user).Run()
+	exec.Command("groupdel", user).Run()
+	slog.Info("Deleted site Linux user", "user", user, "domain", domain)
+}
+
 type CreateParams struct {
 	Domain          string
 	PHPVersion      string
@@ -61,6 +97,7 @@ func (m *Manager) CreateSite(params CreateParams) error {
 		pct  int
 		fn   func() error
 	}{
+		{"create_linux_user", 5, func() error { return createSiteUser(params.Domain) }},
 		{"create_directories", 10, func() error { return m.createDirs(siteRoot, webRoot) }},
 		{"create_database", 20, func() error { return m.createDatabase(params) }},
 		{"configure_nginx", 35, func() error { return m.configureNginx(params, webRoot, phpVer) }},
@@ -122,6 +159,9 @@ func (m *Manager) DeleteSite(domain, dbName, dbUser string) error {
 	// Remove all site files
 	os.RemoveAll(siteRoot)
 
+	// Remove the site's Linux user + group
+	deleteSiteUser(domain)
+
 	// Reload services
 	exec.Command("nginx", "-t").Run()
 	exec.Command("systemctl", "reload", "nginx").Run()
@@ -145,6 +185,7 @@ func (m *Manager) CreateSiteManual(params CreateParams) error {
 		pct  int
 		fn   func() error
 	}{
+		{"create_linux_user", 5, func() error { return createSiteUser(params.Domain) }},
 		{"create_directories", 20, func() error { return m.createDirs(siteRoot, webRoot) }},
 		{"create_database", 40, func() error { return m.createDatabase(params) }},
 		{"configure_nginx", 60, func() error { return m.configureNginx(params, webRoot, phpVer) }},
@@ -199,10 +240,13 @@ func (m *Manager) ExtractSourceZip(domain, zipPath string) error {
 		}
 	}
 
-	// Fix permissions
-	exec.Command("chown", "-R", "www-data:www-data", webRoot).Run()
-	exec.Command("find", webRoot, "-type", "d", "-exec", "chmod", "755", "{}", "+").Run()
+	// Fix permissions — use the site's dedicated Linux user
+	siteUser := SiteUser(domain)
+	owner := fmt.Sprintf("%s:%s", siteUser, siteUser)
+	exec.Command("chown", "-R", owner, webRoot).Run()
+	exec.Command("find", webRoot, "-type", "d", "-exec", "chmod", "2755", "{}", "+").Run()
 	exec.Command("find", webRoot, "-type", "f", "-exec", "chmod", "644", "{}", "+").Run()
+	exec.Command("chmod", "640", webRoot+"/wp-config.php").Run()
 
 	slog.Info("Source zip extracted", "domain", domain, "webroot", webRoot)
 	return nil
@@ -374,9 +418,10 @@ func (m *Manager) configureNginx(p CreateParams, webRoot, phpVer string) error {
 }
 
 func (m *Manager) configurePHPPool(p CreateParams, phpVer string) error {
+	siteUser := SiteUser(p.Domain)
 	poolConf := fmt.Sprintf(`[%s]
-user = www-data
-group = www-data
+user = %s
+group = %s
 listen = /var/run/php/php%s-fpm-%s.sock
 listen.owner = www-data
 listen.group = www-data
@@ -391,8 +436,9 @@ php_admin_value[upload_max_filesize] = 64M
 php_admin_value[post_max_size] = 64M
 php_admin_value[max_execution_time] = 300
 php_admin_value[max_input_vars] = 3000
-php_admin_value[open_basedir] = /var/www/%s/:/tmp/
-`, p.Domain, phpVer, p.Domain, p.Domain)
+php_admin_value[open_basedir] = /var/www/%s/:/tmp/:/usr/share/php/
+php_admin_value[disable_functions] = exec,passthru,shell_exec,system,proc_open,popen,parse_ini_file,show_source
+`, p.Domain, siteUser, siteUser, phpVer, p.Domain, p.Domain)
 
 	poolPath := fmt.Sprintf("/etc/php/%s/fpm/pool.d/%s.conf", phpVer, p.Domain)
 	if err := os.WriteFile(poolPath, []byte(poolConf), 0644); err != nil {
@@ -440,9 +486,13 @@ func (m *Manager) installWordPress(p CreateParams, webRoot string) error {
 }
 
 func (m *Manager) setPermissions(siteRoot, domain string) error {
-	exec.Command("chown", "-R", "www-data:www-data", siteRoot).Run()
-	exec.Command("find", siteRoot, "-type", "d", "-exec", "chmod", "755", "{}", ";").Run()
+	siteUser := SiteUser(domain)
+	owner := fmt.Sprintf("%s:%s", siteUser, siteUser)
+	exec.Command("chown", "-R", owner, siteRoot).Run()
+	exec.Command("find", siteRoot, "-type", "d", "-exec", "chmod", "2755", "{}", ";").Run()
 	exec.Command("find", siteRoot, "-type", "f", "-exec", "chmod", "644", "{}", ";").Run()
+	// wp-config.php must not be world-readable (contains DB credentials)
+	exec.Command("chmod", "640", siteRoot+"/public/wp-config.php").Run()
 	return nil
 }
 
@@ -554,9 +604,11 @@ add_action('init', function() {
 		return "", fmt.Errorf("write mu-plugin: %w", err)
 	}
 
-	// Fix ownership
-	exec.Command("chown", "www-data:www-data", muPath).Run()
-	exec.Command("chown", "www-data:www-data", muDir).Run()
+	// Fix ownership — mu-plugin must be owned by the site user so PHP-FPM can read it
+	siteUser := SiteUser(domain)
+	owner := fmt.Sprintf("%s:%s", siteUser, siteUser)
+	exec.Command("chown", owner, muPath).Run()
+	exec.Command("chown", owner, muDir).Run()
 
 	slog.Info("Autologin mu-plugin installed", "domain", domain)
 	return secret, nil

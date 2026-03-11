@@ -17,7 +17,7 @@ func CheckUpdates(task models.AgentCheckUpdatesTask) models.AgentCheckUpdatesRes
 	}
 
 	wpPath := fmt.Sprintf("/var/www/%s/public", task.Domain)
-	wpUser := strings.ReplaceAll(strings.ReplaceAll(task.Domain, ".", "_"), "-", "_")
+	wpUser := "wp_" + strings.ReplaceAll(strings.ReplaceAll(task.Domain, ".", "_"), "-", "_")
 
 	// Check core updates
 	coreResult := checkCoreUpdates(wpPath, wpUser)

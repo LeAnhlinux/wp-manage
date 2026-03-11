@@ -201,6 +201,10 @@ func (s *SiteService) UpdateAutologinSecret(id uint64, secret string) error {
 	return s.db.Model(&models.Site{}).Where("id = ?", id).Update("autologin_secret", secret).Error
 }
 
+func (s *SiteService) UpdateLinuxUser(id uint64, user string) error {
+	return s.db.Model(&models.Site{}).Where("id = ?", id).Update("linux_user", user).Error
+}
+
 func (s *SiteService) GetAutologinSecret(id uint64) string {
 	var site models.Site
 	err := s.db.Select("autologin_secret").First(&site, id).Error

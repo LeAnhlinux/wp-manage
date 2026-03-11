@@ -7,6 +7,11 @@ import (
 	"strings"
 )
 
+// siteUserForDomain derives the Linux username for a WordPress site (matches site/manager.go).
+func siteUserForDomain(domain string) string {
+	return "wp_" + strings.NewReplacer(".", "_", "-", "_").Replace(domain)
+}
+
 type WPCLIResult struct {
 	Output   string `json:"output"`
 	ExitCode int    `json:"exit_code"`
@@ -29,13 +34,25 @@ func ExecuteWPCLI(domain, command string) (*WPCLIResult, error) {
 		}
 	}
 
-	// Build wp command
-	args := []string{"--path=" + wpPath, "--allow-root"}
-	args = append(args, strings.Fields(command)...)
+	// Build wp command — run as the site's Linux user (not root)
+	siteUser := siteUserForDomain(domain)
+	wpArgs := append([]string{"--path=" + wpPath}, strings.Fields(command)...)
+	allArgs := append([]string{"-u", siteUser, "wp"}, wpArgs...)
 
-	slog.Info("Executing WP-CLI", "domain", domain, "command", command)
-	cmd := exec.Command("wp", args...)
+	slog.Info("Executing WP-CLI", "domain", domain, "command", command, "user", siteUser)
+	cmd := exec.Command("sudo", allArgs...)
 	output, err := cmd.CombinedOutput()
+
+	// Fallback: if sudo fails, try as root with --allow-root
+	if err != nil {
+		rootArgs := append([]string{"--path=" + wpPath, "--allow-root"}, strings.Fields(command)...)
+		cmd2 := exec.Command("wp", rootArgs...)
+		if out2, err2 := cmd2.CombinedOutput(); err2 == nil {
+			output = out2
+			err = nil
+			slog.Info("WP-CLI fell back to root", "domain", domain, "command", command)
+		}
+	}
 
 	result := &WPCLIResult{
 		Output:   string(output),

@@ -5,8 +5,14 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 )
+
+// siteUser derives the Linux username for a WordPress site (matches site/manager.go).
+func siteUser(domain string) string {
+	return "wp_" + strings.NewReplacer(".", "_", "-", "_").Replace(domain)
+}
 
 type RebuildResult struct {
 	ConfigType string `json:"config_type"`
@@ -85,9 +91,10 @@ func RebuildPHPFPMPool(domain, phpVersion string, configData map[string]string) 
 		memoryLimit = "256M"
 	}
 
+	su := siteUser(domain)
 	conf := fmt.Sprintf(`[%s]
-user = www-data
-group = www-data
+user = %s
+group = %s
 listen = /var/run/php/php%s-fpm-%s.sock
 listen.owner = www-data
 listen.group = www-data
@@ -102,8 +109,9 @@ php_admin_value[upload_max_filesize] = 64M
 php_admin_value[post_max_size] = 64M
 php_admin_value[max_execution_time] = 300
 php_admin_value[max_input_vars] = 3000
-php_admin_value[open_basedir] = /var/www/%s/:/tmp/
-`, domain, phpVersion, domain, maxChildren, memoryLimit, domain)
+php_admin_value[open_basedir] = /var/www/%s/:/tmp/:/usr/share/php/
+php_admin_value[disable_functions] = exec,passthru,shell_exec,system,proc_open,popen,parse_ini_file,show_source
+`, domain, su, su, phpVersion, domain, maxChildren, memoryLimit, domain)
 
 	if err := os.WriteFile(filePath, []byte(conf), 0644); err != nil {
 		restoreConfig(filePath, backupPath)

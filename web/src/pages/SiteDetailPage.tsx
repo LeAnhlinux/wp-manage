@@ -466,6 +466,11 @@ export default function SiteDetailPage() {
                 <DetailRow label="SSL Expires" value={formatDate(site.ssl_expires_at)} />
               )}
               <DetailRow label="Database Name" value={site.db_name || '-'} />
+              {site.linux_user && (
+                <DetailRow label="Linux User" value={
+                  <code className="text-xs bg-gray-100 px-2 py-0.5 rounded font-mono text-gray-700">{site.linux_user}</code>
+                } />
+              )}
               <DetailRow label="Server" value={
                 <Link to={`/servers/${site.server_id}`} className="text-blue-600 hover:underline">
                   {site.server?.name || `Server #${site.server_id}`}

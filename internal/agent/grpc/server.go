@@ -509,14 +509,16 @@ func (s *AgentServer) executeCreateSite(siteID uint64, task models.AgentCreateSi
 		result.Status = "error"
 		result.Error = err.Error()
 	} else {
+		// Always report the linux user so API can store it in the site record
+		result.LinuxUser = site.SiteUser(task.Domain)
 		if installType == "auto" {
 			// Detect WP version after install
 			wpVer := site.GetWPVersion(task.Domain)
 			result.WPVersion = wpVer
 			result.AutologinSecret = params.AutologinSecret
-			slog.Info("Create site (auto) completed", "domain", task.Domain, "wp_version", wpVer)
+			slog.Info("Create site (auto) completed", "domain", task.Domain, "wp_version", wpVer, "linux_user", result.LinuxUser)
 		} else {
-			slog.Info("Create site (manual) infrastructure ready", "domain", task.Domain)
+			slog.Info("Create site (manual) infrastructure ready", "domain", task.Domain, "linux_user", result.LinuxUser)
 		}
 	}
 

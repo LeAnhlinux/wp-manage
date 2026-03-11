@@ -136,19 +136,24 @@ func GetStats() (map[string]string, error) {
 
 // ---- internal helpers ----
 
-// runWPCLI runs a wp-cli command in a WordPress path, trying www-data then root
+// runWPCLI runs a wp-cli command in a WordPress path as the site's Linux user.
+// It falls back to root (--allow-root) if running as site user fails.
 func runWPCLI(wpPath string, args ...string) (string, error) {
-	allArgs := append([]string{fmt.Sprintf("--path=%s", wpPath), "--allow-root"}, args...)
+	allArgs := append([]string{fmt.Sprintf("--path=%s", wpPath)}, args...)
 
-	// Try as www-data user first
-	cmd := exec.Command("sudo", append([]string{"-u", "www-data", "wp"}, allArgs...)...)
+	// Detect the site's Linux user from wp-config.php ownership (will be "wp_domain" after isolation)
+	siteOwner := getSiteOwner(wpPath)
+
+	// Try as site owner first
+	cmd := exec.Command("sudo", append([]string{"-u", siteOwner, "wp"}, allArgs...)...)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		return string(out), nil
 	}
 
 	// Fallback: run as root with --allow-root
-	cmd = exec.Command("wp", allArgs...)
+	rootArgs := append([]string{fmt.Sprintf("--path=%s", wpPath), "--allow-root"}, args...)
+	cmd = exec.Command("wp", rootArgs...)
 	out, err = cmd.CombinedOutput()
 	return string(out), err
 }

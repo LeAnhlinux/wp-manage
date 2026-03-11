@@ -9,6 +9,11 @@ import (
 	"strings"
 )
 
+// siteUser derives the Linux username for a WordPress site (must match site/manager.go).
+func siteUser(domain string) string {
+	return "wp_" + strings.NewReplacer(".", "_", "-", "_").Replace(domain)
+}
+
 const sshdConfigPath = "/etc/ssh/sshd_config"
 const sftpChrootBase = "/opt/sftp"
 const fstabPath = "/etc/fstab"
@@ -18,11 +23,15 @@ const fstabPath = "/etc/fstab"
 // The chroot jail is at /opt/sftp/{username} (owned root:root — required by sshd).
 // The site's web root /var/www/{domain} is bind-mounted into the chroot at
 // /opt/sftp/{username}/www so the SFTP user can access files without touching
-// the original ownership (www-data:www-data stays intact, WordPress still works).
+// the original ownership.
 //
-// The SFTP user is added to the www-data group so they can read/write site files.
+// The SFTP user is added to the site's dedicated Linux group (wp_{domain}) so they
+// can read/write site files (per-site isolation model).
 func CreateUser(username, password, homeDir, domain string) error {
 	slog.Info("Creating SFTP user", "username", username, "domain", domain)
+
+	// Derive the site's Linux group (must match the group created by site/manager.go)
+	sitePkg := siteUser(domain)
 
 	// Ensure the sftpusers group exists
 	exec.Command("groupadd", "-f", "sftpusers").Run()
@@ -33,10 +42,10 @@ func CreateUser(username, password, homeDir, domain string) error {
 	webRoot := fmt.Sprintf("/var/www/%s", domain)
 
 	// Create the system user. Home is set to /www (relative to chroot).
-	// Add to both sftpusers (SFTP group) and www-data (so WP files are writable).
+	// Add to sftpusers (SFTP group) and the site's Linux group (so WP files are accessible).
 	cmd := exec.Command("useradd",
 		"-g", "sftpusers",
-		"-G", "www-data",
+		"-G", sitePkg,
 		"-d", "/www",
 		"-s", "/usr/sbin/nologin",
 		username,
@@ -45,8 +54,8 @@ func CreateUser(username, password, homeDir, domain string) error {
 		if !strings.Contains(string(out), "already exists") {
 			return fmt.Errorf("failed to create user: %s", string(out))
 		}
-		// User exists — ensure they are in www-data group
-		exec.Command("usermod", "-aG", "www-data", username).Run()
+		// User exists — ensure they are in the site group
+		exec.Command("usermod", "-aG", sitePkg, username).Run()
 	}
 
 	// Set password
@@ -75,6 +84,11 @@ func CreateUser(username, password, homeDir, domain string) error {
 	if err := os.MkdirAll(webRoot, 0755); err != nil {
 		slog.Warn("Web root may not exist yet", "path", webRoot, "error", err)
 	}
+
+	// Grant group-write on the site's public dir so the SFTP user can upload files.
+	// The site files are owned by wp_{domain}:wp_{domain} — SFTP user is in that group.
+	publicDir := fmt.Sprintf("/var/www/%s/public", domain)
+	exec.Command("find", publicDir, "-type", "d", "-exec", "chmod", "g+w", "{}", "+").Run()
 
 	// Bind-mount the site web root into the chroot.
 	// This preserves the original /var/www/{domain} ownership (www-data) intact.

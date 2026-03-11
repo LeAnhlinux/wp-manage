@@ -53,6 +53,7 @@ type Site struct {
 	IsMultisite     bool      `json:"is_multisite" gorm:"default:false"`
 	MultisiteType   string    `json:"multisite_type" gorm:"size:20"` // subdomain, subfolder
 	InstallType     string    `json:"install_type" gorm:"size:20;default:'auto'"` // auto, manual
+	LinuxUser       string    `json:"linux_user" gorm:"size:64"`                  // e.g. "wp_example_com" (per-site Linux isolation)
 	Status          string    `json:"status" gorm:"type:enum('active','suspended','creating','error','deleting');default:'creating';not null"`
 	CreatedAt    time.Time  `json:"created_at"`
 	UpdatedAt    time.Time  `json:"updated_at"`

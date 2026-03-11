@@ -378,6 +378,7 @@ type AgentTaskResult struct {
 	Error           string     `json:"error,omitempty"`
 	WPVersion       string     `json:"wp_version,omitempty"`
 	AutologinSecret string     `json:"autologin_secret,omitempty"`
+	LinuxUser       string     `json:"linux_user,omitempty"`     // Set after site creation (per-site isolation)
 	SSLExpiresAt    *time.Time `json:"ssl_expires_at,omitempty"` // Set after SSL issue/renew
 	SSLEnabled      *bool      `json:"ssl_enabled,omitempty"`    // Set after SSL force-https toggle
 
