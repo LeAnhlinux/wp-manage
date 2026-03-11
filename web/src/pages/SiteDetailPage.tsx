@@ -2162,7 +2162,7 @@ function WAFPanel({ siteId, canManage }: { siteId: number; canManage: boolean })
           disabled={updateWAF.isPending}
           className="flex items-center gap-2 px-4 py-2.5 text-sm text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50"
         >
-          {updateWAF.isPending ? <><Loader2 size={15} className="animate-spin" /> Saving…</> : <><Shield size={15} /> Save WAF Config</>}
+          {updateWAF.isPending ? <><Loader2 size={15} className="animate-spin" /> Applying on server…</> : <><Shield size={15} /> Save WAF Config</>}
         </button>
       )}
 

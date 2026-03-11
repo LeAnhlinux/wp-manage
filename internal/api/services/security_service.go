@@ -36,7 +36,7 @@ func (s *SecurityService) GetWAFConfig(siteID uint64) (*models.WAFConfig, error)
 	return &config, err
 }
 
-// UpdateWAFConfig updates WAF settings and queues task for agent
+// UpdateWAFConfig updates WAF settings and waits for agent confirmation (synchronous).
 func (s *SecurityService) UpdateWAFConfig(siteID uint64, req models.UpdateWAFRequest) (*models.WAFConfig, error) {
 	config, err := s.GetWAFConfig(siteID)
 	if err != nil {
@@ -65,12 +65,13 @@ func (s *SecurityService) UpdateWAFConfig(siteID uint64, req models.UpdateWAFReq
 		s.db.Model(&models.WAFConfig{}).Where("id = ?", config.ID).Updates(updates)
 	}
 
-	// Queue WAF task for agent
+	// Get site for server_id + domain
 	var site models.Site
 	if err := s.db.First(&site, siteID).Error; err != nil {
 		return nil, fmt.Errorf("site not found")
 	}
 
+	// Queue task — synchronous: wait for agent to confirm
 	taskData := models.AgentWAFTask{
 		SiteID:         siteID,
 		Domain:         site.Domain,
@@ -86,7 +87,27 @@ func (s *SecurityService) UpdateWAFConfig(siteID uint64, req models.UpdateWAFReq
 		Data:     string(dataJSON),
 		Status:   "pending",
 	}
-	s.db.Create(&task)
+	if err := s.db.Create(&task).Error; err != nil {
+		return nil, fmt.Errorf("failed to queue WAF task: %w", err)
+	}
+
+	// Wait for agent to complete (max 60s)
+	result, err := WaitForTaskCompleteWithTimeout(s.db, task.ID, 60*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("agent timeout: %w", err)
+	}
+	if result.Error != "" {
+		// Roll back DB change so UI stays consistent with actual server state
+		rollback := map[string]interface{}{}
+		if req.Enabled != nil {
+			old := !config.Enabled // flip back
+			rollback["enabled"] = old
+		}
+		if len(rollback) > 0 {
+			s.db.Model(&models.WAFConfig{}).Where("id = ?", config.ID).Updates(rollback)
+		}
+		return nil, fmt.Errorf("agent error: %s", result.Error)
+	}
 
 	return config, nil
 }
