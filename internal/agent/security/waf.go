@@ -106,9 +106,11 @@ func buildModSecConfig(task models.AgentWAFTask) string {
 	sb.WriteString(fmt.Sprintf("# Paranoid Level: %d\n", task.ParanoidLevel))
 	sb.WriteString(fmt.Sprintf("SecAction \"id:900000,phase:1,nolog,pass,t:none,setvar:tx.paranoia_level=%d\"\n\n", task.ParanoidLevel))
 
-	// Whitelist IPs
+	// Whitelist IPs — support newline or comma-separated
 	if task.WhitelistedIPs != "" {
-		ips := strings.Split(task.WhitelistedIPs, ",")
+		raw := strings.ReplaceAll(task.WhitelistedIPs, "\n", ",")
+		raw = strings.ReplaceAll(raw, "\r", "")
+		ips := strings.Split(raw, ",")
 		for _, ip := range ips {
 			ip = strings.TrimSpace(ip)
 			if ip != "" {
@@ -118,11 +120,20 @@ func buildModSecConfig(task models.AgentWAFTask) string {
 		sb.WriteString("\n")
 	}
 
-	// Include OWASP CRS if available
-	crsPath := "/usr/share/modsecurity-crs"
-	if _, err := os.Stat(crsPath); err == nil {
-		sb.WriteString("Include " + crsPath + "/crs-setup.conf\n")
-		sb.WriteString("Include " + crsPath + "/rules/*.conf\n")
+	// Include OWASP CRS — try known install paths in priority order
+	crsCandidates := []struct{ setup, rules string }{
+		{"/etc/modsecurity/crs/crs-setup.conf", "/usr/share/modsecurity-crs/rules"},
+		{"/usr/share/modsecurity-crs/crs-setup.conf", "/usr/share/modsecurity-crs/rules"},
+		{"/usr/local/owasp-modsecurity-crs/crs-setup.conf", "/usr/local/owasp-modsecurity-crs/rules"},
+	}
+	for _, c := range crsCandidates {
+		if _, err := os.Stat(c.setup); err == nil {
+			if _, err2 := os.Stat(c.rules); err2 == nil {
+				sb.WriteString("Include " + c.setup + "\n")
+				sb.WriteString("Include " + c.rules + "/*.conf\n")
+				break
+			}
+		}
 	}
 
 	return sb.String()
