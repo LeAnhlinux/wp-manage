@@ -91,6 +91,10 @@ func RebuildPHPFPMPool(domain, phpVersion string, configData map[string]string) 
 		memoryLimit = "256M"
 	}
 
+	// open_basedir is enabled unless explicitly set to "false" in configData.
+	// Defaults to true (safe default) if key is absent.
+	openBasedir := configData["open_basedir_enabled"] != "false"
+
 	su := siteUser(domain)
 	conf := fmt.Sprintf(`[%s]
 user = %s
@@ -109,9 +113,12 @@ php_admin_value[upload_max_filesize] = 64M
 php_admin_value[post_max_size] = 64M
 php_admin_value[max_execution_time] = 300
 php_admin_value[max_input_vars] = 3000
-php_admin_value[open_basedir] = /var/www/%s/:/tmp/:/usr/share/php/
-php_admin_value[disable_functions] = exec,passthru,shell_exec,system,proc_open,popen,parse_ini_file,show_source
-`, domain, su, su, phpVersion, domain, maxChildren, memoryLimit, domain)
+`, domain, su, su, phpVersion, domain, maxChildren, memoryLimit)
+
+	if openBasedir {
+		conf += fmt.Sprintf("php_admin_value[open_basedir] = /var/www/%s/:/tmp/:/usr/share/php/\n", domain)
+	}
+	conf += "php_admin_value[disable_functions] = exec,passthru,shell_exec,system,proc_open,popen,parse_ini_file,show_source\n"
 
 	if err := os.WriteFile(filePath, []byte(conf), 0644); err != nil {
 		restoreConfig(filePath, backupPath)

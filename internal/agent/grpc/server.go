@@ -1473,21 +1473,31 @@ func (s *AgentServer) executeRebuildConfig(taskID uint64, task models.AgentRebui
 	var errors []string
 
 	// Build the list of sites to rebuild
-	type siteEntry struct{ domain, phpVersion string }
+	type siteEntry struct {
+		domain             string
+		phpVersion         string
+		openBasedirEnabled bool
+	}
 	var sitesToRebuild []siteEntry
 	if len(task.Sites) > 0 {
 		// All-sites mode
 		for _, s := range task.Sites {
-			sitesToRebuild = append(sitesToRebuild, siteEntry{s.Domain, s.PHPVersion})
+			sitesToRebuild = append(sitesToRebuild, siteEntry{s.Domain, s.PHPVersion, s.OpenBasedirEnabled})
 		}
 	} else if task.Domain != "" {
 		// Single-site mode
-		sitesToRebuild = []siteEntry{{task.Domain, task.PHPVersion}}
+		sitesToRebuild = []siteEntry{{task.Domain, task.PHPVersion, task.OpenBasedirEnabled}}
 	}
 
-	rebuildOneSite := func(domain, phpVersion string) {
+	rebuildOneSite := func(e siteEntry) {
+		domain := e.domain
+		phpVersion := e.phpVersion
 		if phpVersion == "" {
 			phpVersion = "8.2"
+		}
+		openBasedirVal := "true"
+		if !e.openBasedirEnabled {
+			openBasedirVal = "false"
 		}
 		for _, configType := range task.ConfigTypes {
 			switch configType {
@@ -1505,7 +1515,9 @@ func (s *AgentServer) executeRebuildConfig(taskID uint64, task models.AgentRebui
 					}
 				}
 			case "php_fpm_pool":
-				r, err := agentconfig.RebuildPHPFPMPool(domain, phpVersion, map[string]string{})
+				r, err := agentconfig.RebuildPHPFPMPool(domain, phpVersion, map[string]string{
+					"open_basedir_enabled": openBasedirVal,
+				})
 				if err != nil {
 					errors = append(errors, fmt.Sprintf("%s php-fpm: %v", domain, err))
 					results = append(results, RebuildResult{Domain: domain, ConfigType: "php_fpm_pool", Success: false, Message: err.Error()})
@@ -1520,7 +1532,7 @@ func (s *AgentServer) executeRebuildConfig(taskID uint64, task models.AgentRebui
 	}
 
 	for _, site := range sitesToRebuild {
-		rebuildOneSite(site.domain, site.phpVersion)
+		rebuildOneSite(site)
 	}
 
 	if outJSON, err := json.Marshal(results); err == nil {

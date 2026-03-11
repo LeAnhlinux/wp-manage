@@ -124,6 +124,7 @@ func Setup(
 	sites.Post("/:id/ssl", middleware.PermissionRequired("sites", "manage"), siteHandler.IssueSSL)
 	sites.Get("/:id/credentials", siteHandler.Credentials)
 	sites.Post("/:id/autologin", siteHandler.Autologin)
+	sites.Post("/:siteId/open-basedir/toggle", middleware.PermissionRequired("sites", "manage"), siteHandler.ToggleOpenBasedir)
 	sites.Post("/:id/upload-source", middleware.PermissionRequired("sites", "manage"), siteHandler.UploadSource)
 	sites.Post("/:id/import-db", middleware.PermissionRequired("sites", "manage"), siteHandler.ImportDB)
 

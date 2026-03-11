@@ -624,15 +624,17 @@ type AgentOPcacheResult struct {
 }
 
 type AgentRebuildSite struct {
-	Domain     string `json:"domain"`
-	PHPVersion string `json:"php_version"`
+	Domain             string `json:"domain"`
+	PHPVersion         string `json:"php_version"`
+	OpenBasedirEnabled bool   `json:"open_basedir_enabled"` // false = skip open_basedir in PHP-FPM pool
 }
 
 type AgentRebuildConfigTask struct {
-	ConfigTypes []string            `json:"config_types"`
-	Domain      string              `json:"domain"`      // single-site mode
-	PHPVersion  string              `json:"php_version"` // single-site mode
-	Sites       []AgentRebuildSite  `json:"sites,omitempty"` // all-sites mode
+	ConfigTypes        []string           `json:"config_types"`
+	Domain             string             `json:"domain"`               // single-site mode
+	PHPVersion         string             `json:"php_version"`          // single-site mode
+	OpenBasedirEnabled bool               `json:"open_basedir_enabled"` // single-site mode
+	Sites              []AgentRebuildSite `json:"sites,omitempty"`      // all-sites mode
 }
 
 type AgentHealthCheckResult struct {

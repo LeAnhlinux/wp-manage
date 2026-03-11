@@ -366,3 +366,28 @@ func (h *SiteHandler) Autologin(c *fiber.Ctx) error {
 		Data:    fiber.Map{"url": url},
 	})
 }
+
+// ToggleOpenBasedir flips open_basedir_enabled for a site and immediately
+// rebuilds the PHP-FPM pool. Returns the new boolean value.
+func (h *SiteHandler) ToggleOpenBasedir(c *fiber.Ctx) error {
+	id, err := strconv.ParseUint(c.Params("siteId"), 10, 64)
+	if err != nil {
+		return c.Status(400).JSON(models.APIResponse{Error: "invalid site ID"})
+	}
+
+	newValue, err := h.svc.ToggleOpenBasedir(id)
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Error: err.Error()})
+	}
+
+	msg := "open_basedir enabled"
+	if !newValue {
+		msg = "open_basedir disabled"
+	}
+	return c.JSON(models.APIResponse{
+		Success: true,
+		Message: msg,
+		Data:    fiber.Map{"open_basedir_enabled": newValue},
+	})
+}
+

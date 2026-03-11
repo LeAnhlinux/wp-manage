@@ -57,6 +57,10 @@ func RunManualMigrations(db *gorm.DB) {
 
 	// Backfill server_id from sites for existing records.
 	db.Exec("UPDATE backups b INNER JOIN sites s ON b.site_id = s.id SET b.server_id = s.server_id WHERE b.server_id = 0")
+
+	// Add open_basedir_enabled to sites (per-site PHP open_basedir toggle).
+	// Default 1 = enabled (most secure). Existing sites get open_basedir enabled.
+	db.Exec("ALTER TABLE sites ADD COLUMN IF NOT EXISTS open_basedir_enabled TINYINT(1) NOT NULL DEFAULT 1")
 }
 
 func AutoMigrate(db *gorm.DB) error {

@@ -176,3 +176,17 @@ export function useImportDB() {
     onSuccess: (_d, v) => qc.invalidateQueries({ queryKey: ['site', v.siteId] }),
   })
 }
+
+/** Toggle open_basedir on/off for a site. Rebuilds PHP-FPM pool synchronously. */
+export function useToggleOpenBasedir() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (siteId: number) => {
+      const { data } = await api.post<APIResponse<{ open_basedir_enabled: boolean }>>(
+        `/sites/${siteId}/open-basedir/toggle`
+      )
+      return data
+    },
+    onSuccess: (_d, siteId) => qc.invalidateQueries({ queryKey: ['site', siteId] }),
+  })
+}

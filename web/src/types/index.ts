@@ -38,6 +38,7 @@ export interface Site {
   multisite_type: string
   install_type: 'auto' | 'manual'
   linux_user?: string
+  open_basedir_enabled?: boolean
   status: 'active' | 'suspended' | 'creating' | 'error' | 'deleting'
   created_at: string
   server?: Server

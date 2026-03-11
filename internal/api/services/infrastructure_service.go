@@ -240,6 +240,7 @@ func (s *InfrastructureService) RebuildConfig(serverID uint64, req models.Rebuil
 		}
 		taskData.Domain = site.Domain
 		taskData.PHPVersion = phpVersion
+		taskData.OpenBasedirEnabled = site.OpenBasedirEnabled
 	} else {
 		// All-sites mode: collect all sites on this server
 		var sites []models.Site
@@ -252,8 +253,9 @@ func (s *InfrastructureService) RebuildConfig(serverID uint64, req models.Rebuil
 				phpVersion = "8.2"
 			}
 			taskData.Sites = append(taskData.Sites, models.AgentRebuildSite{
-				Domain:     site.Domain,
-				PHPVersion: phpVersion,
+				Domain:             site.Domain,
+				PHPVersion:         phpVersion,
+				OpenBasedirEnabled: site.OpenBasedirEnabled,
 			})
 		}
 	}

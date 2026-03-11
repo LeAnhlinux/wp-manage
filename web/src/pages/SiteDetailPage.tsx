@@ -7,7 +7,7 @@ import {
   FolderOpen, LayoutDashboard, Layers, Download, Loader2, HardDrive,
   CheckCircle2, XCircle, ChevronLeft, ChevronRight, Network, Plus, ImageIcon, Activity, Zap, Archive
 } from 'lucide-react'
-import { useSite, useDeleteSite, useUpdatePHP, useRestartSite, useSuspendSite, useResumeSite, useIssueSSL, useSiteCredentials, useAutologin, useUploadSource, useImportDB } from '@/hooks/useSites'
+import { useSite, useDeleteSite, useUpdatePHP, useRestartSite, useSuspendSite, useResumeSite, useIssueSSL, useSiteCredentials, useAutologin, useUploadSource, useImportDB, useToggleOpenBasedir } from '@/hooks/useSites'
 import { useStagingSites, useCreateStaging, usePushStaging, useDeleteStaging, useAutoUpdateConfig, useUpdateAutoUpdateConfig, useCheckUpdates, useUpdateLogs, useOptimizeDatabase } from '@/hooks/useWordPress'
 import { useLatestPerformance, usePerformanceMetrics, useRunPageSpeed } from '@/hooks/usePerformance'
 import { useSubsites, useEnableMultisite, useCreateSubsite, useDeleteSubsite, useSyncSubsites } from '@/hooks/useMultisite'
@@ -43,6 +43,7 @@ export default function SiteDetailPage() {
   const autologin = useAutologin()
   const uploadSource = useUploadSource()
   const importDB = useImportDB()
+  const toggleOpenBasedir = useToggleOpenBasedir()
 
   const [activeTab, setActiveTab] = useState<'overview' | 'files' | 'staging' | 'updates' | 'database' | 'performance' | 'multisite' | 'images' | 'domains' | 'redis' | 'cron' | 'sftp' | 'security' | 'monitoring' | 'ssl' | 'wpcli' | 'cache' | 'import' | 'backup'>('overview')
   // Delete confirmation modal state
@@ -471,6 +472,34 @@ export default function SiteDetailPage() {
                   <code className="text-xs bg-gray-100 px-2 py-0.5 rounded font-mono text-gray-700">{site.linux_user}</code>
                 } />
               )}
+              <DetailRow label="open_basedir" value={
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => toggleOpenBasedir.mutate(site.id)}
+                    disabled={toggleOpenBasedir.isPending || !can('sites', 'manage')}
+                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 disabled:opacity-50 ${
+                      (site.open_basedir_enabled ?? true) ? 'bg-emerald-500' : 'bg-gray-300'
+                    }`}
+                    title={(site.open_basedir_enabled ?? true) ? 'Click to disable open_basedir' : 'Click to enable open_basedir'}
+                  >
+                    <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${
+                      (site.open_basedir_enabled ?? true) ? 'translate-x-4' : 'translate-x-0.5'
+                    }`} />
+                  </button>
+                  <span className="text-sm text-gray-600">
+                    {toggleOpenBasedir.isPending ? (
+                      <span className="text-blue-500">Rebuilding PHP-FPM…</span>
+                    ) : (site.open_basedir_enabled ?? true) ? (
+                      <span className="text-emerald-600 font-medium">Enabled</span>
+                    ) : (
+                      <span className="text-gray-400">Disabled</span>
+                    )}
+                  </span>
+                  {!(site.open_basedir_enabled ?? true) && (
+                    <span className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">⚠ PHP can access all paths</span>
+                  )}
+                </div>
+              } />
               <DetailRow label="Server" value={
                 <Link to={`/servers/${site.server_id}`} className="text-blue-600 hover:underline">
                   {site.server?.name || `Server #${site.server_id}`}

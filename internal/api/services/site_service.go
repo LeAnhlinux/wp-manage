@@ -205,6 +205,56 @@ func (s *SiteService) UpdateLinuxUser(id uint64, user string) error {
 	return s.db.Model(&models.Site{}).Where("id = ?", id).Update("linux_user", user).Error
 }
 
+// ToggleOpenBasedir flips open_basedir_enabled for a site, then synchronously
+// rebuilds the PHP-FPM pool so the change takes effect immediately.
+// Returns the new value of open_basedir_enabled.
+func (s *SiteService) ToggleOpenBasedir(siteID uint64) (bool, error) {
+	var site models.Site
+	if err := s.db.First(&site, siteID).Error; err != nil {
+		return false, fmt.Errorf("site not found")
+	}
+
+	newValue := !site.OpenBasedirEnabled
+
+	// Persist the new value first.
+	if err := s.db.Model(&models.Site{}).Where("id = ?", siteID).
+		Update("open_basedir_enabled", newValue).Error; err != nil {
+		return false, err
+	}
+
+	phpVersion := site.PHPVersion
+	if phpVersion == "" {
+		phpVersion = "8.2"
+	}
+
+	// Rebuild the PHP-FPM pool synchronously so the change takes effect now.
+	taskData := models.AgentRebuildConfigTask{
+		ConfigTypes:        []string{"php_fpm_pool"},
+		Domain:             site.Domain,
+		PHPVersion:         phpVersion,
+		OpenBasedirEnabled: newValue,
+	}
+	task, err := s.CreateJSONTaskReturn(site.ServerID, siteID, "rebuild_config",
+		map[string]interface{}{
+			"config_types":         taskData.ConfigTypes,
+			"domain":               taskData.Domain,
+			"php_version":          taskData.PHPVersion,
+			"open_basedir_enabled": taskData.OpenBasedirEnabled,
+		})
+	if err != nil {
+		return newValue, fmt.Errorf("failed to queue rebuild task: %w", err)
+	}
+
+	result, err := WaitForTaskComplete(s.db, task.ID)
+	if err != nil {
+		return newValue, err
+	}
+	if result.Error != "" {
+		return newValue, fmt.Errorf("%s", result.Error)
+	}
+	return newValue, nil
+}
+
 func (s *SiteService) GetAutologinSecret(id uint64) string {
 	var site models.Site
 	err := s.db.Select("autologin_secret").First(&site, id).Error
