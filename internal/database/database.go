@@ -113,5 +113,9 @@ func AutoMigrate(db *gorm.DB) error {
 		&models.DNSProvider{},
 		&models.StorageCredential{},
 		&models.PanelRelease{},
+		// Mobile API tables
+		&models.MobileRefreshToken{},
+		&models.MobileNotification{},
+		&models.MobilePushLog{},
 	)
 }

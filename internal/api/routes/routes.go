@@ -3,10 +3,123 @@ package routes
 import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber-team/wp-manage/internal/api/handlers"
+	"github.com/gofiber-team/wp-manage/internal/api/handlers/mobile"
 	"github.com/gofiber-team/wp-manage/internal/api/middleware"
 	"github.com/gofiber-team/wp-manage/internal/api/services"
 	"github.com/gofiber-team/wp-manage/internal/config"
 )
+
+// SetupMobile registers all /api/mobile/v1/ routes.
+// This surface is separate from the internal /api/v1/ and uses its own
+// auth middleware (short-lived JWT + refresh token stored in DB).
+func SetupMobile(
+	app *fiber.App,
+	cfg *config.Config,
+	mobileAuthHandler *mobile.AuthHandler,
+	dashboardHandler *mobile.DashboardHandler,
+	mobileServerHandler *mobile.ServerHandler,
+	mobileSiteHandler *mobile.SiteHandler,
+	monitoringHandler *mobile.MonitoringHandler,
+	operationsHandler *mobile.OperationsHandler,
+) {
+	m := app.Group("/api/mobile/v1")
+	auth := middleware.MobileAuthRequired(cfg)
+	mgr := middleware.MobileManagerRequired(cfg)
+
+	// ── Auth (public) ────────────────────────────────────────────────────────
+	mAuth := m.Group("/auth")
+	mAuth.Post("/login", mobileAuthHandler.Login)
+	mAuth.Post("/2fa/complete", mobileAuthHandler.Complete2FA)
+	mAuth.Post("/refresh", mobileAuthHandler.Refresh)
+	// Auth protected
+	mAuth.Post("/device", auth, mobileAuthHandler.RegisterDevice)
+	mAuth.Delete("/session", auth, mobileAuthHandler.Logout)
+	mAuth.Get("/me", auth, mobileAuthHandler.Me)
+
+	// ── Notifications ────────────────────────────────────────────────────────
+	notif := m.Group("/notifications", auth)
+	notif.Get("/", mobileAuthHandler.ListNotifications)
+	notif.Get("/unread-count", mobileAuthHandler.UnreadCount)
+	notif.Post("/read-all", mobileAuthHandler.MarkAllNotificationsRead)
+	notif.Post("/:id/read", mobileAuthHandler.MarkNotificationRead)
+
+	// ── Dashboard ────────────────────────────────────────────────────────────
+	m.Get("/dashboard", auth, dashboardHandler.Overview)
+
+	// ── Servers ──────────────────────────────────────────────────────────────
+	servers := m.Group("/servers", auth)
+	servers.Get("/", mobileServerHandler.List)
+	servers.Get("/:id", mobileServerHandler.Detail)
+	servers.Get("/:id/services", mobileServerHandler.Services)
+	servers.Get("/:id/metrics/history", mobileServerHandler.MetricsHistory)
+	servers.Get("/:id/alerts", mobileServerHandler.AlertHistory)
+
+	// ── Sites ────────────────────────────────────────────────────────────────
+	sites := m.Group("/sites", auth)
+	sites.Get("/", mobileSiteHandler.List)
+	sites.Get("/:id", mobileSiteHandler.Detail)
+	sites.Post("/:id/restart", mgr, mobileSiteHandler.Restart)
+	sites.Post("/:id/suspend", mgr, mobileSiteHandler.Suspend)
+	sites.Post("/:id/resume", mgr, mobileSiteHandler.Resume)
+	sites.Post("/:id/autologin", mgr, mobileSiteHandler.Autologin)
+	sites.Get("/:id/credentials", mgr, mobileSiteHandler.Credentials)
+	sites.Post("/:id/cache/purge", mgr, mobileSiteHandler.CachePurge)
+	// SSL
+	sites.Get("/:id/ssl", mobileSiteHandler.SSLStatus)
+	// WP quick actions
+	sites.Post("/:id/wp/updates/check", mgr, mobileSiteHandler.WPUpdates)
+	sites.Get("/:id/wp/updates/logs", mobileSiteHandler.WPUpdateLogs)
+	// Backups (site-scoped)
+	sites.Get("/:siteId/backups", operationsHandler.ListSiteBackups)
+	sites.Post("/:siteId/backups", mgr, operationsHandler.CreateBackup)
+	// Scans (site-scoped)
+	sites.Get("/:siteId/scans", operationsHandler.ListSiteScans)
+	sites.Post("/:siteId/scans", mgr, operationsHandler.StartScan)
+	// WP-CLI
+	sites.Post("/:siteId/wpcli", mgr, operationsHandler.ExecuteWPCLI)
+	sites.Get("/:siteId/wpcli/history", operationsHandler.WPCLIHistory)
+	sites.Get("/:siteId/wpcli/:historyId", operationsHandler.GetWPCLIResult)
+	// File manager (read-only)
+	sites.Get("/:siteId/files", operationsHandler.FileList)
+	sites.Get("/:siteId/files/content", operationsHandler.FileContent)
+	sites.Post("/:siteId/files/search", operationsHandler.FileSearch)
+
+	// ── SSL global ───────────────────────────────────────────────────────────
+	m.Get("/ssl/expiring", auth, mobileSiteHandler.SSLExpiring)
+
+	// ── Backups global ───────────────────────────────────────────────────────
+	backups := m.Group("/backups", auth)
+	backups.Get("/", operationsHandler.ListBackupsAll)
+	backups.Get("/:id", operationsHandler.GetBackup)
+
+	// ── Scans global ─────────────────────────────────────────────────────────
+	scans := m.Group("/scans", auth)
+	scans.Get("/", operationsHandler.ListScansAll)
+	scans.Get("/:id", operationsHandler.GetScan)
+
+	// ── Migrations ───────────────────────────────────────────────────────────
+	migrations := m.Group("/migrations", auth)
+	migrations.Get("/", operationsHandler.ListMigrations)
+	migrations.Get("/:id", operationsHandler.GetMigration)
+	migrations.Get("/:id/logs", operationsHandler.GetMigrationLogs)
+	migrations.Post("/:id/cancel", mgr, operationsHandler.CancelMigration)
+
+	// ── Monitoring ───────────────────────────────────────────────────────────
+	monitoring := m.Group("/monitoring", auth)
+	monitoring.Get("/uptime", monitoringHandler.ListUptime)
+	monitoring.Get("/uptime/:checkId/history", monitoringHandler.UptimeHistory)
+	monitoring.Post("/uptime/:checkId/toggle", mgr, monitoringHandler.ToggleUptime)
+	monitoring.Post("/uptime", mgr, monitoringHandler.CreateUptimeCheck)
+	monitoring.Delete("/uptime/:checkId", mgr, monitoringHandler.DeleteUptimeCheck)
+
+	// ── Alerts ───────────────────────────────────────────────────────────────
+	alerts := m.Group("/alerts", auth)
+	alerts.Get("/history", monitoringHandler.AlertHistoryAll)
+	alerts.Get("/rules", monitoringHandler.AlertRulesAll)
+
+	// ── Activity ─────────────────────────────────────────────────────────────
+	m.Get("/activity", auth, monitoringHandler.ActivityLog)
+}
 
 func Setup(
 	app *fiber.App,

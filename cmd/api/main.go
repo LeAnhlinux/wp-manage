@@ -11,6 +11,7 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/recover"
 
 	"github.com/gofiber-team/wp-manage/internal/api/handlers"
+	mobileHandlers "github.com/gofiber-team/wp-manage/internal/api/handlers/mobile"
 	appMiddleware "github.com/gofiber-team/wp-manage/internal/api/middleware"
 	"github.com/gofiber-team/wp-manage/internal/api/routes"
 	"github.com/gofiber-team/wp-manage/internal/api/services"
@@ -118,6 +119,23 @@ func main() {
 	panelUpdateHandler := handlers.NewPanelUpdateHandler(panelUpdateService)
 	updateCheckHandler := handlers.NewUpdateCheckHandler(panelUpdateService, rolloutService, serverService)
 
+	// ── Mobile API services & handlers ───────────────────────────────────────
+	fcmKey := cfg.FCMServerKey     // Set FCM_SERVER_KEY in env
+	fcmProject := cfg.FCMProjectID // Set FCM_PROJECT_ID in env
+	mobileAuthService := services.NewMobileAuthService(db, cfg)
+	pushService := services.NewPushService(db, fcmKey, fcmProject)
+	_ = pushService // Used by workers below
+
+	mobileAuthHandler := mobileHandlers.NewAuthHandler(mobileAuthService)
+	mobileDashboardHandler := mobileHandlers.NewDashboardHandler(
+		db, serverService, siteService, uptimeService,
+		alertService, activityService, backupService, migrationService, securityService,
+	)
+	mobileServerHandler := mobileHandlers.NewServerHandler(db, serverService, alertService)
+	mobileSiteHandler := mobileHandlers.NewSiteHandler(db, siteService, uptimeService, backupService)
+	mobileMonitoringHandler := mobileHandlers.NewMonitoringHandler(db, uptimeService, alertService, activityService, serverService)
+	mobileOperationsHandler := mobileHandlers.NewOperationsHandler(db, backupService, securityService, migrationService, siteService, fileService)
+
 	// Fiber app
 	app := fiber.New(fiber.Config{
 		AppName:                      "WP Manage API v1.0",
@@ -144,6 +162,13 @@ func main() {
 	// API routes
 	routes.Setup(app, cfg, authHandler, serverHandler, siteHandler, deployHandler, fileHandler,
 		userHandler, apiKeyHandler, backupHandler, migrationHandler, securityHandler, wordpressHandler, rolloutHandler, performanceHandler, multisiteHandler, imageOptHandler, teamHandler, infraHandler, activityHandler, cronHandler, domainHandler, redisHandler, sshHandler, sftpHandler, hardeningHandler, uptimeHandler, alertHandler, wpcliHandler, cacheHandler, importHandler, dnsHandler, sslHandler, storageHandler, fail2banHandler, panelUpdateHandler, updateCheckHandler, userService, apiKeyService, rateLimiter)
+
+	// Mobile API routes — separate prefix /api/mobile/v1/
+	routes.SetupMobile(app, cfg,
+		mobileAuthHandler, mobileDashboardHandler,
+		mobileServerHandler, mobileSiteHandler,
+		mobileMonitoringHandler, mobileOperationsHandler,
+	)
 
 	// Background workers
 	uptimeWorker := workers.NewUptimeWorker(uptimeService, alertService, hub)

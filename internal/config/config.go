@@ -8,13 +8,15 @@ import (
 )
 
 type Config struct {
-	Server    ServerConfig
-	Database  DatabaseConfig
-	Redis     RedisConfig
-	JWT       JWTConfig
-	Agent     AgentConfig
-	Panel     PanelConfig
-	Google    GoogleConfig
+	Server       ServerConfig
+	Database     DatabaseConfig
+	Redis        RedisConfig
+	JWT          JWTConfig
+	Agent        AgentConfig
+	Panel        PanelConfig
+	Google       GoogleConfig
+	FCMServerKey string // Firebase Cloud Messaging legacy server key (FCM_SERVER_KEY)
+	FCMProjectID string // GCP project ID for FCM v1 API (FCM_PROJECT_ID)
 }
 
 type GoogleConfig struct {
@@ -99,6 +101,8 @@ func Load() *Config {
 		Google: GoogleConfig{
 			PageSpeedAPIKey: getEnv("GOOGLE_PAGESPEED_API_KEY", ""),
 		},
+		FCMServerKey: getEnv("FCM_SERVER_KEY", ""),
+		FCMProjectID: getEnv("FCM_PROJECT_ID", ""),
 	}
 }
 
