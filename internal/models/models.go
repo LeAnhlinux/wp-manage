@@ -86,24 +86,32 @@ type Migration struct {
 	SiteID         uint64     `json:"site_id" gorm:"index;not null"`
 	SourceServerID uint64     `json:"source_server_id" gorm:"index;not null"`
 	TargetServerID uint64     `json:"target_server_id" gorm:"index;not null"`
-	Phase          string     `json:"phase" gorm:"type:enum('preparation','initial_sync','delta_sync','switchover','cleanup');default:'preparation'"`
-	Status         string     `json:"status" gorm:"type:enum('running','completed','failed','rolled_back');default:'running';not null"`
-	Progress       int        `json:"progress" gorm:"default:0"`
-	Error          string     `json:"error,omitempty" gorm:"type:text"`
-	StartedAt      time.Time  `json:"started_at"`
-	CompletedAt    *time.Time `json:"completed_at"`
+	// Mode: keep_domain (suspend source, auto-update DNS) or change_domain (wp search-replace)
+	Mode           string     `json:"mode" gorm:"size:20;default:'keep_domain'"`
+	NewDomain      string     `json:"new_domain,omitempty" gorm:"size:255"` // only for change_domain mode
+	UpdateDNS         bool       `json:"update_dns" gorm:"default:false"`          // auto-update DNS A record after keep_domain migration
+	SourceCleanedUp   bool       `json:"source_cleaned_up" gorm:"default:false"`   // true once source files/DB/configs deleted
+	Phase             string     `json:"phase" gorm:"type:enum('preparation','initial_sync','delta_sync','switchover','cleanup');default:'preparation'"`
+	Status            string     `json:"status" gorm:"type:enum('running','completed','failed','rolled_back');default:'running';not null"`
+	Progress          int        `json:"progress" gorm:"default:0"`
+	Error             string     `json:"error,omitempty" gorm:"type:text"`
+	StartedAt         time.Time  `json:"started_at"`
+	CompletedAt       *time.Time `json:"completed_at"`
 	Site           *Site      `json:"site,omitempty" gorm:"foreignKey:SiteID"`
 	SourceServer   *Server    `json:"source_server,omitempty" gorm:"foreignKey:SourceServerID"`
 	TargetServer   *Server    `json:"target_server,omitempty" gorm:"foreignKey:TargetServerID"`
 }
 
 type Domain struct {
-	ID        uint64    `json:"id" gorm:"primaryKey;autoIncrement"`
-	SiteID    uint64    `json:"site_id" gorm:"index;not null"`
-	Domain    string    `json:"domain" gorm:"uniqueIndex;size:255;not null"`
-	Type      string    `json:"type" gorm:"type:enum('primary','alias','subdomain');default:'primary';not null"`
-	CreatedAt time.Time `json:"created_at"`
-	Site      *Site     `json:"site,omitempty" gorm:"foreignKey:SiteID"`
+	ID           uint64    `json:"id" gorm:"primaryKey;autoIncrement"`
+	SiteID       uint64    `json:"site_id" gorm:"index;not null"`
+	Domain       string    `json:"domain" gorm:"uniqueIndex;size:255;not null"`
+	Type         string    `json:"type" gorm:"type:enum('primary','alias','subdomain');default:'primary';not null"`
+	SSLEnabled   bool      `json:"ssl_enabled" gorm:"default:false"`
+	RedirectTo   string    `json:"redirect_to,omitempty" gorm:"size:500"`
+	RedirectType int       `json:"redirect_type,omitempty" gorm:"default:0"` // 301 or 302; 0 = no redirect
+	CreatedAt    time.Time `json:"created_at"`
+	Site         *Site     `json:"site,omitempty" gorm:"foreignKey:SiteID"`
 }
 
 type ActivityLog struct {
@@ -192,7 +200,8 @@ type WAFConfig struct {
 type MalwareScan struct {
 	ID            uint64     `json:"id" gorm:"primaryKey;autoIncrement"`
 	SiteID        uint64     `json:"site_id" gorm:"index;not null"`
-	ScanType      string     `json:"scan_type" gorm:"size:30;default:'full'"` // full, quick, custom
+	ScanType      string     `json:"scan_type" gorm:"size:30;default:'full'"`   // full, quick, custom
+	Engine        string     `json:"engine" gorm:"size:30;default:'wp_signature'"` // wp_signature, clamav, both
 	Status        string     `json:"status" gorm:"size:20;default:'running';not null"` // running, completed, failed
 	FilesScanned  int        `json:"files_scanned"`
 	ThreatsFound  int        `json:"threats_found"`
@@ -201,6 +210,21 @@ type MalwareScan struct {
 	StartedAt     time.Time  `json:"started_at"`
 	CompletedAt   *time.Time `json:"completed_at"`
 	Site          *Site      `json:"site,omitempty" gorm:"foreignKey:SiteID"`
+}
+
+// MalwareScanSchedule configures automatic periodic scanning for a site
+type MalwareScanSchedule struct {
+	ID        uint64     `json:"id" gorm:"primaryKey;autoIncrement"`
+	SiteID    uint64     `json:"site_id" gorm:"uniqueIndex;not null"` // one schedule per site
+	ScanType  string     `json:"scan_type" gorm:"size:20;default:'full'"`
+	Engine    string     `json:"engine" gorm:"size:30;default:'wp_signature'"`
+	IntervalH int        `json:"interval_h" gorm:"default:24"` // interval in hours: 6, 12, 24, 48, 72, 168
+	Enabled   bool       `json:"enabled" gorm:"default:true"`
+	LastRunAt *time.Time `json:"last_run_at,omitempty"`
+	NextRunAt *time.Time `json:"next_run_at,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
+	Site      *Site      `json:"site,omitempty" gorm:"foreignKey:SiteID"`
 }
 
 // StagingSite tracks staging environments
@@ -568,10 +592,10 @@ type ExternalImport struct {
 	Site      *Site      `json:"site,omitempty" gorm:"foreignKey:SiteID"`
 }
 
-// DNSProvider stores DNS provider credentials per server
+// DNSProvider stores global DNS provider credentials (not server-scoped)
 type DNSProvider struct {
 	ID           uint64    `json:"id" gorm:"primaryKey;autoIncrement"`
-	ServerID     uint64    `json:"server_id" gorm:"index;not null"`
+	ServerID     *uint64   `json:"server_id,omitempty" gorm:"index"`
 	ProviderType string    `json:"provider_type" gorm:"size:20;not null"` // cloudflare, route53
 	APIKey       string    `json:"-" gorm:"size:500"`
 	APIEmail     string    `json:"api_email,omitempty" gorm:"size:255"`

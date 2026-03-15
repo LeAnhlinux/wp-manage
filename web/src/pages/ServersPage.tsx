@@ -4,6 +4,7 @@ import {
   Plus, Trash2, ExternalLink, Copy, Upload, Terminal, Key, Lock,
   CheckCircle, XCircle, Loader2, Server, Cpu, HardDrive, X, ChevronRight,
 } from 'lucide-react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useServers, useCreateServer, useDeleteServer, useAutoDeploy } from '@/hooks/useServers'
 import { StatusBadge } from '@/components/ui/Badge'
 import type { DeployProgress } from '@/types'
@@ -31,6 +32,7 @@ export default function ServersPage() {
   const wsRef = useRef<WebSocket | null>(null)
   const logsEndRef = useRef<HTMLDivElement>(null)
 
+  const qc = useQueryClient()
   const { data, isLoading } = useServers()
   const createServer = useCreateServer()
   const deleteServer = useDeleteServer()
@@ -53,10 +55,20 @@ export default function ServersPage() {
       const msg = JSON.parse(event.data)
       if (msg.type === 'deploy_progress') {
         const progress = msg.data as DeployProgress
-        setDeployLogs(prev => [...prev, progress])
+        setDeployLogs(prev => {
+          // When a new step starts (running), mark the previous step as success
+          const updated = prev.map((p, i) =>
+            i === prev.length - 1 && p.status === 'running' && progress.status === 'running'
+              ? { ...p, status: 'success' as const }
+              : p
+          )
+          return [...updated, progress]
+        })
         if (progress.status === 'success' || progress.status === 'error') {
           setIsDeploying(false)
           ws.close()
+          // Refresh server list so status/specs update immediately after deploy
+          qc.invalidateQueries({ queryKey: ['servers'] })
         }
       }
     }

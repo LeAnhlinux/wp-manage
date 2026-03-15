@@ -19,6 +19,15 @@ func NewHardeningService(db *gorm.DB) *HardeningService {
 
 // Harden applies WordPress hardening measures and waits for agent confirmation (synchronous).
 func (s *HardeningService) Harden(siteID uint64, req models.HardenWordPressRequest) error {
+	return s.hardenOrRevert(siteID, req, false)
+}
+
+// RevertHarden removes previously applied WordPress hardening measures (synchronous).
+func (s *HardeningService) RevertHarden(siteID uint64, req models.HardenWordPressRequest) error {
+	return s.hardenOrRevert(siteID, req, true)
+}
+
+func (s *HardeningService) hardenOrRevert(siteID uint64, req models.HardenWordPressRequest, revert bool) error {
 	var site models.Site
 	if err := s.db.First(&site, siteID).Error; err != nil {
 		return fmt.Errorf("site not found")
@@ -26,6 +35,7 @@ func (s *HardeningService) Harden(siteID uint64, req models.HardenWordPressReque
 
 	taskData, _ := json.Marshal(models.AgentHardenTask{
 		Domain:            site.Domain,
+		Revert:            revert,
 		DisableXMLRPC:     req.DisableXMLRPC,
 		HideWPVersion:     req.HideWPVersion,
 		SecureFilePerms:   req.SecureFilePerms,

@@ -146,6 +146,73 @@ func (p *Provisioner) finalize() error {
 	return nil
 }
 
+// InstallService installs and configures a single named service.
+// Valid names: nginx, php, mariadb, redis, certbot, fail2ban, ufw
+func (p *Provisioner) InstallService(name string) error {
+	// Always update apt cache first
+	runCmd("apt-get", "update", "-y")
+
+	switch name {
+	case "nginx":
+		if err := p.installNginx(); err != nil {
+			return err
+		}
+		runCmd("systemctl", "enable", "nginx")
+		if err := p.configureNginx(); err != nil {
+			return err
+		}
+		return runCmd("systemctl", "restart", "nginx")
+	case "php":
+		if err := p.installPHP(); err != nil {
+			return err
+		}
+		runCmd("systemctl", "enable", "php8.2-fpm")
+		if err := p.configurePHP(); err != nil {
+			return err
+		}
+		return runCmd("systemctl", "restart", "php8.2-fpm")
+	case "mariadb":
+		if err := p.installMariaDB(); err != nil {
+			return err
+		}
+		runCmd("systemctl", "enable", "mariadb")
+		if err := p.configureMariaDB(); err != nil {
+			return err
+		}
+		return runCmd("systemctl", "restart", "mariadb")
+	case "redis":
+		if err := p.installRedis(); err != nil {
+			return err
+		}
+		runCmd("systemctl", "enable", "redis-server")
+		return runCmd("systemctl", "restart", "redis-server")
+	case "certbot":
+		return p.installCertbot()
+	case "fail2ban":
+		if err := p.installFail2Ban(); err != nil {
+			return err
+		}
+		runCmd("systemctl", "enable", "fail2ban")
+		return runCmd("systemctl", "restart", "fail2ban")
+	case "ufw":
+		if err := p.configureUFW(); err != nil {
+			return err
+		}
+		return runCmd("ufw", "--force", "enable")
+	case "cron":
+		out, err := exec.Command("apt-get", "install", "-y", "cron").CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("failed to install cron: %s: %w", string(out), err)
+		}
+		runCmd("systemctl", "enable", "cron")
+		return runCmd("systemctl", "restart", "cron")
+	case "wpcli":
+		return p.installWPCLI()
+	default:
+		return fmt.Errorf("unknown service: %s", name)
+	}
+}
+
 func runCmd(name string, args ...string) error {
 	cmd := exec.Command(name, args...)
 	output, err := cmd.CombinedOutput()

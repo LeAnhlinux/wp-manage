@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gofiber-team/wp-manage/internal/models"
@@ -22,7 +23,7 @@ func NewDNSService(db *gorm.DB) *DNSService {
 
 func (s *DNSService) Create(serverID uint64, req models.CreateDNSProviderRequest) (*models.DNSProvider, error) {
 	provider := &models.DNSProvider{
-		ServerID:     serverID,
+		ServerID:     &serverID,
 		ProviderType: req.ProviderType,
 		APIKey:       req.APIKey,
 		APIEmail:     req.APIEmail,
@@ -41,8 +42,258 @@ func (s *DNSService) List(serverID uint64) ([]models.DNSProvider, error) {
 	return providers, err
 }
 
+func (s *DNSService) ListAll() ([]models.DNSProvider, error) {
+	var providers []models.DNSProvider
+	err := s.db.Preload("Server").Order("server_id, id").Find(&providers).Error
+	return providers, err
+}
+
 func (s *DNSService) Delete(providerID uint64) error {
 	return s.db.Delete(&models.DNSProvider{}, providerID).Error
+}
+
+// CreateGlobal creates a DNS provider not bound to any server.
+func (s *DNSService) CreateGlobal(req models.CreateGlobalDNSProviderRequest) (*models.DNSProvider, error) {
+	provider := &models.DNSProvider{
+		ProviderType: req.ProviderType,
+		APIKey:       req.APIKey,
+		APIEmail:     req.APIEmail,
+		ZoneID:       req.ZoneID,
+		Domain:       req.Domain,
+	}
+	if err := s.db.Create(provider).Error; err != nil {
+		return nil, err
+	}
+	return provider, nil
+}
+
+// LookupZone finds the Zone ID for a domain from the provider API.
+func (s *DNSService) LookupZone(req models.LookupZoneRequest) (*models.LookupZoneResult, error) {
+	switch req.ProviderType {
+	case "cloudflare":
+		return s.cfLookupZone(req.APIKey, req.Domain)
+	default:
+		return nil, fmt.Errorf("unsupported provider: %s", req.ProviderType)
+	}
+}
+
+func (s *DNSService) cfLookupZone(apiKey, domain string) (*models.LookupZoneResult, error) {
+	url := fmt.Sprintf("https://api.cloudflare.com/client/v4/zones?name=%s", domain)
+	body, status, err := cfHTTP("GET", url, apiKey, nil)
+	if err != nil {
+		return nil, fmt.Errorf("cloudflare API: %w", err)
+	}
+	if status >= 400 {
+		return nil, fmt.Errorf("cloudflare returned %d: %s", status, string(body))
+	}
+	var resp struct {
+		Success bool `json:"success"`
+		Result  []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"result"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	json.Unmarshal(body, &resp)
+	if !resp.Success {
+		msg := "lookup failed"
+		if len(resp.Errors) > 0 {
+			msg = resp.Errors[0].Message
+		}
+		return nil, fmt.Errorf("cloudflare: %s", msg)
+	}
+	if len(resp.Result) == 0 {
+		return nil, fmt.Errorf("no zone found for domain: %s", domain)
+	}
+	return &models.LookupZoneResult{
+		ZoneID:   resp.Result[0].ID,
+		ZoneName: resp.Result[0].Name,
+	}, nil
+}
+
+// ListRecordsByProvider lists DNS records using only provider ID (no server scoping).
+func (s *DNSService) ListRecordsByProvider(providerID uint64) ([]CFDNSRecord, error) {
+	return s.ListDNSRecords(providerID)
+}
+
+// CreateRecordByProvider creates a DNS record using only provider ID.
+func (s *DNSService) CreateRecordByProvider(providerID uint64, rec CFDNSRecord) (*CFDNSRecord, error) {
+	return s.CreateDNSRecord(providerID, rec)
+}
+
+// DeleteRecordByProvider deletes a DNS record using only provider ID.
+func (s *DNSService) DeleteRecordByProvider(providerID uint64, recordID string) error {
+	return s.DeleteDNSRecord(providerID, recordID)
+}
+
+// AutoCreateRecord finds the matching DNS provider for a domain and creates/updates an A record.
+func (s *DNSService) AutoCreateRecord(domain, serverIP string) (*models.AutoCreateDNSRecordResult, error) {
+	var providers []models.DNSProvider
+	if err := s.db.Find(&providers).Error; err != nil {
+		return nil, err
+	}
+
+	var matched *models.DNSProvider
+	for i := range providers {
+		p := &providers[i]
+		if domain == p.Domain || strings.HasSuffix(domain, "."+p.Domain) {
+			matched = p
+			break
+		}
+	}
+	if matched == nil {
+		return nil, fmt.Errorf("no DNS provider found matching domain: %s", domain)
+	}
+
+	switch matched.ProviderType {
+	case "cloudflare":
+		return s.cfAutoCreateRecord(*matched, domain, serverIP)
+	default:
+		return nil, fmt.Errorf("unsupported provider: %s", matched.ProviderType)
+	}
+}
+
+// AutoUpdateRecord finds the DNS provider for the domain and updates (or creates) the A record.
+// Used after migration to point domain to the new server IP.
+func (s *DNSService) AutoUpdateRecord(domain, serverIP string) error {
+	_, err := s.AutoCreateRecord(domain, serverIP)
+	return err
+}
+
+func (s *DNSService) cfAutoCreateRecord(provider models.DNSProvider, domain, serverIP string) (*models.AutoCreateDNSRecordResult, error) {
+	// Check if an A record already exists
+	listURL := fmt.Sprintf("https://api.cloudflare.com/client/v4/zones/%s/dns_records?type=A&name=%s", provider.ZoneID, domain)
+	body, _, err := cfHTTP("GET", listURL, provider.APIKey, nil)
+	if err != nil {
+		return nil, fmt.Errorf("cloudflare API: %w", err)
+	}
+	var listResp struct {
+		Result []struct {
+			ID string `json:"id"`
+		} `json:"result"`
+	}
+	json.Unmarshal(body, &listResp)
+
+	rec := CFDNSRecord{Type: "A", Name: domain, Content: serverIP, TTL: 1, Proxied: false}
+	payload, _ := json.Marshal(rec)
+
+	action := "created"
+	var reqURL, method string
+	if len(listResp.Result) > 0 {
+		action = "updated"
+		method = "PUT"
+		reqURL = fmt.Sprintf("https://api.cloudflare.com/client/v4/zones/%s/dns_records/%s", provider.ZoneID, listResp.Result[0].ID)
+	} else {
+		method = "POST"
+		reqURL = fmt.Sprintf("https://api.cloudflare.com/client/v4/zones/%s/dns_records", provider.ZoneID)
+	}
+
+	respBody, status, err := cfHTTP(method, reqURL, provider.APIKey, payload)
+	if err != nil {
+		return nil, fmt.Errorf("cloudflare API: %w", err)
+	}
+	if status >= 400 {
+		return nil, fmt.Errorf("cloudflare returned %d: %s", status, string(respBody))
+	}
+
+	var resp struct {
+		Result struct {
+			ID string `json:"id"`
+		} `json:"result"`
+	}
+	json.Unmarshal(respBody, &resp)
+
+	return &models.AutoCreateDNSRecordResult{
+		RecordID:   resp.Result.ID,
+		ProviderID: provider.ID,
+		Domain:     domain,
+		IP:         serverIP,
+		Action:     action,
+		ZoneName:   provider.Domain,
+	}, nil
+}
+
+// UpdateRecordByProvider updates a DNS record using only provider ID.
+func (s *DNSService) UpdateRecordByProvider(providerID uint64, recordID string, rec CFDNSRecord) (*CFDNSRecord, error) {
+	var provider models.DNSProvider
+	if err := s.db.First(&provider, providerID).Error; err != nil {
+		return nil, fmt.Errorf("provider not found")
+	}
+	switch provider.ProviderType {
+	case "cloudflare":
+		return s.cfUpdateRecord(provider, recordID, rec)
+	default:
+		return nil, fmt.Errorf("unsupported provider: %s", provider.ProviderType)
+	}
+}
+
+func (s *DNSService) cfUpdateRecord(provider models.DNSProvider, recordID string, rec CFDNSRecord) (*CFDNSRecord, error) {
+	if rec.TTL == 0 {
+		rec.TTL = 1
+	}
+	payload, _ := json.Marshal(rec)
+	url := fmt.Sprintf("https://api.cloudflare.com/client/v4/zones/%s/dns_records/%s", provider.ZoneID, recordID)
+	body, status, err := cfHTTP("PUT", url, provider.APIKey, payload)
+	if err != nil {
+		return nil, fmt.Errorf("cloudflare API: %w", err)
+	}
+	if status >= 400 {
+		return nil, fmt.Errorf("cloudflare returned %d: %s", status, string(body))
+	}
+	var resp struct {
+		Success bool        `json:"success"`
+		Result  CFDNSRecord `json:"result"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, err
+	}
+	return &resp.Result, nil
+}
+
+// TestProvider verifies that the API key and zone ID can authenticate with the provider.
+func (s *DNSService) TestProvider(req models.TestDNSProviderRequest) (*models.TestDNSProviderResult, error) {
+	switch req.ProviderType {
+	case "cloudflare":
+		return s.testCloudflare(req)
+	default:
+		return &models.TestDNSProviderResult{Success: false, Message: "Unsupported provider: " + req.ProviderType}, nil
+	}
+}
+
+func (s *DNSService) testCloudflare(req models.TestDNSProviderRequest) (*models.TestDNSProviderResult, error) {
+	url := fmt.Sprintf("https://api.cloudflare.com/client/v4/zones/%s", req.ZoneID)
+	body, status, err := cfHTTP("GET", url, req.APIKey, nil)
+	if err != nil {
+		return &models.TestDNSProviderResult{Success: false, Message: "Connection failed: " + err.Error()}, nil
+	}
+
+	var resp struct {
+		Success bool `json:"success"`
+		Result  struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"result"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	json.Unmarshal(body, &resp)
+
+	if status >= 400 || !resp.Success {
+		msg := fmt.Sprintf("Authentication failed (HTTP %d)", status)
+		if len(resp.Errors) > 0 {
+			msg = resp.Errors[0].Message
+		}
+		return &models.TestDNSProviderResult{Success: false, Message: msg}, nil
+	}
+
+	return &models.TestDNSProviderResult{
+		Success:  true,
+		Message:  fmt.Sprintf("Connected! Zone: %s", resp.Result.Name),
+		ZoneName: resp.Result.Name,
+	}, nil
 }
 
 // CFDNSRecord is a Cloudflare DNS record DTO.

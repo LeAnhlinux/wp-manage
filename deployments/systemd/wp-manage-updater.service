@@ -1,0 +1,33 @@
+[Unit]
+Description=WP Manage Agent Updater (one-shot, triggered by agent or panel)
+# Requires network for reporting result back to API
+After=network.target
+# NOTE: Do NOT use Conflicts= with the target service — Conflicts= is bidirectional:
+# if we added Conflicts=wp-manage-agent.service here, systemd would SIGTERM this
+# updater process when we call `systemctl start wp-manage-agent` from within the
+# updater, killing it before the swap is complete.
+# The updater stops the target service manually via `systemctl stop` instead.
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/bin/wp-manage-updater --api-url=${WPM_API_URL} --api-key=${WPM_API_KEY}
+# The "-" prefix makes this file optional:
+#   - Agent servers:  /etc/wp-agent/agent.env  (WPM_API_URL, WPM_API_KEY for rollout callbacks)
+#   - API server:     file may not exist — updater writes ResultFilePath instead of HTTP callback
+EnvironmentFile=-/etc/wp-agent/agent.env
+
+# Give the update (download was done by agent, this is just stop/swap/start)
+# enough time to complete even on slow machines.
+TimeoutStartSec=120
+
+# Do NOT restart on failure — if updater fails, the agent rollback logic handles it.
+Restart=no
+
+# Log to journald with identifier for easy filtering:
+#   journalctl -u wp-manage-updater -f
+SyslogIdentifier=wp-manage-updater
+
+[Install]
+# NOT enabled at boot — only started on-demand by the agent via:
+#   systemctl start wp-manage-updater

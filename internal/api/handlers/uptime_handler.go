@@ -73,3 +73,12 @@ func (h *UptimeHandler) GetHistory(c *fiber.Ctx) error {
 	}
 	return c.JSON(models.APIResponse{Success: true, Data: logs})
 }
+
+// ListAll returns all uptime checks across all sites.
+func (h *UptimeHandler) ListAll(c *fiber.Ctx) error {
+	checks, err := h.svc.ListAll()
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: err.Error()})
+	}
+	return c.JSON(models.APIResponse{Success: true, Data: checks})
+}

@@ -14,9 +14,10 @@ import MigrationsPage from '@/pages/MigrationsPage'
 import SecurityPage from '@/pages/SecurityPage'
 import UsersPage from '@/pages/UsersPage'
 import SettingsPage from '@/pages/SettingsPage'
-import RolloutsPage from '@/pages/RolloutsPage'
 import TeamsPage from '@/pages/TeamsPage'
 import ActivityLogPage from '@/pages/ActivityLogPage'
+import UptimeMonitoringPage from '@/pages/UptimeMonitoringPage'
+import DNSProvidersPage from '@/pages/DNSProvidersPage'
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
@@ -51,8 +52,9 @@ function AppRoutes() {
         <Route path="security" element={<SecurityPage />} />
         <Route path="teams" element={<TeamsPage />} />
         <Route path="users" element={<UsersPage />} />
-        <Route path="rollouts" element={<RolloutsPage />} />
         <Route path="activity" element={<ActivityLogPage />} />
+        <Route path="monitoring" element={<UptimeMonitoringPage />} />
+        <Route path="dns" element={<DNSProvidersPage />} />
         <Route path="settings" element={<SettingsPage />} />
       </Route>
     </Routes>

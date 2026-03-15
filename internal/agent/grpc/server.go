@@ -21,6 +21,7 @@ import (
 	agentbackup "github.com/gofiber-team/wp-manage/internal/agent/backup"
 	agentdb "github.com/gofiber-team/wp-manage/internal/agent/database"
 	agentcron "github.com/gofiber-team/wp-manage/internal/agent/cron"
+	"github.com/gofiber-team/wp-manage/internal/agent/updater"
 	agentfirewall "github.com/gofiber-team/wp-manage/internal/agent/firewall"
 	"github.com/gofiber-team/wp-manage/internal/agent/filemanager"
 	agentmigration "github.com/gofiber-team/wp-manage/internal/agent/migration"
@@ -40,7 +41,8 @@ import (
 	"github.com/gofiber-team/wp-manage/internal/models"
 )
 
-const Version = "1.0.0"
+// Version is set at build time via -ldflags="-X github.com/gofiber-team/wp-manage/internal/agent/grpc.Version=..."
+var Version = "dev"
 
 type AgentServer struct {
 	apiURL          string
@@ -230,8 +232,22 @@ func (s *AgentServer) pollTasks() {
 			json.Unmarshal(task.Data, &data)
 			migrationID := uint64(data["migration_id"].(float64))
 			domain, _ := data["domain"].(string)
+			mode, _ := data["mode"].(string)
 			runner := agentmigration.NewMigrationRunner(s.apiURL, s.apiKey)
-			go runner.RollbackMigration(migrationID, domain)
+			go runner.RollbackMigration(migrationID, domain, mode)
+
+		case "cleanup_source_migration":
+			var migrateTask models.AgentMigrateTask
+			json.Unmarshal(task.Data, &migrateTask)
+			runner := agentmigration.NewMigrationRunner(s.apiURL, s.apiKey)
+			go runner.CleanupSourceOnly(migrateTask)
+
+		case "cleanup_target_migration":
+			// Runs on TARGET server — removes partially migrated data on rollback
+			var migrateTask models.AgentMigrateTask
+			json.Unmarshal(task.Data, &migrateTask)
+			runner := agentmigration.NewMigrationRunner(s.apiURL, s.apiKey)
+			go runner.CleanupTargetOnRollback(migrateTask)
 
 		case "configure_waf":
 			var wafTask models.AgentWAFTask
@@ -242,6 +258,12 @@ func (s *AgentServer) pollTasks() {
 			var scanTask models.AgentMalwareScanTask
 			json.Unmarshal(task.Data, &scanTask)
 			go s.executeMalwareScan(task.TaskID, scanTask)
+
+		case "install_clamav":
+			go s.executeInstallClamAV(task.TaskID)
+
+		case "clamav_status":
+			go s.executeClamAVStatus(task.TaskID)
 
 		case "check_updates":
 			var wpTask models.AgentCheckUpdatesTask
@@ -277,6 +299,11 @@ func (s *AgentServer) pollTasks() {
 			var imgTask models.AgentImageOptTask
 			json.Unmarshal(task.Data, &imgTask)
 			go s.executeOptimizeImages(task.TaskID, imgTask)
+
+		case "toggle_image_opt":
+			var toggleTask models.AgentToggleImageOptTask
+			json.Unmarshal(task.Data, &toggleTask)
+			go s.executeToggleImageOpt(task.TaskID, toggleTask)
 
 		case "enable_multisite":
 			var msTask models.AgentEnableMultisiteTask
@@ -330,6 +357,24 @@ func (s *AgentServer) pollTasks() {
 
 		case "health_check":
 			go s.executeHealthCheck(task.TaskID)
+
+		case "check_services":
+			go s.executeCheckServices(task.TaskID)
+
+		case "install_service":
+			var data map[string]string
+			json.Unmarshal(task.Data, &data)
+			go s.executeInstallService(task.TaskID, data["service"])
+
+		case "add_authorized_key":
+			var data map[string]string
+			json.Unmarshal(task.Data, &data)
+			go s.executeAddAuthorizedKey(task.TaskID, data["public_key"], data["comment"])
+
+		case "remove_authorized_key":
+			var data map[string]string
+			json.Unmarshal(task.Data, &data)
+			go s.executeRemoveAuthorizedKey(task.TaskID, data["comment"])
 
 		case "manage_cron":
 			var cronTask models.AgentCronTask
@@ -577,7 +622,7 @@ func (s *AgentServer) executeUploadSource(taskID uint64, task models.AgentUpload
 		slog.Info("Upload source progress", "domain", task.Domain, "step", step)
 	})
 
-	if err := mgr.ExtractSourceZip(task.Domain, tmpPath); err != nil {
+	if err := mgr.ExtractSourceZip(task.Domain, tmpPath, task.DBName, task.DBUser, task.DBPass, task.DBHost); err != nil {
 		os.Remove(tmpPath)
 		result.Error = "Failed to extract source: " + err.Error()
 		s.reportTaskResult(result)
@@ -585,7 +630,7 @@ func (s *AgentServer) executeUploadSource(taskID uint64, task models.AgentUpload
 	}
 
 	slog.Info("Source extracted successfully", "domain", task.Domain)
-	result.Output = fmt.Sprintf("Source deployed to /var/www/%s/public", task.Domain)
+	result.Output = fmt.Sprintf("Source deployed to /var/www/%s/public — wp-config.php patched with new DB credentials", task.Domain)
 	s.reportTaskResult(result)
 }
 
@@ -615,15 +660,15 @@ func (s *AgentServer) executeImportDB(taskID uint64, task models.AgentImportDBTa
 		slog.Info("Import DB progress", "domain", task.Domain, "step", step)
 	})
 
-	if err := mgr.ImportDatabase(task.DBName, tmpPath); err != nil {
+	if err := mgr.ImportDatabase(task.DBName, tmpPath, task.Domain, task.OldDomain); err != nil {
 		os.Remove(tmpPath)
 		result.Error = "Failed to import database: " + err.Error()
 		s.reportTaskResult(result)
 		return
 	}
 
-	slog.Info("Database imported successfully", "domain", task.Domain, "db_name", task.DBName)
-	result.Output = fmt.Sprintf("Database %s imported successfully", task.DBName)
+	slog.Info("Database imported successfully", "domain", task.Domain, "db_name", task.DBName, "old_domain", task.OldDomain)
+	result.Output = fmt.Sprintf("Database %s imported — site URL updated to match domain %s", task.DBName, task.Domain)
 	s.reportTaskResult(result)
 }
 
@@ -807,67 +852,125 @@ func (s *AgentServer) reportTaskResult(result models.AgentTaskResult) {
 	resp.Body.Close()
 }
 
+// executeAgentUpdate downloads and stages a new agent binary, then hands off
+// to the wp-manage-updater service for the actual swap + restart.
+//
+// The agent NEVER replaces its own binary while running — that causes race
+// conditions between "report success" and "systemctl restart kills us".
+// Instead:
+//   1. Agent downloads + verifies the new binary (staging)
+//   2. Agent writes metadata to /var/lib/wp-manage/pending-update.json
+//   3. Agent starts wp-manage-updater (one-shot systemd service) and returns
+//   4. Updater stops agent → swaps binary → starts agent → verifies → reports API
+//   5. On failure, updater auto-rolls back to .bak and reports failure
 func (s *AgentServer) executeAgentUpdate(taskID uint64, task models.AgentUpdateTask) {
-	slog.Info("Starting agent self-update", "new_version", task.NewVersion, "url", task.DownloadURL)
+	slog.Info("Staging agent update", "new_version", task.NewVersion, "url", task.DownloadURL)
 
-	result := models.AgentUpdateResult{
+	fail := func(msg string) {
+		slog.Error("Agent update staging failed", "reason", msg)
+		s.reportAgentUpdateResult(models.AgentUpdateResult{
+			RolloutPlanID: task.RolloutPlanID,
+			ServerID:      task.ServerID,
+			OldVersion:    Version,
+			NewVersion:    task.NewVersion,
+			Status:        "failed",
+			Error:         msg,
+		})
+	}
+
+	// Ensure staging directory exists
+	os.MkdirAll("/var/lib/wp-manage", 0750)
+	stagedPath := updater.StagedBinaryPath
+
+	// ── Step 1: Download new binary ──────────────────────────────────────────
+	slog.Info("Downloading new agent binary...")
+	dlCmd := exec.Command("wget", "-q", "--timeout=120", "-O", stagedPath, task.DownloadURL)
+	if out, err := dlCmd.CombinedOutput(); err != nil {
+		os.Remove(stagedPath)
+		fail(fmt.Sprintf("download failed: %v — %s", err, string(out)))
+		return
+	}
+	exec.Command("chmod", "+x", stagedPath).Run()
+
+	// ── Step 2: Verify checksum ───────────────────────────────────────────────
+	if task.Checksum != "" {
+		checksumOut, err := exec.Command("sha256sum", stagedPath).Output()
+		if err != nil {
+			os.Remove(stagedPath)
+			fail("sha256sum failed: " + err.Error())
+			return
+		}
+		actual := strings.Fields(string(checksumOut))[0]
+		if actual != task.Checksum {
+			os.Remove(stagedPath)
+			fail(fmt.Sprintf("checksum mismatch: expected %s, got %s", task.Checksum, actual))
+			return
+		}
+		slog.Info("Checksum verified", "sha256", actual)
+	} else {
+		slog.Warn("No checksum provided — skipping verification")
+	}
+
+	// ── Step 3: Write metadata for the updater service ───────────────────────
+	meta := updater.PendingUpdate{
+		StagedPath:    stagedPath,
+		TargetBinary:  updater.AgentBinaryPath,
+		TargetService: "wp-manage-agent",
+		Checksum:      task.Checksum,
+		NewVersion:    task.NewVersion,
+		OldVersion:    Version,
 		RolloutPlanID: task.RolloutPlanID,
 		ServerID:      task.ServerID,
-		OldVersion:    Version,
-		NewVersion:    task.NewVersion,
+		CallbackURL:   s.apiURL + "/api/v1/agent/rollouts/complete",
+		CallbackKey:   s.apiKey,
 	}
-
-	// 1. Download new binary to temp location
-	tmpBin := "/tmp/wp-manage-agent-new"
-	dlCmd := exec.Command("wget", "-q", "-O", tmpBin, task.DownloadURL)
-	if out, err := dlCmd.CombinedOutput(); err != nil {
-		slog.Error("Failed to download agent update", "error", err, "output", string(out))
-		result.Status = "failed"
-		result.Error = fmt.Sprintf("download failed: %v", err)
-		s.reportAgentUpdateResult(result)
+	metaData, _ := json.Marshal(meta)
+	if err := os.WriteFile(updater.MetadataPath, metaData, 0600); err != nil {
+		os.Remove(stagedPath)
+		fail("failed to write update metadata: " + err.Error())
 		return
 	}
 
-	// 2. Verify checksum
-	checksumCmd := exec.Command("sha256sum", tmpBin)
-	checksumOut, err := checksumCmd.Output()
-	if err != nil {
-		result.Status = "failed"
-		result.Error = "failed to verify checksum"
-		s.reportAgentUpdateResult(result)
-		return
-	}
-	actualChecksum := strings.Fields(string(checksumOut))[0]
-	if actualChecksum != task.Checksum {
-		result.Status = "failed"
-		result.Error = fmt.Sprintf("checksum mismatch: expected %s, got %s", task.Checksum, actualChecksum)
-		exec.Command("rm", "-f", tmpBin).Run()
-		s.reportAgentUpdateResult(result)
+	// ── Step 4: Start wp-manage-updater (one-shot, takes over from here) ─────
+	// The updater will: stop agent → swap binary → start agent → verify → report.
+	// We do NOT wait for it (it will stop us anyway).
+	slog.Info("Handing off to wp-manage-updater service — agent will be restarted by updater")
+	if out, err := exec.Command("systemctl", "start", "wp-manage-updater").CombinedOutput(); err != nil {
+		// Updater service not installed — fall back to old self-update (legacy servers)
+		slog.Warn("wp-manage-updater service not available, falling back to self-update",
+			"error", err, "output", string(out))
+		os.Remove(updater.MetadataPath)
+		s.executeAgentUpdateLegacy(task, stagedPath)
 		return
 	}
 
-	// 3. Make executable
-	exec.Command("chmod", "+x", tmpBin).Run()
+	slog.Info("wp-manage-updater started — this agent process will be stopped by the updater")
+	// The updater will report the final result to the API.
+	// This goroutine will be killed when systemctl stops the agent service.
+}
 
-	// 4. Replace binary
-	agentBin := "/usr/local/bin/wp-manage-agent"
-	exec.Command("cp", agentBin, agentBin+".bak").Run() // backup current
-	if out, err := exec.Command("cp", tmpBin, agentBin).CombinedOutput(); err != nil {
-		slog.Error("Failed to replace agent binary", "error", err, "output", string(out))
-		exec.Command("cp", agentBin+".bak", agentBin).Run() // restore backup
-		result.Status = "failed"
-		result.Error = fmt.Sprintf("replace failed: %v", err)
-		s.reportAgentUpdateResult(result)
+// executeAgentUpdateLegacy is the old self-update path, used only when
+// wp-manage-updater is not yet installed on the server (legacy).
+// Remove once all servers have the updater service deployed.
+func (s *AgentServer) executeAgentUpdateLegacy(task models.AgentUpdateTask, stagedPath string) {
+	slog.Warn("Using legacy self-update (wp-manage-updater not installed)")
+	agentBin := updater.AgentBinaryPath
+	backupBin := agentBin + updater.BackupSuffix
+	exec.Command("cp", agentBin, backupBin).Run()
+	if out, err := exec.Command("cp", stagedPath, agentBin).CombinedOutput(); err != nil {
+		exec.Command("cp", backupBin, agentBin).Run()
+		s.reportAgentUpdateResult(models.AgentUpdateResult{
+			RolloutPlanID: task.RolloutPlanID, ServerID: task.ServerID,
+			OldVersion: Version, NewVersion: task.NewVersion,
+			Status: "failed", Error: fmt.Sprintf("replace failed: %v — %s", err, string(out)),
+		})
 		return
 	}
-
-	// 5. Report success BEFORE restart
-	result.Status = "completed"
-	s.reportAgentUpdateResult(result)
-
-	// 6. Restart agent service (this will kill us, so do it last)
-	slog.Info("Agent update completed, restarting service...", "new_version", task.NewVersion)
-	exec.Command("rm", "-f", tmpBin).Run()
+	s.reportAgentUpdateResult(models.AgentUpdateResult{
+		RolloutPlanID: task.RolloutPlanID, ServerID: task.ServerID,
+		OldVersion: Version, NewVersion: task.NewVersion, Status: "completed",
+	})
+	exec.Command("rm", "-f", stagedPath).Run()
 	exec.Command("systemctl", "restart", "wp-manage-agent").Run()
 }
 
@@ -1068,6 +1171,28 @@ func (s *AgentServer) executeMalwareScan(taskID uint64, task models.AgentMalware
 	slog.Info("Starting malware scan", "domain", task.Domain, "scan_id", task.ScanID)
 	scanResult := agentsecurity.RunMalwareScan(task)
 	s.reportScanResult(scanResult)
+}
+
+func (s *AgentServer) executeInstallClamAV(taskID uint64) {
+	result := models.AgentTaskResult{TaskID: taskID, Status: "completed"}
+	slog.Info("Installing ClamAV", "task_id", taskID)
+	if err := agentsecurity.InstallClamAV(); err != nil {
+		slog.Error("ClamAV installation failed", "error", err)
+		result.Status = "failed"
+		result.Error = err.Error()
+	} else {
+		slog.Info("ClamAV installed successfully")
+	}
+	s.reportTaskResult(result)
+}
+
+func (s *AgentServer) executeClamAVStatus(taskID uint64) {
+	result := models.AgentTaskResult{TaskID: taskID, Status: "completed"}
+	slog.Info("Checking ClamAV status", "task_id", taskID)
+	status := agentsecurity.GetClamAVStatus()
+	data, _ := json.Marshal(status)
+	result.Output = string(data)
+	s.reportTaskResult(result)
 }
 
 func (s *AgentServer) reportScanResult(result models.AgentMalwareScanResult) {
@@ -1286,6 +1411,19 @@ func (s *AgentServer) executeOptimizeImages(taskID uint64, task models.AgentImag
 	slog.Info("Optimizing images", "domain", task.Domain, "quality", task.Quality)
 	result := agentwp.OptimizeImages(task)
 	s.reportMultisiteResult("/api/v1/agent/images/optimize/complete", result)
+}
+
+func (s *AgentServer) executeToggleImageOpt(taskID uint64, task models.AgentToggleImageOptTask) {
+	slog.Info("Toggle image opt", "domain", task.Domain, "enabled", task.Enabled)
+	err := agentwp.ToggleImageOpt(task.Domain, task.Enabled, task.Quality, task.WebPEnabled)
+	status := "completed"
+	errMsg := ""
+	if err != nil {
+		status = "failed"
+		errMsg = err.Error()
+		slog.Error("Toggle image opt failed", "domain", task.Domain, "error", err)
+	}
+	s.completeTask(taskID, status, errMsg)
 }
 
 // Multisite task executors
@@ -1544,6 +1682,75 @@ func (s *AgentServer) executeRebuildConfig(taskID uint64, task models.AgentRebui
 	s.reportTaskResult(result)
 }
 
+func (s *AgentServer) executeCheckServices(taskID uint64) {
+	type ServiceStatus struct {
+		Service string `json:"service"`
+		Active  bool   `json:"active"`
+	}
+
+	checkActive := func(svc string) bool {
+		switch svc {
+		case "ufw":
+			// UFW doesn't run as a typical systemd service; check its config file
+			out, err := os.ReadFile("/etc/ufw/ufw.conf")
+			if err != nil {
+				return false
+			}
+			for _, line := range strings.Split(string(out), "\n") {
+				line = strings.TrimSpace(line)
+				if strings.EqualFold(line, "ENABLED=yes") {
+					return true
+				}
+			}
+			return false
+		case "wpcli":
+			// WP-CLI is a standalone binary, not a service
+			_, err := os.Stat("/usr/local/bin/wp")
+			return err == nil
+		case "certbot":
+			// certbot is a standalone binary (no daemon), check binary + nginx plugin
+			_, errBin := os.Stat("/usr/bin/certbot")
+			_, errBin2 := os.Stat("/usr/local/bin/certbot")
+			if errBin != nil && errBin2 != nil {
+				return false
+			}
+			// Also check nginx plugin installed
+			out, _ := exec.Command("python3", "-c", "import certbot_nginx").CombinedOutput()
+			return len(out) == 0 // no output = import success
+		default:
+			out, _ := exec.Command("systemctl", "is-active", svc).Output()
+			return strings.TrimSpace(string(out)) == "active"
+		}
+	}
+
+	services := []string{"nginx", "php8.2-fpm", "mariadb", "redis-server", "fail2ban", "ufw", "cron", "wpcli", "certbot"}
+	var statuses []ServiceStatus
+	for _, svc := range services {
+		statuses = append(statuses, ServiceStatus{Service: svc, Active: checkActive(svc)})
+	}
+	result := models.AgentTaskResult{TaskID: taskID}
+	if outJSON, err := json.Marshal(statuses); err == nil {
+		result.Output = string(outJSON)
+	}
+	s.reportTaskResult(result)
+}
+
+func (s *AgentServer) executeInstallService(taskID uint64, service string) {
+	slog.Info("Installing service", "service", service)
+	result := models.AgentTaskResult{TaskID: taskID}
+	p := provisioning.New(func(step string, progress int, message string) {
+		slog.Info("Install service progress", "service", service, "step", step, "message", message)
+	})
+	if err := p.InstallService(service); err != nil {
+		slog.Error("Install service failed", "service", service, "error", err)
+		result.Error = err.Error()
+	} else {
+		result.Output = "installed"
+		slog.Info("Service installed successfully", "service", service)
+	}
+	s.reportTaskResult(result)
+}
+
 func (s *AgentServer) executeHealthCheck(taskID uint64) {
 	slog.Info("Running health check")
 	result := models.AgentTaskResult{TaskID: taskID}
@@ -1657,6 +1864,8 @@ func (s *AgentServer) executeManageDomain(taskID uint64, task models.AgentDomain
 	result := models.AgentTaskResult{TaskID: taskID}
 
 	nginxConf := fmt.Sprintf("/etc/nginx/sites-available/%s.conf", task.SiteDomain)
+	// Dedicated nginx config for a redirect domain
+	redirectConf := fmt.Sprintf("/etc/nginx/sites-available/%s-redirect-%s.conf", task.SiteDomain, task.Domain)
 
 	switch task.Action {
 	case "add":
@@ -1665,12 +1874,75 @@ func (s *AgentServer) executeManageDomain(taskID uint64, task models.AgentDomain
 			s.reportTaskResult(result)
 			return
 		}
+
 	case "remove":
 		if err := nginxUpdateServerName(nginxConf, "", task.Domain); err != nil {
 			result.Error = err.Error()
 			s.reportTaskResult(result)
 			return
 		}
+
+	case "issue_ssl":
+		// Run certbot --expand to add the alias domain to the primary site's certificate.
+		email := task.Email
+		if email == "" {
+			email = "admin@" + task.SiteDomain
+		}
+		out, err := exec.Command("certbot", "--nginx",
+			"-d", task.SiteDomain, "-d", task.Domain,
+			"--expand", "--non-interactive", "--agree-tos",
+			"--email", email,
+		).CombinedOutput()
+		if err != nil {
+			result.Error = fmt.Sprintf("certbot failed: %s — %s", err.Error(), strings.TrimSpace(string(out)))
+			s.reportTaskResult(result)
+			return
+		}
+		slog.Info("SSL issued for alias domain", "domain", task.Domain, "site", task.SiteDomain)
+		s.reportTaskResult(result)
+		return
+
+	case "set_redirect":
+		// Remove domain from primary server_name and create a dedicated redirect server block.
+		_ = nginxUpdateServerName(nginxConf, "", task.Domain) // ignore error if domain wasn't in server_name
+
+		redirectType := task.RedirectType
+		if redirectType != 302 {
+			redirectType = 301
+		}
+		redirectConf := fmt.Sprintf("/etc/nginx/sites-available/%s-redirect-%s.conf", task.SiteDomain, task.Domain)
+		content := fmt.Sprintf(`server {
+    listen 80;
+    listen [::]:80;
+    server_name %s;
+    return %d %s$request_uri;
+}
+`, task.Domain, redirectType, task.RedirectTo)
+		if err := os.WriteFile(redirectConf, []byte(content), 0644); err != nil {
+			result.Error = fmt.Sprintf("failed to write redirect config: %s", err.Error())
+			s.reportTaskResult(result)
+			return
+		}
+		// Symlink into sites-enabled if not already present
+		enabledLink := fmt.Sprintf("/etc/nginx/sites-enabled/%s-redirect-%s.conf", task.SiteDomain, task.Domain)
+		os.Remove(enabledLink) // remove stale symlink if any
+		if err := os.Symlink(redirectConf, enabledLink); err != nil && !os.IsExist(err) {
+			result.Error = fmt.Sprintf("failed to enable redirect config: %s", err.Error())
+			s.reportTaskResult(result)
+			return
+		}
+
+	case "remove_redirect":
+		// Delete the redirect config and re-add domain to primary server_name.
+		os.Remove(fmt.Sprintf("/etc/nginx/sites-enabled/%s-redirect-%s.conf", task.SiteDomain, task.Domain))
+		os.Remove(redirectConf)
+		// Re-add to primary server_name
+		_ = nginxUpdateServerName(nginxConf, task.Domain, "")
+
+	default:
+		result.Error = fmt.Sprintf("unknown domain action: %s", task.Action)
+		s.reportTaskResult(result)
+		return
 	}
 
 	// Validate and reload
@@ -2154,8 +2426,6 @@ func (s *AgentServer) executeManageSFTP(taskID uint64, task models.AgentSFTPTask
 }
 
 func (s *AgentServer) executeHardenWordPress(taskID uint64, task models.AgentHardenTask) {
-	slog.Info("Hardening WordPress", "domain", task.Domain)
-
 	opts := agentsecurity.HardenOptions{
 		DisableXMLRPC:     task.DisableXMLRPC,
 		HideWPVersion:     task.HideWPVersion,
@@ -2164,14 +2434,21 @@ func (s *AgentServer) executeHardenWordPress(taskID uint64, task models.AgentHar
 		DisableFileEditor: task.DisableFileEditor,
 	}
 
-	err := agentsecurity.HardenWordPress(task.Domain, opts)
+	var err error
+	if task.Revert {
+		slog.Info("Reverting WordPress hardening", "domain", task.Domain)
+		err = agentsecurity.RevertHardenWordPress(task.Domain, opts)
+	} else {
+		slog.Info("Hardening WordPress", "domain", task.Domain)
+		err = agentsecurity.HardenWordPress(task.Domain, opts)
+	}
 
 	result := models.AgentTaskResult{TaskID: taskID}
 	if err != nil {
-		slog.Error("WordPress hardening failed", "domain", task.Domain, "error", err)
+		slog.Error("WordPress harden task failed", "domain", task.Domain, "revert", task.Revert, "error", err)
 		result.Error = err.Error()
 	} else {
-		slog.Info("WordPress hardening completed", "domain", task.Domain)
+		slog.Info("WordPress harden task completed", "domain", task.Domain, "revert", task.Revert)
 	}
 	s.reportTaskResult(result)
 }
@@ -2423,5 +2700,88 @@ func (s *AgentServer) executeFail2BanUpdateJail(taskID uint64, data map[string]i
 	} else {
 		slog.Info("Fail2ban jail updated", "jail", jail)
 	}
+	s.reportTaskResult(result)
+}
+
+// executeAddAuthorizedKey adds a temporary SSH public key to /root/.ssh/authorized_keys.
+// Used during migration to grant source server SSH access to this (target) server.
+func (s *AgentServer) executeAddAuthorizedKey(taskID uint64, publicKey, comment string) {
+	result := models.AgentTaskResult{TaskID: taskID}
+
+	if publicKey == "" {
+		result.Error = "public_key is empty"
+		s.reportTaskResult(result)
+		return
+	}
+
+	sshDir := "/root/.ssh"
+	authFile := sshDir + "/authorized_keys"
+
+	// Ensure ~/.ssh directory exists with correct permissions
+	if err := os.MkdirAll(sshDir, 0700); err != nil {
+		result.Error = "failed to create .ssh dir: " + err.Error()
+		s.reportTaskResult(result)
+		return
+	}
+
+	// Append key with comment (for later removal)
+	line := strings.TrimSpace(publicKey)
+	if comment != "" {
+		// Check if comment is already appended in the key itself
+		if !strings.Contains(line, comment) {
+			line = line + " " + comment
+		}
+	}
+	line += "\n"
+
+	f, err := os.OpenFile(authFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		result.Error = "failed to open authorized_keys: " + err.Error()
+		s.reportTaskResult(result)
+		return
+	}
+	f.WriteString(line)
+	f.Close()
+
+	slog.Info("Added temporary SSH key", "comment", comment)
+	result.Output = "ok"
+	s.reportTaskResult(result)
+}
+
+// executeRemoveAuthorizedKey removes lines containing the given comment from authorized_keys.
+// Used after migration to revoke the temporary SSH access.
+func (s *AgentServer) executeRemoveAuthorizedKey(taskID uint64, comment string) {
+	result := models.AgentTaskResult{TaskID: taskID}
+
+	if comment == "" {
+		result.Output = "ok (no comment provided, skipped)"
+		s.reportTaskResult(result)
+		return
+	}
+
+	authFile := "/root/.ssh/authorized_keys"
+	content, err := os.ReadFile(authFile)
+	if err != nil {
+		// File doesn't exist — nothing to remove
+		result.Output = "ok (file not found)"
+		s.reportTaskResult(result)
+		return
+	}
+
+	var kept []string
+	for _, line := range strings.Split(string(content), "\n") {
+		if !strings.Contains(line, comment) {
+			kept = append(kept, line)
+		}
+	}
+
+	if err := os.WriteFile(authFile, []byte(strings.Join(kept, "\n")), 0600); err != nil {
+		result.Error = "failed to write authorized_keys: " + err.Error()
+		s.reportTaskResult(result)
+		return
+	}
+
+	slog.Info("Removed temporary SSH key", "comment", comment)
+	result.Output = "ok"
 	s.reportTaskResult(result)
 }

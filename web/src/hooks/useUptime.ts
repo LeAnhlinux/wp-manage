@@ -12,6 +12,18 @@ export function useUptimeChecks(siteId: number) {
   })
 }
 
+// Global: all checks across all sites (for UptimeMonitoringPage)
+export function useAllUptimeChecks() {
+  return useQuery({
+    queryKey: ['uptime', 'all'],
+    queryFn: async () => {
+      const { data } = await api.get<APIResponse<UptimeCheck[]>>('/monitoring/uptime')
+      return data.data || []
+    },
+    refetchInterval: 30_000, // auto-refresh every 30s
+  })
+}
+
 export function useCreateUptimeCheck(siteId: number) {
   const queryClient = useQueryClient()
   return useMutation({
@@ -21,6 +33,7 @@ export function useCreateUptimeCheck(siteId: number) {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['uptime', siteId] })
+      queryClient.invalidateQueries({ queryKey: ['uptime', 'all'] })
     },
   })
 }
@@ -34,6 +47,7 @@ export function useUpdateUptimeCheck(siteId: number) {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['uptime', siteId] })
+      queryClient.invalidateQueries({ queryKey: ['uptime', 'all'] })
     },
   })
 }
@@ -46,6 +60,7 @@ export function useDeleteUptimeCheck(siteId: number) {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['uptime', siteId] })
+      queryClient.invalidateQueries({ queryKey: ['uptime', 'all'] })
     },
   })
 }

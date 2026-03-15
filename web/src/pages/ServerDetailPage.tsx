@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, Server, Globe, HardDrive, Cpu, MemoryStick, Clock, Wifi, WifiOff,
@@ -16,13 +16,13 @@ import {
   useMariaDBUsers, useCreateMariaDBUser, useDeleteMariaDBUser,
   useMariaDBConfig, useUpdateMariaDBConfig,
   useMariaDBDatabases, useCreateMariaDBDatabase, useDeleteMariaDBDatabase, useImportMariaDBDatabase,
+  useCheckServices, useInstallService,
 } from '@/hooks/useInfrastructure'
 import type { HealthCheckResult } from '@/hooks/useInfrastructure'
 import { useSites } from '@/hooks/useSites'
 import { useCronJobsByServer, useCreateCronJob, useUpdateCronJob, useToggleCronJob, useRunCronJob, useDeleteCronJob } from '@/hooks/useCronJobs'
 import { useSSHKeys, useCreateSSHKey, useDeleteSSHKey } from '@/hooks/useSSHKeys'
 import { useAlertRules, useCreateAlertRule, useDeleteAlertRule, useAlertHistory, usePHPFPMAutotune } from '@/hooks/useAlerts'
-import { useDNSProviders, useCreateDNSProvider, useDeleteDNSProvider, useDNSRecords, useCreateDNSRecord, useDeleteDNSRecord } from '@/hooks/useDNS'
 import { useStorageCredentials, useCreateStorageCredential, useDeleteStorageCredential } from '@/hooks/useStorage'
 import { useFail2BanStatus, useFail2BanUnban, useFail2BanUpdateJail } from '@/hooks/useFail2Ban'
 import { useServerRedisStats, useFlushServerRedis, useServerRedisSiteStatuses, useToggleRedis } from '@/hooks/useRedis'
@@ -31,7 +31,7 @@ import { usePermissions } from '@/hooks/usePermissions'
 import { StatusBadge } from '@/components/ui/Badge'
 import { formatDate } from '@/lib/utils'
 import api from '@/lib/api'
-import type { CronJob, CreateFirewallRuleRequest, CreateNginxConfigRequest, CreateCronJobRequest, CreateSSHKeyRequest, CreateAlertRuleRequest, CreateDNSProviderRequest, CreateDNSRecordRequest, CreateStorageCredentialRequest, PHPFPMPoolConfig, MariaDBUserRequest, MariaDBConfig, CreateDatabaseRequest, Backup } from '@/types'
+import type { CronJob, CreateFirewallRuleRequest, CreateNginxConfigRequest, CreateCronJobRequest, CreateSSHKeyRequest, CreateAlertRuleRequest, CreateStorageCredentialRequest, PHPFPMPoolConfig, MariaDBUserRequest, MariaDBConfig, CreateDatabaseRequest, Backup } from '@/types'
 
 export default function ServerDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -42,6 +42,16 @@ export default function ServerDetailPage() {
   const { can } = usePermissions()
   const canManage = can('infrastructure', 'manage')
   const [activeTab, setActiveTab] = useState('overview')
+  const [installingService, setInstallingService] = useState<string | null>(null)
+
+  // These hooks must be called before any conditional returns (Rules of Hooks)
+  const { data: servicesData, isLoading: servicesLoading, refetch: refetchServices, isFetching: servicesFetching } = useCheckServices(serverId)
+  const installService = useInstallService(serverId)
+
+  // Auto-check services on mount
+  useEffect(() => {
+    refetchServices()
+  }, [serverId])
 
   if (isLoading) {
     return (
@@ -62,6 +72,17 @@ export default function ServerDetailPage() {
 
   const isOnline = server.status === 'active'
   const lastHeartbeat = server.last_heartbeat ? formatDate(server.last_heartbeat) : 'N/A'
+
+  const handleInstallService = async (service: string) => {
+    setInstallingService(service)
+    try {
+      await installService.mutateAsync(service)
+      // Auto re-check service status after install completes
+      await refetchServices()
+    } finally {
+      setInstallingService(null)
+    }
+  }
 
   const handleDelete = async () => {
     if (!confirm(`Are you sure you want to delete server ${server.name}?`)) return
@@ -123,7 +144,6 @@ export default function ServerDetailPage() {
             { id: 'alerts', label: 'Alerts', icon: Bell },
             { id: 'logs', label: 'Logs', icon: FileText },
             { id: 'config', label: 'Config', icon: Wrench },
-            { id: 'dns', label: 'DNS', icon: Globe },
             { id: 'storage', label: 'Storage', icon: HardDrive },
             { id: 'fail2ban', label: 'Fail2Ban', icon: Shield },
             { id: 'backups', label: 'Backups', icon: Archive },
@@ -168,18 +188,74 @@ export default function ServerDetailPage() {
 
             {/* Services Status */}
             <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-              <h2 className="text-lg font-semibold text-gray-900 mb-4">Services</h2>
-              <div className="grid grid-cols-2 gap-3">
-                {['Nginx', 'PHP-FPM', 'MariaDB', 'Redis', 'Fail2Ban', 'UFW'].map(svc => (
-                  <div key={svc} className="flex items-center gap-2 p-3 bg-gray-50 rounded-lg">
-                    <Activity size={14} className={isOnline ? 'text-green-500' : 'text-gray-300'} />
-                    <span className="text-sm font-medium text-gray-700">{svc}</span>
-                    <span className={`ml-auto text-xs px-2 py-0.5 rounded-full ${isOnline ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
-                      {isOnline ? 'Running' : 'Unknown'}
-                    </span>
-                  </div>
-                ))}
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-semibold text-gray-900">Services</h2>
+                {isOnline && (
+                  <button
+                    onClick={() => refetchServices()}
+                    disabled={servicesFetching}
+                    className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-gray-500 hover:text-blue-600 border border-gray-200 rounded-lg hover:bg-blue-50 transition-colors disabled:opacity-50"
+                  >
+                    <RefreshCw size={11} className={servicesFetching ? 'animate-spin' : ''} />
+                    Refresh
+                  </button>
+                )}
               </div>
+              <div className="grid grid-cols-2 gap-3">
+                {(() => {
+                  const SERVICES = [
+                    { key: 'nginx',        installKey: 'nginx',     label: 'Nginx' },
+                    { key: 'php8.2-fpm',   installKey: 'php',       label: 'PHP-FPM' },
+                    { key: 'mariadb',      installKey: 'mariadb',   label: 'MariaDB' },
+                    { key: 'redis-server', installKey: 'redis',     label: 'Redis' },
+                    { key: 'certbot',      installKey: 'certbot',   label: 'Certbot (SSL)' },
+                    { key: 'fail2ban',     installKey: 'fail2ban',  label: 'Fail2Ban' },
+                    { key: 'ufw',          installKey: 'ufw',       label: 'UFW' },
+                    { key: 'cron',         installKey: 'cron',      label: 'Cron' },
+                    { key: 'wpcli',        installKey: 'wpcli',     label: 'WP-CLI' },
+                  ]
+                  return SERVICES.map(({ key, installKey, label }) => {
+                    const svcData = servicesData?.find(s => s.service === key)
+                    const isChecked = !!servicesData && servicesData.length > 0
+                    const isRunning = svcData?.active === true
+                    const isInstalling = installingService === installKey
+                    return (
+                      <div key={key} className="flex items-center gap-2 p-3 bg-gray-50 rounded-lg">
+                        <Activity size={14} className={
+                          isInstalling ? 'text-blue-400 animate-pulse' :
+                          !isChecked ? 'text-gray-300' :
+                          isRunning ? 'text-green-500' : 'text-red-400'
+                        } />
+                        <span className="text-sm font-medium text-gray-700">{label}</span>
+                        {isInstalling ? (
+                          <span className="ml-auto flex items-center gap-1 text-xs text-blue-600">
+                            <Loader2 size={11} className="animate-spin" /> Đang cài...
+                          </span>
+                        ) : servicesLoading || servicesFetching ? (
+                          <span className="ml-auto text-xs text-gray-400">...</span>
+                        ) : isChecked && !isRunning ? (
+                          <button
+                            onClick={() => handleInstallService(installKey)}
+                            disabled={!!installingService}
+                            className="ml-auto flex items-center gap-1 text-xs px-2 py-0.5 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-40 transition-colors"
+                          >
+                            <Plus size={10} /> Cài
+                          </button>
+                        ) : (
+                          <span className={`ml-auto text-xs px-2 py-0.5 rounded-full ${
+                            !isChecked ? 'bg-gray-100 text-gray-400' : 'bg-green-100 text-green-700'
+                          }`}>
+                            {!isChecked ? 'Unknown' : 'Running'}
+                          </span>
+                        )}
+                      </div>
+                    )
+                  })
+                })()}
+              </div>
+              {!servicesData && !servicesLoading && !servicesFetching && !isOnline && (
+                <p className="text-xs text-gray-400 mt-3 text-center">Server offline — không thể kiểm tra service</p>
+              )}
             </div>
           </div>
 
@@ -246,7 +322,6 @@ export default function ServerDetailPage() {
       {activeTab === 'alerts' && <AlertsTab serverId={serverId} />}
       {activeTab === 'logs' && <LogsTab serverId={serverId} />}
       {activeTab === 'config' && <ConfigTab serverId={serverId} />}
-      {activeTab === 'dns' && <DNSTab serverId={serverId} />}
       {activeTab === 'storage' && <StorageTab serverId={serverId} />}
       {activeTab === 'fail2ban' && <Fail2BanTab serverId={serverId} />}
       {activeTab === 'redis' && <RedisServerTab serverId={serverId} canManage={canManage} />}
@@ -1835,7 +1910,6 @@ function AlertsTab({ serverId }: { serverId: number }) {
   const { data: history = [] } = useAlertHistory(serverId)
   const createRule = useCreateAlertRule(serverId)
   const deleteRule = useDeleteAlertRule(serverId)
-  const autotune = usePHPFPMAutotune(serverId)
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState<CreateAlertRuleRequest>({
     metric: 'cpu', threshold: 90, channel: 'telegram', cooldown_min: 30
@@ -1979,26 +2053,6 @@ function AlertsTab({ serverId }: { serverId: number }) {
         </div>
       )}
 
-      {/* PHP-FPM Autotune */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-        <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2 mb-3">
-          <Zap size={20} className="text-purple-500" /> PHP-FPM Auto-Tune
-        </h3>
-        <p className="text-sm text-gray-500 mb-4">
-          Automatically calculate optimal PHP-FPM pool settings based on available server RAM.
-          Sets max_children, start_servers, min_spare_servers, and max_spare_servers.
-        </p>
-        <button onClick={() => autotune.mutate()} disabled={autotune.isPending}
-          className="flex items-center gap-2 px-4 py-2.5 text-sm text-white bg-purple-600 rounded-lg hover:bg-purple-700 disabled:opacity-50">
-          <Zap size={16} />
-          {autotune.isPending ? 'Tuning...' : 'Auto-Tune PHP-FPM'}
-        </button>
-        {autotune.isSuccess && (
-          <div className="mt-3 p-3 bg-green-50 border border-green-200 rounded-lg">
-            <p className="text-sm text-green-700">Auto-tune task queued. PHP-FPM will be restarted with optimal settings.</p>
-          </div>
-        )}
-      </div>
     </div>
   )
 }
@@ -2318,241 +2372,6 @@ function ConfigTab({ serverId }: { serverId: number }) {
           </div>
         )}
       </div>
-    </div>
-  )
-}
-
-// ==================== DNS Tab ====================
-
-function DNSRecordsPanel({ serverId, providerId, providerDomain, canManage }: { serverId: number; providerId: number; providerDomain: string; canManage: boolean }) {
-  const { data: records = [], isLoading, refetch } = useDNSRecords(serverId, providerId)
-  const createRecord = useCreateDNSRecord(serverId, providerId)
-  const deleteRecord = useDeleteDNSRecord(serverId, providerId)
-  const [showForm, setShowForm] = useState(false)
-  const [form, setForm] = useState<CreateDNSRecordRequest>({ type: 'A', name: '', content: '', ttl: 1, proxied: false })
-  const [err, setErr] = useState('')
-
-  const handleCreate = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setErr('')
-    try {
-      await createRecord.mutateAsync(form)
-      setForm({ type: 'A', name: '', content: '', ttl: 1, proxied: false })
-      setShowForm(false)
-    } catch (e: any) {
-      setErr(e?.response?.data?.error || 'Failed to create record')
-    }
-  }
-
-  const typeColor: Record<string, string> = {
-    A: 'bg-blue-100 text-blue-700',
-    AAAA: 'bg-indigo-100 text-indigo-700',
-    CNAME: 'bg-purple-100 text-purple-700',
-    MX: 'bg-orange-100 text-orange-700',
-    TXT: 'bg-green-100 text-green-700',
-    NS: 'bg-gray-100 text-gray-700',
-  }
-
-  return (
-    <div className="mt-3 pl-2 border-l-2 border-blue-200">
-      <div className="flex items-center justify-between mb-2">
-        <p className="text-xs font-medium text-gray-500 uppercase">DNS Records — {providerDomain}</p>
-        <div className="flex items-center gap-2">
-          <button onClick={() => refetch()} className="p-1 text-gray-400 hover:text-blue-600 rounded">
-            <RefreshCw size={12} />
-          </button>
-          {canManage && (
-            <button onClick={() => setShowForm(!showForm)}
-              className="flex items-center gap-1 px-2 py-1 text-xs text-white bg-blue-600 rounded hover:bg-blue-700">
-              <Plus size={11} /> Add Record
-            </button>
-          )}
-        </div>
-      </div>
-
-      {showForm && (
-        <form onSubmit={handleCreate} className="mb-3 p-3 bg-blue-50 rounded-lg space-y-2 border border-blue-200">
-          {err && <p className="text-xs text-red-600">{err}</p>}
-          <div className="grid grid-cols-4 gap-2">
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">Type</label>
-              <select value={form.type} onChange={e => setForm({...form, type: e.target.value})}
-                className="w-full px-2 py-1.5 border rounded text-xs">
-                {['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'SRV'].map(t => (
-                  <option key={t} value={t}>{t}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">Name</label>
-              <input type="text" placeholder="@ or subdomain" value={form.name}
-                onChange={e => setForm({...form, name: e.target.value})}
-                className="w-full px-2 py-1.5 border rounded text-xs" required />
-            </div>
-            <div className="col-span-2">
-              <label className="block text-xs text-gray-500 mb-1">Content / Value</label>
-              <input type="text" placeholder="IP or target" value={form.content}
-                onChange={e => setForm({...form, content: e.target.value})}
-                className="w-full px-2 py-1.5 border rounded text-xs" required />
-            </div>
-          </div>
-          <div className="flex items-center justify-between">
-            <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
-              <input type="checkbox" checked={form.proxied} onChange={e => setForm({...form, proxied: e.target.checked})} />
-              Proxied (Cloudflare CDN)
-            </label>
-            <div className="flex gap-2">
-              <button type="button" onClick={() => setShowForm(false)} className="px-2 py-1 text-xs text-gray-600 hover:bg-gray-200 rounded">Cancel</button>
-              <button type="submit" disabled={createRecord.isPending}
-                className="px-3 py-1 text-xs text-white bg-blue-600 rounded hover:bg-blue-700 disabled:opacity-50">
-                {createRecord.isPending ? 'Adding...' : 'Add'}
-              </button>
-            </div>
-          </div>
-        </form>
-      )}
-
-      {isLoading ? (
-        <div className="flex items-center gap-2 py-2 text-xs text-gray-400">
-          <Loader2 size={12} className="animate-spin" /> Loading records...
-        </div>
-      ) : records.length === 0 ? (
-        <p className="text-xs text-gray-400 py-2">No DNS records found.</p>
-      ) : (
-        <div className="space-y-1">
-          {records.map(r => (
-            <div key={r.id} className="flex items-center justify-between px-2 py-1.5 rounded-lg hover:bg-gray-50 group">
-              <div className="flex items-center gap-2 min-w-0">
-                <span className={`flex-shrink-0 text-xs font-bold px-1.5 py-0.5 rounded ${typeColor[r.type] || 'bg-gray-100 text-gray-700'}`}>{r.type}</span>
-                <span className="text-xs font-medium text-gray-800 truncate">{r.name}</span>
-                <span className="text-gray-300">→</span>
-                <span className="text-xs text-gray-500 truncate">{r.content}</span>
-                {r.proxied && <span className="text-xs bg-orange-100 text-orange-600 px-1 rounded">Proxied</span>}
-              </div>
-              {canManage && (
-                <button onClick={() => { if (confirm(`Delete ${r.type} record for ${r.name}?`)) deleteRecord.mutate(r.id) }}
-                  className="flex-shrink-0 opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-red-500 rounded ml-2">
-                  <Trash2 size={12} />
-                </button>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function DNSTab({ serverId }: { serverId: number }) {
-  const { data: providers = [], isLoading } = useDNSProviders(serverId)
-  const createProvider = useCreateDNSProvider(serverId)
-  const deleteProvider = useDeleteDNSProvider(serverId)
-  const canManage = true // inherited from parent via closure if needed
-  const [showForm, setShowForm] = useState(false)
-  const [expandedProvider, setExpandedProvider] = useState<number | null>(null)
-  const [form, setForm] = useState<CreateDNSProviderRequest>({
-    provider_type: 'cloudflare', api_key: '', api_email: '', zone_id: '', domain: ''
-  })
-
-  const handleCreate = async (e: React.FormEvent) => {
-    e.preventDefault()
-    await createProvider.mutateAsync(form)
-    setForm({ provider_type: 'cloudflare', api_key: '', api_email: '', zone_id: '', domain: '' })
-    setShowForm(false)
-  }
-
-  return (
-    <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-          <Globe size={20} className="text-blue-500" /> DNS Providers & Records
-        </h2>
-        <button onClick={() => setShowForm(!showForm)}
-          className="flex items-center gap-1.5 px-3 py-2 text-sm text-white bg-blue-600 rounded-lg hover:bg-blue-700">
-          <Plus size={14} /> Add Provider
-        </button>
-      </div>
-
-      {showForm && (
-        <form onSubmit={handleCreate} className="space-y-3 mb-6 p-4 bg-gray-50 rounded-lg">
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">Provider</label>
-              <select value={form.provider_type} onChange={e => setForm({...form, provider_type: e.target.value as 'cloudflare' | 'route53'})}
-                className="w-full px-3 py-2 border rounded-lg text-sm">
-                <option value="cloudflare">Cloudflare</option>
-                <option value="route53">AWS Route53</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">Domain</label>
-              <input type="text" placeholder="example.com" value={form.domain}
-                onChange={e => setForm({...form, domain: e.target.value})}
-                className="w-full px-3 py-2 border rounded-lg text-sm" required />
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">API Key / Token</label>
-              <input type="password" placeholder="API Key or Token" value={form.api_key}
-                onChange={e => setForm({...form, api_key: e.target.value})}
-                className="w-full px-3 py-2 border rounded-lg text-sm" required />
-            </div>
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">API Email (Cloudflare global key)</label>
-              <input type="email" placeholder="email@example.com (optional for tokens)" value={form.api_email}
-                onChange={e => setForm({...form, api_email: e.target.value})}
-                className="w-full px-3 py-2 border rounded-lg text-sm" />
-            </div>
-          </div>
-          <div>
-            <label className="block text-xs text-gray-500 mb-1">Zone ID</label>
-            <input type="text" placeholder="Zone/Hosted Zone ID" value={form.zone_id}
-              onChange={e => setForm({...form, zone_id: e.target.value})}
-              className="w-full px-3 py-2 border rounded-lg text-sm" required />
-          </div>
-          <div className="flex justify-end gap-2">
-            <button type="button" onClick={() => setShowForm(false)} className="px-3 py-2 text-sm text-gray-600 hover:bg-gray-200 rounded-lg">Cancel</button>
-            <button type="submit" disabled={createProvider.isPending}
-              className="px-4 py-2 text-sm text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50">
-              {createProvider.isPending ? 'Adding...' : 'Add Provider'}
-            </button>
-          </div>
-        </form>
-      )}
-
-      {isLoading ? (
-        <div className="text-center py-6"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600 mx-auto" /></div>
-      ) : providers.length === 0 ? (
-        <p className="text-center text-gray-400 py-6 text-sm">No DNS providers configured. Add a provider to enable DNS record management.</p>
-      ) : (
-        <div className="space-y-3">
-          {providers.map(p => (
-            <div key={p.id} className="p-4 bg-gray-50 rounded-lg">
-              <div className="flex items-center justify-between">
-                <button onClick={() => setExpandedProvider(expandedProvider === p.id ? null : p.id)}
-                  className="flex items-center gap-3 flex-1 text-left">
-                  <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${p.provider_type === 'cloudflare' ? 'bg-orange-100 text-orange-600' : 'bg-yellow-100 text-yellow-600'}`}>
-                    <Globe size={20} />
-                  </div>
-                  <div>
-                    <p className="font-medium text-sm">{p.domain}</p>
-                    <p className="text-xs text-gray-500">{p.provider_type === 'cloudflare' ? 'Cloudflare' : 'AWS Route53'} · Zone: {p.zone_id.slice(0, 12)}...</p>
-                  </div>
-                  <span className="ml-2 text-xs text-blue-500">{expandedProvider === p.id ? '▲ Hide records' : '▼ Show records'}</span>
-                </button>
-                <button onClick={() => { if (confirm(`Remove DNS provider for ${p.domain}?`)) deleteProvider.mutate(p.id) }}
-                  className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg">
-                  <Trash2 size={16} />
-                </button>
-              </div>
-              {expandedProvider === p.id && (
-                <DNSRecordsPanel serverId={serverId} providerId={p.id} providerDomain={p.domain} canManage={canManage} />
-              )}
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   )
 }

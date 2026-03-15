@@ -16,7 +16,48 @@ type CertInfo struct {
 	AutoRenew bool     `json:"auto_renew"`
 }
 
+// EnsureCertbotInstalled checks if certbot + python3-certbot-nginx are installed.
+// If missing, installs them via apt-get before proceeding with SSL issuance.
+func EnsureCertbotInstalled() error {
+	// Check certbot binary
+	certbotOK := false
+	for _, p := range []string{"/usr/bin/certbot", "/usr/local/bin/certbot"} {
+		if _, err := os.Stat(p); err == nil {
+			certbotOK = true
+			break
+		}
+	}
+
+	// Check nginx plugin
+	pluginOK := false
+	if out, _ := exec.Command("python3", "-c", "import certbot_nginx").CombinedOutput(); len(out) == 0 {
+		pluginOK = true
+	}
+
+	if certbotOK && pluginOK {
+		return nil // already installed
+	}
+
+	slog.Info("certbot or nginx plugin missing — installing now")
+	// Update apt cache
+	if out, err := exec.Command("apt-get", "update", "-y").CombinedOutput(); err != nil {
+		slog.Warn("apt-get update warning", "output", string(out))
+	}
+	// Install both packages
+	out, err := exec.Command("apt-get", "install", "-y", "certbot", "python3-certbot-nginx").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("không thể cài certbot: %s", string(out))
+	}
+	slog.Info("certbot + python3-certbot-nginx installed successfully")
+	return nil
+}
+
 func IssueCertificate(domain, email string) error {
+	// Auto-install certbot if not present before issuing
+	if err := EnsureCertbotInstalled(); err != nil {
+		return fmt.Errorf("certbot chưa được cài và không thể tự cài: %w", err)
+	}
+
 	args := []string{
 		"--nginx",
 		"-d", domain,

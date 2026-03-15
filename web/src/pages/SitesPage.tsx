@@ -3,10 +3,11 @@ import { Link } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Plus, Trash2, ExternalLink, Lock, LockOpen, Search, RefreshCw, Pause,
-  Play, CheckCircle, XCircle, Loader2, X, Globe, ChevronRight, Filter,
+  Play, CheckCircle, XCircle, Loader2, X, Globe, ChevronRight, Filter, Network,
 } from 'lucide-react'
 import { useSites, useCreateSite, useDeleteSite, useRestartSite, useSuspendSite, useResumeSite, useAutologin } from '@/hooks/useSites'
-import { useServers } from '@/hooks/useServers'
+import { useServers, useServerInstalledPHP, useCheckDomainDNS } from '@/hooks/useServers'
+import { useAllDNSProviders, useAutoCreateDNSRecord } from '@/hooks/useDNS'
 import { StatusBadge } from '@/components/ui/Badge'
 import api from '@/lib/api'
 import type { Site, APIResponse } from '@/types'
@@ -156,13 +157,22 @@ export default function SitesPage() {
     wp_admin_user: 'admin', wp_admin_email: '',
   })
   const [domainError, setDomainError] = useState('')
+  const [dnsStatus, setDnsStatus] = useState<{ pointing: boolean; message: string; checked: boolean } | null>(null)
+  const [dnsChecking, setDnsChecking] = useState(false)
+  const [dnsOffer, setDnsOffer] = useState<null | 'offered' | 'creating' | 'done' | 'skipped'>(null)
+  const [dnsOfferMsg, setDnsOfferMsg] = useState('')
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [creatingInfo, setCreatingInfo] = useState<{ id: number; domain: string; installType: string } | null>(null)
 
   const { data, isLoading } = useSites()
   const { data: serversData } = useServers()
+  const { data: dnsProviders } = useAllDNSProviders()
   const createSite = useCreateSite()
+  // Fetch installed PHP versions when a server is selected
+  const { data: installedPHPData, isFetching: phpFetching } = useServerInstalledPHP(form.server_id)
+  const checkDNS = useCheckDomainDNS()
+  const autoCreateDNS = useAutoCreateDNSRecord()
   const deleteSite = useDeleteSite()
   const restartSite = useRestartSite()
   const suspendSite = useSuspendSite()
@@ -171,6 +181,11 @@ export default function SitesPage() {
 
   const sites = data?.data || []
   const servers = serversData?.data || []
+  // PHP version availability for selected server
+  const installedPHP = installedPHPData ?? []
+  const phpVersionOK = form.server_id === 0 || installedPHP.length === 0
+    ? true  // no server selected or still loading — allow all
+    : installedPHP.some(p => p.version === form.php_version)
 
   const filteredSites = sites.filter(site => {
     const matchesSearch = searchTerm === '' ||
@@ -180,11 +195,87 @@ export default function SitesPage() {
     return matchesSearch && matchesStatus
   })
 
+  // When PHP version list loads and current selection is not installed, auto-pick the best available.
+  useEffect(() => {
+    if (installedPHP.length === 0) return
+    const isInstalled = installedPHP.some(p => p.version === form.php_version)
+    if (!isInstalled) {
+      // Pick the highest installed version as default
+      const best = [...installedPHP].sort((a, b) => parseFloat(b.version) - parseFloat(a.version))[0]
+      setForm(f => ({ ...f, php_version: best.version }))
+    }
+  }, [installedPHP])
+
+  // Find a matching DNS provider for the given domain
+  const findMatchingProvider = (domain: string) => {
+    const providers = dnsProviders || []
+    return providers.find(p => domain === p.domain || domain.endsWith('.' + p.domain)) || null
+  }
+
+  // Trigger DNS check when both domain is valid and server is selected
+  const triggerDNSCheck = async (domain: string, serverId: number) => {
+    if (!domain || !serverId) return
+    setDnsChecking(true)
+    setDnsStatus(null)
+    setDnsOffer(null)
+    setDnsOfferMsg('')
+    try {
+      const res = await checkDNS.mutateAsync({ serverId, domain })
+      setDnsStatus({ pointing: res.pointing, message: res.message, checked: true })
+      // If DNS doesn't point correctly and SSL is enabled → auto-disable SSL with warning
+      if (!res.pointing) {
+        setForm(f => ({ ...f, ssl_enabled: false }))
+        // Check if we have a matching DNS provider — if so, offer to auto-create record
+        const matched = findMatchingProvider(domain)
+        if (matched) {
+          const server = servers.find(s => s.id === serverId)
+          if (server) {
+            setDnsOffer('offered')
+            setDnsOfferMsg(`Tìm thấy DNS provider cho <strong>${matched.domain}</strong>. Tạo A record <code>${domain} → ${server.ip_address}</code> qua Cloudflare ngay bây giờ?`)
+          }
+        }
+      } else {
+        setDnsOffer(null)
+      }
+    } catch {
+      setDnsStatus({ pointing: false, message: 'Không thể kiểm tra DNS', checked: true })
+    } finally {
+      setDnsChecking(false)
+    }
+  }
+
+  const handleAutoCreateDNS = async () => {
+    const server = servers.find(s => s.id === form.server_id)
+    if (!server) return
+    setDnsOffer('creating')
+    try {
+      const res = await autoCreateDNS.mutateAsync({ domain: form.domain, server_ip: server.ip_address })
+      setDnsOffer('done')
+      setDnsOfferMsg(`✅ A record đã được ${res.action === 'created' ? 'tạo' : 'cập nhật'}: <code>${form.domain} → ${server.ip_address}</code>. DNS có thể mất vài phút để propagate.`)
+    } catch (err: any) {
+      setDnsOffer('offered') // revert to offered state so user can retry
+      setDnsOfferMsg(`❌ Lỗi: ${err?.response?.data?.error || 'Không thể tạo A record'}. Thử lại?`)
+    }
+  }
+
   const handleDomainChange = (val: string) => {
     const cleaned = val.replace(/^https?:\/\//i, '').replace(/\/.*$/, '')
     setForm(f => ({ ...f, domain: cleaned }))
     setDomainError(validateDomain(cleaned, sites))
+    // Reset DNS status when domain changes
+    setDnsStatus(null)
+    setDnsOffer(null)
+    setDnsOfferMsg('')
   }
+
+  // Re-run DNS check when server changes (if domain already entered)
+  useEffect(() => {
+    if (form.server_id && form.domain && !validateDomain(form.domain, sites)) {
+      triggerDNSCheck(form.domain, form.server_id)
+    } else {
+      setDnsStatus(null)
+    }
+  }, [form.server_id])
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -196,6 +287,7 @@ export default function SitesPage() {
       setShowCreate(false)
       setForm({ server_id: 0, domain: '', php_version: '8.2', ssl_enabled: true, redis_enabled: false, install_type: 'auto', wp_admin_user: 'admin', wp_admin_email: '' })
       setDomainError('')
+      setDnsStatus(null)
       if (siteId) {
         setCreatingInfo({ id: siteId, domain: form.domain, installType: form.install_type })
       }
@@ -226,7 +318,7 @@ export default function SitesPage() {
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 mb-6">
           <div className="flex items-center justify-between mb-5">
             <h2 className="text-base font-semibold text-gray-900">Tạo Site Mới</h2>
-            <button onClick={() => setShowCreate(false)} className="text-gray-400 hover:text-gray-600">
+            <button onClick={() => { setShowCreate(false); setDnsStatus(null); setDnsOffer(null) }} className="text-gray-400 hover:text-gray-600">
               <X size={18} />
             </button>
           </div>
@@ -255,7 +347,10 @@ export default function SitesPage() {
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1.5">Server</label>
                 <select value={form.server_id}
-                  onChange={(e) => setForm({ ...form, server_id: Number(e.target.value) })}
+                  onChange={(e) => {
+                    setForm(f => ({ ...f, server_id: Number(e.target.value) }))
+                    setDnsStatus(null) // reset DNS when server changes (useEffect will re-check)
+                  }}
                   className={selectCls} required>
                   <option value={0}>Chọn server...</option>
                   {servers.filter(s => s.status === 'active').map(s => (
@@ -265,28 +360,85 @@ export default function SitesPage() {
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1.5">Domain</label>
-                <input
-                  value={form.domain}
-                  onChange={(e) => handleDomainChange(e.target.value)}
-                  className={`w-full px-4 py-2.5 border rounded-xl outline-none text-sm transition-colors ${
-                    domainError
-                      ? 'border-red-400 bg-red-50 focus:ring-2 focus:ring-red-500/20 focus:border-red-500'
-                      : 'border-gray-200 bg-gray-50 focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500'
-                  }`}
-                  placeholder="example.com"
-                  required
-                />
+                <div className="flex gap-2">
+                  <input
+                    value={form.domain}
+                    onChange={(e) => handleDomainChange(e.target.value)}
+                    onBlur={() => {
+                      if (form.domain && !domainError && form.server_id) {
+                        triggerDNSCheck(form.domain, form.server_id)
+                      }
+                    }}
+                    className={`flex-1 px-4 py-2.5 border rounded-xl outline-none text-sm transition-colors ${
+                      domainError
+                        ? 'border-red-400 bg-red-50 focus:ring-2 focus:ring-red-500/20 focus:border-red-500'
+                        : 'border-gray-200 bg-gray-50 focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500'
+                    }`}
+                    placeholder="example.com"
+                    required
+                  />
+                  {/* Manual DNS check button */}
+                  {form.server_id > 0 && form.domain && !domainError && (
+                    <button type="button"
+                      onClick={() => triggerDNSCheck(form.domain, form.server_id)}
+                      disabled={dnsChecking}
+                      title="Kiểm tra DNS"
+                      className="px-3 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50 flex items-center gap-1.5 shrink-0">
+                      {dnsChecking
+                        ? <Loader2 size={14} className="animate-spin" />
+                        : <RefreshCw size={14} />}
+                      DNS
+                    </button>
+                  )}
+                </div>
                 {domainError && <p className="mt-1.5 text-xs text-red-600">{domainError}</p>}
+                {/* DNS check result */}
+                {!domainError && dnsStatus && (
+                  <div className={`mt-1.5 flex items-start gap-1.5 text-xs ${dnsStatus.pointing ? 'text-emerald-600' : 'text-amber-600'}`}>
+                    {dnsStatus.pointing
+                      ? <CheckCircle size={13} className="shrink-0 mt-0.5" />
+                      : <XCircle size={13} className="shrink-0 mt-0.5" />}
+                    <span>{dnsStatus.message}</span>
+                  </div>
+                )}
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">PHP Version</label>
-                <select value={form.php_version}
-                  onChange={(e) => setForm({ ...form, php_version: e.target.value })}
-                  className={selectCls}>
-                  {['7.4', '8.0', '8.1', '8.2', '8.3'].map(v => (
-                    <option key={v} value={v}>PHP {v}</option>
-                  ))}
-                </select>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                  PHP Version
+                  {phpFetching && <span className="ml-2 text-xs text-gray-400">(đang kiểm tra...)</span>}
+                </label>
+                {/* If we have server-specific PHP info, show only installed versions */}
+                {installedPHP.length > 0 ? (
+                  <>
+                    <select value={form.php_version}
+                      onChange={(e) => setForm({ ...form, php_version: e.target.value })}
+                      className={selectCls}>
+                      {installedPHP.map(p => (
+                        <option key={p.version} value={p.version}>
+                          PHP {p.version}{p.fpm_active ? ' ✓' : ' (inactive)'}
+                        </option>
+                      ))}
+                    </select>
+                    {!phpVersionOK && (
+                      <p className="mt-1.5 text-xs text-red-600">
+                        ⚠️ PHP {form.php_version} chưa được cài trên server này
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <select value={form.php_version}
+                      onChange={(e) => setForm({ ...form, php_version: e.target.value })}
+                      className={selectCls}>
+                      {['7.4', '8.0', '8.1', '8.2', '8.3'].map(v => (
+                        <option key={v} value={v}>PHP {v}</option>
+                      ))}
+                    </select>
+                    {form.server_id > 0 && !phpFetching && (
+                      <p className="mt-1.5 text-xs text-gray-400">Chọn server để xem các PHP version đã cài</p>
+                    )}
+                  </>
+                )}
               </div>
               {form.install_type === 'auto' && (
                 <div>
@@ -298,30 +450,94 @@ export default function SitesPage() {
               )}
             </div>
 
-            <div className="flex flex-wrap items-center gap-5">
-              {[
-                { key: 'ssl_enabled', label: '🔒 Auto SSL (Let\'s Encrypt)' },
-                { key: 'redis_enabled', label: '⚡ Redis Cache' },
-              ].map(({ key, label }) => (
-                <label key={key} className="flex items-center gap-2.5 cursor-pointer select-none">
-                  <div className="relative">
-                    <input
-                      type="checkbox"
-                      checked={form[key as keyof typeof form] as boolean}
-                      onChange={(e) => setForm({ ...form, [key]: e.target.checked })}
-                      className="sr-only"
-                    />
-                    <div className={`w-9 h-5 rounded-full transition-colors ${
-                      form[key as keyof typeof form] ? 'bg-blue-600' : 'bg-gray-200'
-                    }`}>
-                      <div className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${
-                        form[key as keyof typeof form] ? 'translate-x-4' : ''
-                      }`} />
+            <div className="space-y-2">
+              <div className="flex flex-wrap items-center gap-5">
+                {[
+                  { key: 'ssl_enabled', label: '🔒 Auto SSL (Let\'s Encrypt)' },
+                  { key: 'redis_enabled', label: '⚡ Redis Cache' },
+                ].map(({ key, label }) => (
+                  <label key={key} className="flex items-center gap-2.5 cursor-pointer select-none">
+                    <div className="relative">
+                      <input
+                        type="checkbox"
+                        checked={form[key as keyof typeof form] as boolean}
+                        onChange={(e) => setForm({ ...form, [key]: e.target.checked })}
+                        className="sr-only"
+                      />
+                      <div className={`w-9 h-5 rounded-full transition-colors ${
+                        form[key as keyof typeof form] ? 'bg-blue-600' : 'bg-gray-200'
+                      }`}>
+                        <div className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${
+                          form[key as keyof typeof form] ? 'translate-x-4' : ''
+                        }`} />
+                      </div>
                     </div>
+                    <span className="text-sm text-gray-700">{label}</span>
+                  </label>
+                ))}
+              </div>
+              {/* DNS warning for SSL */}
+              {dnsStatus && !dnsStatus.pointing && (
+                <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-700">
+                  <XCircle size={15} className="shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-medium">DNS chưa trỏ về server — đã tắt Auto SSL</p>
+                    <p className="text-xs mt-0.5 text-amber-600">{dnsStatus.message}</p>
+                    <p className="text-xs mt-0.5 text-amber-600">
+                      Trỏ DNS về đúng IP rồi bật lại SSL, hoặc bật thủ công sau khi tạo site.
+                    </p>
                   </div>
-                  <span className="text-sm text-gray-700">{label}</span>
-                </label>
-              ))}
+                </div>
+              )}
+
+              {/* DNS auto-create offer banner */}
+              {dnsOffer && dnsOffer !== 'skipped' && (
+                <div className={`flex items-start gap-3 p-4 rounded-xl border text-sm ${
+                  dnsOffer === 'done'
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                    : 'bg-blue-50 border-blue-200 text-blue-700'
+                }`}>
+                  <Network size={16} className="shrink-0 mt-0.5" />
+                  <div className="flex-1 min-w-0">
+                    <p
+                      className="font-medium leading-snug"
+                      dangerouslySetInnerHTML={{ __html: dnsOffer === 'done'
+                        ? dnsOfferMsg
+                        : dnsOfferMsg.replace(/<strong>/g, '<span class="font-semibold">').replace(/<\/strong>/g, '</span>')
+                      }}
+                    />
+                    {dnsOffer === 'offered' && (
+                      <div className="flex items-center gap-2 mt-3">
+                        <button
+                          type="button"
+                          onClick={handleAutoCreateDNS}
+                          className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-semibold hover:bg-blue-700 transition-colors"
+                        >
+                          <Network size={13} /> Tạo A record
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDnsOffer('skipped')}
+                          className="px-3 py-1.5 text-blue-600 rounded-lg text-xs hover:bg-blue-100 transition-colors"
+                        >
+                          Bỏ qua, tạo site thôi
+                        </button>
+                      </div>
+                    )}
+                    {dnsOffer === 'creating' && (
+                      <div className="flex items-center gap-2 mt-2 text-xs text-blue-500">
+                        <Loader2 size={13} className="animate-spin" />
+                        Đang tạo A record qua Cloudflare...
+                      </div>
+                    )}
+                    {dnsOffer === 'done' && (
+                      <p className="text-xs mt-1.5 text-emerald-600">
+                        DNS propagation có thể mất 1–5 phút. Bạn vẫn có thể tạo site ngay bây giờ.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
 
             {form.install_type === 'manual' && (

@@ -267,6 +267,10 @@ export interface Migration {
   site_id: number
   source_server_id: number
   target_server_id: number
+  mode: 'keep_domain' | 'change_domain'
+  new_domain?: string
+  update_dns: boolean
+  source_cleaned_up: boolean
   phase: 'preparation' | 'initial_sync' | 'delta_sync' | 'switchover' | 'cleanup'
   status: 'running' | 'completed' | 'failed' | 'rolled_back'
   progress: number
@@ -289,7 +293,10 @@ export interface MigrationLog {
 
 export interface MigrateRequest {
   target_server_id: number
-  change_domain?: string
+  mode: 'keep_domain' | 'change_domain'
+  new_domain?: string
+  update_dns?: boolean
+  cleanup_source?: boolean
 }
 
 // Security types
@@ -316,6 +323,7 @@ export interface MalwareScan {
   id: number
   site_id: number
   scan_type: 'full' | 'quick' | 'custom'
+  engine: 'wp_signature' | 'clamav' | 'both'
   status: 'running' | 'completed' | 'failed'
   files_scanned: number
   threats_found: number
@@ -335,7 +343,30 @@ export interface ThreatDetail {
 
 export interface StartMalwareScanRequest {
   scan_type?: 'full' | 'quick' | 'custom'
+  engine?: 'wp_signature' | 'clamav' | 'both'
   path?: string
+}
+
+export interface ClamAVStatus {
+  installed: boolean
+  version?: string
+  db_version?: string
+  last_updated?: string
+  error?: string
+}
+
+export interface MalwareScanSchedule {
+  id: number
+  site_id: number
+  site?: { id: number; domain: string; server_id: number }
+  scan_type: 'full' | 'quick'
+  engine: 'wp_signature' | 'clamav' | 'both'
+  interval_h: number
+  enabled: boolean
+  last_run_at?: string
+  next_run_at?: string
+  created_at: string
+  updated_at: string
 }
 
 // WordPress Advanced types
@@ -638,12 +669,28 @@ export interface DomainEntry {
   site_id: number
   domain: string
   type: 'primary' | 'alias' | 'subdomain'
+  ssl_enabled: boolean
+  redirect_to?: string
+  redirect_type?: number  // 301 or 302; 0/undefined = no redirect
   created_at: string
 }
 
 export interface CreateDomainRequest {
   domain: string
   type?: 'primary' | 'alias' | 'subdomain'
+}
+
+export interface UpdateDomainRequest {
+  redirect_to: string
+  redirect_type: number
+}
+
+export interface DNSCheckResult {
+  domain: string
+  server_ip: string
+  resolved_ips: string[]
+  pointing: boolean
+  message: string
 }
 
 export interface RedisConfigData {
@@ -843,6 +890,8 @@ export interface UptimeCheck {
   last_status: number
   last_check: string | null
   created_at: string
+  // Preloaded from ListAll endpoint
+  site?: { id: number; domain: string; server_id: number }
 }
 
 export interface UptimeLog {
@@ -968,6 +1017,7 @@ export interface DNSProvider {
   zone_id: string
   domain: string
   created_at: string
+  server?: { id: number; name: string; ip_address: string }
 }
 
 export interface CreateDNSProviderRequest {

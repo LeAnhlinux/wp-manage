@@ -109,3 +109,34 @@ func (h *MigrationHandler) Update(c *fiber.Ctx) error {
 	}
 	return c.JSON(models.APIResponse{Success: true})
 }
+
+// SetupSSH is called by the source agent to request temporary SSH access to the target server.
+// It queues an add_authorized_key task on the target agent and waits for completion (synchronous).
+func (h *MigrationHandler) SetupSSH(c *fiber.Ctx) error {
+	id, _ := strconv.ParseUint(c.Params("id"), 10, 64)
+	var req struct {
+		PublicKey string `json:"public_key"`
+	}
+	if err := c.BodyParser(&req); err != nil || req.PublicKey == "" {
+		return c.Status(400).JSON(models.APIResponse{Error: "public_key is required"})
+	}
+	if err := h.svc.SetupMigrationSSH(id, req.PublicKey); err != nil {
+		return c.Status(500).JSON(models.APIResponse{Error: err.Error()})
+	}
+	return c.JSON(models.APIResponse{Success: true, Message: "SSH access granted on target server"})
+}
+
+// CleanupSSH is called by the source agent after migration to remove the temp SSH key from target.
+func (h *MigrationHandler) CleanupSSH(c *fiber.Ctx) error {
+	id, _ := strconv.ParseUint(c.Params("id"), 10, 64)
+	h.svc.CleanupMigrationSSH(id) // best-effort, ignore errors
+	return c.JSON(models.APIResponse{Success: true})
+}
+
+func (h *MigrationHandler) CleanupSource(c *fiber.Ctx) error {
+	id, _ := strconv.ParseUint(c.Params("id"), 10, 64)
+	if err := h.svc.CleanupSource(id); err != nil {
+		return c.Status(400).JSON(models.APIResponse{Error: err.Error()})
+	}
+	return c.JSON(models.APIResponse{Success: true, Message: "Đã gửi lệnh dọn dẹp server nguồn"})
+}

@@ -271,6 +271,32 @@ func (s *InfrastructureService) RebuildConfig(serverID uint64, req models.Rebuil
 	return result.Output, nil
 }
 
+// ==================== Services Status ====================
+
+func (s *InfrastructureService) InstallService(serverID uint64, service string) error {
+	task := s.queueTaskReturn(serverID, 0, "install_service", map[string]string{"service": service})
+	result, err := WaitForTaskComplete(s.db, task.ID)
+	if err != nil {
+		return err
+	}
+	if result.Error != "" {
+		return fmt.Errorf("%s", result.Error)
+	}
+	return nil
+}
+
+func (s *InfrastructureService) CheckServices(serverID uint64) (string, error) {
+	task := s.queueTaskReturn(serverID, 0, "check_services", map[string]string{})
+	result, err := WaitForTaskComplete(s.db, task.ID)
+	if err != nil {
+		return "", err
+	}
+	if result.Error != "" {
+		return "", fmt.Errorf("%s", result.Error)
+	}
+	return result.Output, nil
+}
+
 // ==================== Health Check ====================
 
 func (s *InfrastructureService) RunHealthCheck(serverID uint64) (string, error) {

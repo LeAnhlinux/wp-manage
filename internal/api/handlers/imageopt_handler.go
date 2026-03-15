@@ -52,6 +52,29 @@ func (h *ImageOptHandler) UpdateConfig(c *fiber.Ctx) error {
 	return c.JSON(models.APIResponse{Success: true, Data: config})
 }
 
+// Toggle enables/disables auto-compress on upload (installs/removes mu-plugin)
+func (h *ImageOptHandler) Toggle(c *fiber.Ctx) error {
+	siteID, err := strconv.ParseUint(c.Params("siteId"), 10, 64)
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "Invalid site ID")
+	}
+	var body struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := c.BodyParser(&body); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "Invalid request body")
+	}
+	config, err := h.svc.Toggle(siteID, body.Enabled)
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: err.Error(), Data: config})
+	}
+	msg := "Image optimization disabled"
+	if body.Enabled {
+		msg = "Image optimization enabled — auto-compress on upload active"
+	}
+	return c.JSON(models.APIResponse{Success: true, Message: msg, Data: config})
+}
+
 // RunOptimization starts an image optimization run
 func (h *ImageOptHandler) RunOptimization(c *fiber.Ctx) error {
 	siteID, err := strconv.ParseUint(c.Params("siteId"), 10, 64)

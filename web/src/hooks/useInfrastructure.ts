@@ -345,6 +345,44 @@ export function useRebuildConfig() {
   })
 }
 
+// ==================== Services Status ====================
+
+export interface ServiceStatus {
+  service: string
+  active: boolean
+}
+
+export function useInstallService(serverId: number) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (service: string) => {
+      const { data } = await api.post<APIResponse<null>>(`/servers/${serverId}/services/${service}/install`)
+      return data
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['server-services', serverId] })
+    },
+  })
+}
+
+export function useCheckServices(serverId: number) {
+  return useQuery({
+    queryKey: ['server-services', serverId],
+    queryFn: async () => {
+      const { data } = await api.get<APIResponse<{ services: string }>>(`/servers/${serverId}/services`)
+      try {
+        return JSON.parse(data.data?.services ?? '[]') as ServiceStatus[]
+      } catch {
+        return [] as ServiceStatus[]
+      }
+    },
+    // Don't auto-fetch on mount — user must click "Refresh" explicitly.
+    // The backend call is synchronous (WaitForTaskComplete) and can block 10-30s.
+    enabled: false,
+    staleTime: 60_000,
+  })
+}
+
 // ==================== Health Check ====================
 
 export interface HealthCheckResult {

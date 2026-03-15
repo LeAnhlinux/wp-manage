@@ -5,20 +5,21 @@ import {
   ExternalLink, Trash2, Pause, Play, Shield, Database,
   Code, Clock, Settings, AlertTriangle, Eye, EyeOff, Key, Copy, Check,
   FolderOpen, LayoutDashboard, Layers, Download, Loader2, HardDrive,
-  CheckCircle2, XCircle, ChevronLeft, ChevronRight, Network, Plus, ImageIcon, Activity, Zap, Archive
+  CheckCircle2, XCircle, ChevronLeft, ChevronRight, Network, Plus, ImageIcon, Zap, Archive,
+  ShieldCheck, AlertCircle, CornerDownRight, X, Edit2
 } from 'lucide-react'
 import { useSite, useDeleteSite, useUpdatePHP, useRestartSite, useSuspendSite, useResumeSite, useIssueSSL, useSiteCredentials, useAutologin, useUploadSource, useImportDB, useToggleOpenBasedir } from '@/hooks/useSites'
 import { useStagingSites, useCreateStaging, usePushStaging, useDeleteStaging, useAutoUpdateConfig, useUpdateAutoUpdateConfig, useCheckUpdates, useUpdateLogs, useOptimizeDatabase } from '@/hooks/useWordPress'
 import { useLatestPerformance, usePerformanceMetrics, useRunPageSpeed } from '@/hooks/usePerformance'
 import { useSubsites, useEnableMultisite, useCreateSubsite, useDeleteSubsite, useSyncSubsites } from '@/hooks/useMultisite'
-import { useImageOptConfig, useUpdateImageOptConfig, useRunImageOpt, useImageOptResults } from '@/hooks/useImageOpt'
-import { useDomains, useCreateDomain, useDeleteDomain } from '@/hooks/useDomains'
+import { useImageOptConfig, useUpdateImageOptConfig, useToggleImageOpt, useRunImageOpt, useImageOptResults } from '@/hooks/useImageOpt'
+import { useDomains, useCreateDomain, useUpdateDomain, useDeleteDomain, useIssueDomainSSL, useCheckDNS } from '@/hooks/useDomains'
 import { useRedisConfig, useToggleRedis } from '@/hooks/useRedis'
 import { useCronJobsBySite } from '@/hooks/useCronJobs'
 import { useSFTPAccounts, useCreateSFTP, useDeleteSFTP } from '@/hooks/useSFTP'
-import { useHardenWordPress } from '@/hooks/useHardening'
+import { useHardenWordPress, useRevertHardening } from '@/hooks/useHardening'
 import { useWAFConfig, useUpdateWAFConfig } from '@/hooks/useSecurity'
-import { useUptimeChecks, useCreateUptimeCheck, useDeleteUptimeCheck, useUptimeHistory } from '@/hooks/useUptime'
+// Uptime hooks removed — monitoring moved to /monitoring page
 import { useWPCLIHistory, useExecuteWPCLI } from '@/hooks/useWPCLI'
 import { useCacheConfig, useToggleCache, usePurgeCache } from '@/hooks/useCache'
 import { useImports, useStartImport } from '@/hooks/useImport'
@@ -46,7 +47,7 @@ export default function SiteDetailPage() {
   const importDB = useImportDB()
   const toggleOpenBasedir = useToggleOpenBasedir()
 
-  const [activeTab, setActiveTab] = useState<'overview' | 'files' | 'staging' | 'updates' | 'database' | 'performance' | 'multisite' | 'images' | 'domains' | 'redis' | 'cron' | 'sftp' | 'security' | 'monitoring' | 'ssl' | 'wpcli' | 'cache' | 'import' | 'backup'>('overview')
+  const [activeTab, setActiveTab] = useState<'overview' | 'files' | 'staging' | 'updates' | 'database' | 'performance' | 'multisite' | 'images' | 'domains' | 'redis' | 'cron' | 'sftp' | 'security' | 'ssl' | 'wpcli' | 'cache' | 'import' | 'backup'>('overview')
   // Delete confirmation modal state
   const [showDeleteModal, setShowDeleteModal] = useState(false)
   const [deleteConfirmStep, setDeleteConfirmStep] = useState<1 | 2>(1)
@@ -272,8 +273,6 @@ export default function SiteDetailPage() {
           icon={<Database size={16} />} label="Redis" />
         <TabButton active={activeTab === 'cron'} onClick={() => setActiveTab('cron')}
           icon={<Clock size={16} />} label="Cron Jobs" />
-        <TabButton active={activeTab === 'monitoring'} onClick={() => setActiveTab('monitoring')}
-          icon={<Activity size={16} />} label="Monitoring" />
         <TabButton active={activeTab === 'ssl'} onClick={() => setActiveTab('ssl')}
           icon={<Lock size={16} />} label="SSL" />
         <TabButton active={activeTab === 'wpcli'} onClick={() => setActiveTab('wpcli')}
@@ -336,11 +335,6 @@ export default function SiteDetailPage() {
       {/* Cron Tab */}
       {activeTab === 'cron' && (
         <CronPanel siteId={site.id} />
-      )}
-
-      {/* Monitoring Tab */}
-      {activeTab === 'monitoring' && (
-        <MonitoringPanel siteId={site.id} canManage={can('sites', 'manage')} />
       )}
 
       {/* SSL Tab */}
@@ -1248,108 +1242,225 @@ function TabButton({ active, onClick, icon, label }: {
 
 function ImagesPanel({ siteId, canManage }: { siteId: number; canManage: boolean }) {
   const { data: config, isLoading: configLoading } = useImageOptConfig(siteId)
+  const toggleOpt = useToggleImageOpt(siteId)
   const updateConfig = useUpdateImageOptConfig(siteId)
   const runOpt = useRunImageOpt(siteId)
   const { data: resultsData } = useImageOptResults(siteId)
+  const [quality, setQuality] = useState<number | null>(null)
 
   const results = ((resultsData?.data as unknown) ?? []) as ImageOptResult[]
+
+  // Compute cumulative stats from all completed runs
+  const totalImages   = results.reduce((s, r) => s + r.total_images, 0)
+  const totalOptimized = results.reduce((s, r) => s + r.optimized_count, 0)
+  const totalSaved    = results.reduce((s, r) => s + r.bytes_saved, 0)
+  const hasRunning    = results.some(r => r.status === 'running')
 
   const formatBytes = (bytes: number) => {
     if (bytes < 1024) return `${bytes} B`
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-    return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+    return `${(bytes / 1024 / 1024).toFixed(2)} MB`
   }
 
   if (configLoading) return <div className="flex items-center justify-center py-12"><Loader2 size={24} className="animate-spin text-gray-400" /></div>
 
+  const q = quality ?? (config?.quality ?? 80)
+
   return (
     <div className="space-y-4">
-      {/* Config Panel */}
-      <div className="bg-white rounded-xl border border-gray-200 p-6">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-semibold">Image Optimization Settings</h3>
-          {canManage && (
-            <button onClick={() => runOpt.mutate()} disabled={runOpt.isPending}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50">
-              {runOpt.isPending ? <Loader2 size={16} className="animate-spin" /> : <ImageIcon size={16} />}
-              Run Optimization
+      {/* Header card — enable toggle + stats */}
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className={`p-2.5 rounded-xl ${config?.enabled ? 'bg-emerald-100' : 'bg-gray-100'}`}>
+              <ImageIcon size={20} className={config?.enabled ? 'text-emerald-600' : 'text-gray-400'} />
+            </div>
+            <div>
+              <h3 className="text-base font-semibold text-gray-900">Image Optimization</h3>
+              <p className="text-sm text-gray-500">
+                {config?.enabled
+                  ? 'Auto-compress bật — ảnh sẽ được nén khi upload lên WordPress'
+                  : 'Tắt — ảnh upload sẽ không được tự động nén'}
+              </p>
+            </div>
+          </div>
+          {canManage && config && (
+            <button
+              onClick={() => toggleOpt.mutate(!config.enabled)}
+              disabled={toggleOpt.isPending}
+              className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${config.enabled ? 'bg-emerald-500' : 'bg-gray-300'}`}>
+              {toggleOpt.isPending
+                ? <Loader2 size={12} className="animate-spin absolute inset-0 m-auto text-white" />
+                : <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${config.enabled ? 'translate-x-6' : 'translate-x-1'}`} />
+              }
             </button>
           )}
         </div>
-        {runOpt.isSuccess && (
-          <p className="text-green-600 text-sm mb-4">Optimization task queued! Results will appear below when complete.</p>
-        )}
 
-        {canManage && config && (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-              <span className="text-sm text-gray-600">WebP Generation</span>
-              <button onClick={() => updateConfig.mutate({ webp_enabled: !config.webp_enabled })}
-                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${config.webp_enabled ? 'bg-blue-600' : 'bg-gray-300'}`}>
-                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${config.webp_enabled ? 'translate-x-6' : 'translate-x-1'}`} />
-              </button>
-            </div>
-            <div className="p-3 bg-gray-50 rounded-lg">
-              <label className="block text-sm text-gray-600 mb-1">Quality ({config.quality}%)</label>
-              <input type="range" min="30" max="100" value={config.quality}
-                onChange={(e) => updateConfig.mutate({ quality: parseInt(e.target.value) })}
-                className="w-full" />
-            </div>
-            <div className="p-3 bg-gray-50 rounded-lg">
-              <label className="block text-sm text-gray-600 mb-1">Max Width</label>
-              <select value={config.max_width}
-                onChange={(e) => updateConfig.mutate({ max_width: parseInt(e.target.value) })}
-                className="w-full px-2 py-1 border rounded text-sm">
-                <option value={1920}>1920px</option>
-                <option value={2560}>2560px</option>
-                <option value={3840}>3840px</option>
-              </select>
-            </div>
+        {/* Stats row */}
+        {totalImages > 0 && (
+          <div className="mt-5 grid grid-cols-3 gap-3">
+            {[
+              { label: 'Tổng ảnh đã xử lý', value: totalImages.toLocaleString(), color: 'text-gray-900' },
+              { label: 'Đã tối ưu', value: totalOptimized.toLocaleString(), color: 'text-emerald-600' },
+              { label: 'Dung lượng tiết kiệm', value: formatBytes(totalSaved), color: 'text-blue-600' },
+            ].map(stat => (
+              <div key={stat.label} className="bg-gray-50 rounded-xl p-3 text-center">
+                <p className={`text-xl font-bold ${stat.color}`}>{stat.value}</p>
+                <p className="text-xs text-gray-500 mt-0.5">{stat.label}</p>
+              </div>
+            ))}
           </div>
         )}
       </div>
 
-      {/* Results History */}
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        <div className="px-4 py-3 border-b bg-gray-50">
-          <h4 className="text-sm font-semibold text-gray-700">Optimization History</h4>
+      {/* Settings card */}
+      {canManage && config && (
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+          <h4 className="text-sm font-semibold text-gray-700 mb-4">Cài đặt nén ảnh</h4>
+          <div className="space-y-4">
+            {/* WebP toggle */}
+            <div className="flex items-center justify-between py-3 border-b border-gray-100">
+              <div>
+                <p className="text-sm font-medium text-gray-800">Tạo file WebP</p>
+                <p className="text-xs text-gray-500 mt-0.5">Tự động tạo phiên bản .webp bên cạnh ảnh gốc</p>
+              </div>
+              <button onClick={() => updateConfig.mutate({ webp_enabled: !config.webp_enabled })}
+                disabled={updateConfig.isPending}
+                className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${config.webp_enabled ? 'bg-blue-600' : 'bg-gray-300'}`}>
+                <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${config.webp_enabled ? 'translate-x-6' : 'translate-x-1'}`} />
+              </button>
+            </div>
+
+            {/* Quality slider */}
+            <div className="py-3 border-b border-gray-100">
+              <div className="flex items-center justify-between mb-2">
+                <div>
+                  <p className="text-sm font-medium text-gray-800">Chất lượng nén</p>
+                  <p className="text-xs text-gray-500 mt-0.5">Thấp hơn = file nhỏ hơn, ảnh mờ hơn</p>
+                </div>
+                <span className="text-sm font-bold text-blue-600 bg-blue-50 px-2.5 py-1 rounded-lg">{q}%</span>
+              </div>
+              <input type="range" min="30" max="100" value={q}
+                onChange={(e) => setQuality(parseInt(e.target.value))}
+                onMouseUp={() => { if (quality !== null) { updateConfig.mutate({ quality }); setQuality(null) } }}
+                onTouchEnd={() => { if (quality !== null) { updateConfig.mutate({ quality }); setQuality(null) } }}
+                className="w-full accent-blue-600" />
+              <div className="flex justify-between text-xs text-gray-400 mt-1">
+                <span>30% (nhỏ nhất)</span><span>80% (khuyến nghị)</span><span>100% (lossless)</span>
+              </div>
+            </div>
+
+            {/* Max width */}
+            <div className="flex items-center justify-between py-3">
+              <div>
+                <p className="text-sm font-medium text-gray-800">Chiều rộng tối đa</p>
+                <p className="text-xs text-gray-500 mt-0.5">Resize ảnh nếu lớn hơn giá trị này</p>
+              </div>
+              <select value={config.max_width}
+                onChange={(e) => updateConfig.mutate({ max_width: parseInt(e.target.value) })}
+                className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:bg-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500/20">
+                <option value={1280}>1280px</option>
+                <option value={1920}>1920px (FHD)</option>
+                <option value={2560}>2560px (QHD)</option>
+                <option value={3840}>3840px (4K)</option>
+              </select>
+            </div>
+          </div>
         </div>
+      )}
+
+      {/* Bulk optimize + history */}
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+        <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+          <div>
+            <h4 className="text-sm font-semibold text-gray-700">Lịch sử tối ưu</h4>
+            <p className="text-xs text-gray-500 mt-0.5">Optimize thủ công tất cả ảnh đã upload</p>
+          </div>
+          {canManage && (
+            <button onClick={() => runOpt.mutate()} disabled={runOpt.isPending || hasRunning}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-semibold rounded-xl hover:bg-blue-700 disabled:opacity-50 transition-colors">
+              {(runOpt.isPending || hasRunning) ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} />}
+              {hasRunning ? 'Đang chạy...' : 'Optimize tất cả ảnh'}
+            </button>
+          )}
+        </div>
+
+        {runOpt.isSuccess && !hasRunning && (
+          <div className="mx-5 mt-3 px-3 py-2 bg-emerald-50 text-emerald-700 text-xs rounded-lg border border-emerald-200">
+            ✓ Đã bắt đầu — kết quả sẽ hiển thị khi hoàn tất
+          </div>
+        )}
+
         {results.length === 0 ? (
           <div className="text-center py-12 text-gray-500">
-            <ImageIcon size={32} className="mx-auto mb-2 text-gray-300" />
-            <p className="text-sm">No optimization runs yet. Click "Run Optimization" to start.</p>
+            <ImageIcon size={32} className="mx-auto mb-2 text-gray-200" />
+            <p className="text-sm font-medium">Chưa có lần optimize nào</p>
+            <p className="text-xs text-gray-400 mt-1">Bấm "Optimize tất cả ảnh" để bắt đầu</p>
           </div>
         ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b bg-gray-50/50">
-                <th className="text-left px-4 py-2 font-medium text-gray-600">Date</th>
-                <th className="text-left px-4 py-2 font-medium text-gray-600">Total</th>
-                <th className="text-left px-4 py-2 font-medium text-gray-600">Optimized</th>
-                <th className="text-left px-4 py-2 font-medium text-gray-600">Skipped</th>
-                <th className="text-left px-4 py-2 font-medium text-gray-600">Saved</th>
-                <th className="text-left px-4 py-2 font-medium text-gray-600">Status</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y">
+          <>
+            {/* Desktop table */}
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b bg-gray-50/80">
+                    <th className="text-left px-5 py-3 font-medium text-gray-500 text-xs uppercase tracking-wide">Thời gian</th>
+                    <th className="text-right px-4 py-3 font-medium text-gray-500 text-xs uppercase tracking-wide">Tổng</th>
+                    <th className="text-right px-4 py-3 font-medium text-gray-500 text-xs uppercase tracking-wide">Tối ưu</th>
+                    <th className="text-right px-4 py-3 font-medium text-gray-500 text-xs uppercase tracking-wide">Bỏ qua</th>
+                    <th className="text-right px-4 py-3 font-medium text-gray-500 text-xs uppercase tracking-wide">Tiết kiệm</th>
+                    <th className="text-center px-4 py-3 font-medium text-gray-500 text-xs uppercase tracking-wide">Trạng thái</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {results.map((r: ImageOptResult) => (
+                    <tr key={r.id} className="hover:bg-gray-50 transition-colors">
+                      <td className="px-5 py-3 text-gray-600 text-xs">{formatDate(r.started_at)}</td>
+                      <td className="px-4 py-3 text-right font-medium">{r.total_images}</td>
+                      <td className="px-4 py-3 text-right text-emerald-600 font-medium">{r.optimized_count}</td>
+                      <td className="px-4 py-3 text-right text-gray-400">{r.skipped_count}</td>
+                      <td className="px-4 py-3 text-right font-semibold text-blue-600">{formatBytes(r.bytes_saved)}</td>
+                      <td className="px-4 py-3 text-center">
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full ${
+                          r.status === 'completed' ? 'bg-emerald-100 text-emerald-700' :
+                          r.status === 'running'   ? 'bg-blue-100 text-blue-700' :
+                          'bg-red-100 text-red-700'
+                        }`}>
+                          {r.status === 'running' && <Loader2 size={10} className="animate-spin" />}
+                          {r.status === 'completed' ? 'Hoàn tất' : r.status === 'running' ? 'Đang chạy' : 'Lỗi'}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Mobile cards */}
+            <div className="md:hidden divide-y divide-gray-100">
               {results.map((r: ImageOptResult) => (
-                <tr key={r.id} className="hover:bg-gray-50">
-                  <td className="px-4 py-2 text-gray-600">{formatDate(r.started_at)}</td>
-                  <td className="px-4 py-2">{r.total_images}</td>
-                  <td className="px-4 py-2 text-green-600">{r.optimized_count}</td>
-                  <td className="px-4 py-2 text-gray-500">{r.skipped_count}</td>
-                  <td className="px-4 py-2 font-medium text-blue-600">{formatBytes(r.bytes_saved)}</td>
-                  <td className="px-4 py-2">
-                    <span className={`inline-flex px-2 py-0.5 text-xs font-medium rounded-full ${
-                      r.status === 'completed' ? 'bg-green-100 text-green-700' :
-                      r.status === 'running' ? 'bg-blue-100 text-blue-700' :
+                <div key={r.id} className="px-4 py-3">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs text-gray-500">{formatDate(r.started_at)}</span>
+                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full ${
+                      r.status === 'completed' ? 'bg-emerald-100 text-emerald-700' :
+                      r.status === 'running'   ? 'bg-blue-100 text-blue-700' :
                       'bg-red-100 text-red-700'
-                    }`}>{r.status}</span>
-                  </td>
-                </tr>
+                    }`}>
+                      {r.status === 'running' && <Loader2 size={10} className="animate-spin" />}
+                      {r.status === 'completed' ? 'Hoàn tất' : r.status === 'running' ? 'Đang chạy' : 'Lỗi'}
+                    </span>
+                  </div>
+                  <div className="flex gap-4 text-xs text-gray-600">
+                    <span>{r.total_images} ảnh</span>
+                    <span className="text-emerald-600">✓ {r.optimized_count}</span>
+                    <span className="text-blue-600 font-medium">{formatBytes(r.bytes_saved)} tiết kiệm</span>
+                  </div>
+                </div>
               ))}
-            </tbody>
-          </table>
+            </div>
+          </>
         )}
       </div>
     </div>
@@ -1539,16 +1650,71 @@ function MultisitePanel({ siteId, isMultisite, canManage }: { siteId: number; is
 function DomainsPanel({ siteId, canManage }: { siteId: number; canManage: boolean }) {
   const { data: domains = [], isLoading } = useDomains(siteId)
   const createDomain = useCreateDomain()
+  const updateDomain = useUpdateDomain()
   const deleteDomain = useDeleteDomain()
+  const issueDomainSSL = useIssueDomainSSL()
+  const checkDNS = useCheckDNS(siteId)
+
   const [showForm, setShowForm] = useState(false)
   const [newDomain, setNewDomain] = useState('')
   const [newType, setNewType] = useState<'alias' | 'subdomain'>('alias')
+  const [dnsResult, setDnsResult] = useState<{ domain: string; pointing: boolean; message: string } | null>(null)
+  const [dnsChecking, setDnsChecking] = useState(false)
+
+  // Redirect edit modal state
+  const [redirectModal, setRedirectModal] = useState<{ domainId: number; domain: string; redirectTo: string; redirectType: number } | null>(null)
+
+  // SSL issuing state per domain
+  const [sslIssuingId, setSslIssuingId] = useState<number | null>(null)
+  const [sslError, setSslError] = useState<string | null>(null)
+
+  const handleCheckDNS = async () => {
+    if (!newDomain.trim()) return
+    setDnsChecking(true)
+    setDnsResult(null)
+    try {
+      const res = await checkDNS.mutateAsync(newDomain.trim())
+      setDnsResult({ domain: res.domain, pointing: res.pointing, message: res.message })
+    } catch {
+      setDnsResult({ domain: newDomain, pointing: false, message: 'DNS check failed' })
+    } finally {
+      setDnsChecking(false)
+    }
+  }
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault()
     await createDomain.mutateAsync({ siteId, domain: newDomain, type: newType })
     setNewDomain('')
+    setDnsResult(null)
     setShowForm(false)
+  }
+
+  const handleIssueSSL = async (domainId: number) => {
+    setSslIssuingId(domainId)
+    setSslError(null)
+    try {
+      await issueDomainSSL.mutateAsync({ siteId, domainId })
+    } catch (e: any) {
+      setSslError(e?.response?.data?.error || 'SSL issuance failed')
+    } finally {
+      setSslIssuingId(null)
+    }
+  }
+
+  const handleSaveRedirect = async () => {
+    if (!redirectModal) return
+    await updateDomain.mutateAsync({
+      siteId,
+      domainId: redirectModal.domainId,
+      redirect_to: redirectModal.redirectTo,
+      redirect_type: redirectModal.redirectType,
+    })
+    setRedirectModal(null)
+  }
+
+  const handleClearRedirect = async (domainId: number) => {
+    await updateDomain.mutateAsync({ siteId, domainId, redirect_to: '', redirect_type: 0 })
   }
 
   return (
@@ -1565,46 +1731,188 @@ function DomainsPanel({ siteId, canManage }: { siteId: number; canManage: boolea
         )}
       </div>
 
+      {/* Add Domain Form */}
       {showForm && (
-        <form onSubmit={handleCreate} className="flex gap-3 mb-4 p-4 bg-gray-50 rounded-lg">
-          <input type="text" placeholder="example.com" value={newDomain}
-            onChange={e => setNewDomain(e.target.value)}
-            className="flex-1 px-3 py-2 border rounded-lg text-sm" required />
-          <select value={newType} onChange={e => setNewType(e.target.value as 'alias' | 'subdomain')}
-            className="px-3 py-2 border rounded-lg text-sm">
-            <option value="alias">Alias</option>
-            <option value="subdomain">Subdomain</option>
-          </select>
-          <button type="submit" disabled={createDomain.isPending}
-            className="px-4 py-2 text-sm text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:opacity-50">
-            {createDomain.isPending ? '...' : 'Add'}
-          </button>
-        </form>
+        <div className="mb-4 p-4 bg-gray-50 rounded-xl border border-gray-200 space-y-3">
+          <div className="flex gap-3">
+            <input type="text" placeholder="e.g. www.example.com" value={newDomain}
+              onChange={e => { setNewDomain(e.target.value); setDnsResult(null) }}
+              className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:border-blue-500" />
+            <select value={newType} onChange={e => setNewType(e.target.value as 'alias' | 'subdomain')}
+              className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white">
+              <option value="alias">Alias</option>
+              <option value="subdomain">Subdomain</option>
+            </select>
+            <button type="button" onClick={handleCheckDNS} disabled={!newDomain.trim() || dnsChecking}
+              className="flex items-center gap-1.5 px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-100 disabled:opacity-50">
+              {dnsChecking ? <Loader2 size={14} className="animate-spin" /> : <Network size={14} />}
+              Check DNS
+            </button>
+          </div>
+
+          {/* DNS check result */}
+          {dnsResult && (
+            <div className={`flex items-start gap-2 p-3 rounded-lg text-sm ${dnsResult.pointing ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
+              {dnsResult.pointing
+                ? <CheckCircle2 size={15} className="shrink-0 mt-0.5" />
+                : <AlertCircle size={15} className="shrink-0 mt-0.5" />}
+              <span>{dnsResult.message}</span>
+            </div>
+          )}
+
+          <div className="flex justify-end gap-2">
+            <button type="button" onClick={() => { setShowForm(false); setDnsResult(null) }}
+              className="px-3 py-2 text-sm border rounded-lg hover:bg-gray-50">Cancel</button>
+            <button type="button" onClick={handleCreate} disabled={!newDomain.trim() || createDomain.isPending}
+              className="px-4 py-2 text-sm text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50">
+              {createDomain.isPending ? 'Adding...' : 'Add Domain'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {sslError && (
+        <div className="mb-3 flex items-center gap-2 p-3 bg-red-50 text-red-700 text-sm rounded-lg">
+          <AlertCircle size={15} /> {sslError}
+        </div>
       )}
 
       {isLoading ? (
-        <div className="flex justify-center py-8"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600" /></div>
+        <div className="flex justify-center py-8"><Loader2 className="animate-spin text-blue-600" size={24} /></div>
       ) : domains.length === 0 ? (
         <p className="text-sm text-gray-400 text-center py-8">No domains configured</p>
       ) : (
         <div className="space-y-2">
           {domains.map(d => (
-            <div key={d.id} className="flex items-center justify-between p-3 border border-gray-200 rounded-lg">
-              <div className="flex items-center gap-3">
-                <Globe size={16} className="text-blue-500" />
-                <span className="text-sm font-medium text-gray-900">{d.domain}</span>
-                <span className={`px-2 py-0.5 rounded text-xs font-medium ${
-                  d.type === 'primary' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'
-                }`}>{d.type}</span>
+            <div key={d.id} className="border border-gray-200 rounded-xl overflow-hidden">
+              {/* Domain row */}
+              <div className="flex items-center justify-between p-3 bg-white">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Globe size={15} className="text-blue-500 shrink-0" />
+                  <a href={`https://${d.domain}`} target="_blank" rel="noreferrer"
+                    className="text-sm font-medium text-gray-900 hover:text-blue-600 flex items-center gap-1">
+                    {d.domain} <ExternalLink size={11} />
+                  </a>
+                  {/* Type badge */}
+                  <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                    d.type === 'primary' ? 'bg-blue-100 text-blue-700' :
+                    d.type === 'subdomain' ? 'bg-purple-100 text-purple-700' :
+                    'bg-gray-100 text-gray-600'
+                  }`}>{d.type}</span>
+                  {/* SSL badge */}
+                  {d.ssl_enabled ? (
+                    <span className="flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-emerald-100 text-emerald-700">
+                      <ShieldCheck size={11} /> SSL
+                    </span>
+                  ) : d.type !== 'primary' && (
+                    <span className="px-2 py-0.5 rounded text-xs bg-gray-100 text-gray-400">No SSL</span>
+                  )}
+                  {/* Redirect badge */}
+                  {d.redirect_to && (
+                    <span className="flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">
+                      <CornerDownRight size={11} /> {d.redirect_type}→
+                    </span>
+                  )}
+                </div>
+
+                {/* Actions */}
+                {canManage && d.type !== 'primary' && (
+                  <div className="flex items-center gap-1 shrink-0">
+                    {/* Issue SSL button */}
+                    {!d.ssl_enabled && (
+                      <button
+                        onClick={() => handleIssueSSL(d.id)}
+                        disabled={sslIssuingId === d.id}
+                        title="Issue SSL (certbot expand)"
+                        className="flex items-center gap-1 px-2 py-1 text-xs border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-50 text-gray-600">
+                        {sslIssuingId === d.id ? <Loader2 size={12} className="animate-spin" /> : <Lock size={12} />}
+                        SSL
+                      </button>
+                    )}
+                    {/* Configure redirect */}
+                    <button
+                      onClick={() => setRedirectModal({
+                        domainId: d.id, domain: d.domain,
+                        redirectTo: d.redirect_to || '', redirectType: d.redirect_type || 301
+                      })}
+                      title="Configure redirect"
+                      className="p-1.5 text-gray-400 hover:text-blue-600 rounded hover:bg-gray-50">
+                      <CornerDownRight size={14} />
+                    </button>
+                    {/* Delete */}
+                    <button onClick={() => deleteDomain.mutate({ siteId, domainId: d.id })}
+                      title="Remove domain"
+                      className="p-1.5 text-gray-400 hover:text-red-600 rounded hover:bg-gray-50">
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                )}
               </div>
-              {canManage && d.type !== 'primary' && (
-                <button onClick={() => deleteDomain.mutate({ siteId, domainId: d.id })}
-                  className="p-1 text-gray-400 hover:text-red-600">
-                  <Trash2 size={14} />
-                </button>
+
+              {/* Redirect info row */}
+              {d.redirect_to && (
+                <div className="flex items-center gap-2 px-3 py-2 bg-amber-50 border-t border-amber-100 text-xs text-amber-700">
+                  <CornerDownRight size={12} />
+                  <span className="font-medium">{d.redirect_type ?? 301}</span>
+                  <span className="text-amber-400">→</span>
+                  <span className="truncate max-w-[300px]">{d.redirect_to}</span>
+                  {canManage && (
+                    <button onClick={() => handleClearRedirect(d.id)}
+                      className="ml-auto p-0.5 text-amber-400 hover:text-amber-700">
+                      <X size={12} />
+                    </button>
+                  )}
+                </div>
               )}
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Redirect Config Modal */}
+      {redirectModal && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+                <CornerDownRight size={18} className="text-amber-500" /> Redirect Config
+              </h3>
+              <button onClick={() => setRedirectModal(null)} className="text-gray-400 hover:text-gray-600">
+                <X size={18} />
+              </button>
+            </div>
+            <p className="text-sm text-gray-500 mb-4">
+              Domain <strong>{redirectModal.domain}</strong> will return a redirect instead of serving the site.
+            </p>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Redirect Type</label>
+                <select value={redirectModal.redirectType}
+                  onChange={e => setRedirectModal(m => m ? { ...m, redirectType: Number(e.target.value) } : m)}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50">
+                  <option value={301}>301 — Permanent redirect</option>
+                  <option value={302}>302 — Temporary redirect</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Redirect To</label>
+                <input type="url" placeholder="https://www.example.com"
+                  value={redirectModal.redirectTo}
+                  onChange={e => setRedirectModal(m => m ? { ...m, redirectTo: e.target.value } : m)}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:outline-none focus:border-blue-500" />
+                <p className="text-xs text-gray-400 mt-1">$request_uri will be appended automatically</p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-5">
+              <button onClick={() => setRedirectModal(null)}
+                className="px-4 py-2 text-sm border rounded-lg hover:bg-gray-50">Cancel</button>
+              <button onClick={handleSaveRedirect}
+                disabled={!redirectModal.redirectTo || updateDomain.isPending}
+                className="px-4 py-2 text-sm text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50">
+                {updateDomain.isPending ? 'Saving...' : 'Save Redirect'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -1700,143 +2008,6 @@ function CronPanel({ siteId }: { siteId: number }) {
               <p className="text-sm font-mono text-gray-700">{job.command}</p>
             </div>
           ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ==================== Monitoring Panel ====================
-
-function MonitoringPanel({ siteId, canManage }: { siteId: number; canManage: boolean }) {
-  const { data: checks = [], isLoading } = useUptimeChecks(siteId)
-  const createCheck = useCreateUptimeCheck(siteId)
-  const deleteCheck = useDeleteUptimeCheck(siteId)
-  const [showForm, setShowForm] = useState(false)
-  const [url, setUrl] = useState('')
-  const [selectedCheck, setSelectedCheck] = useState<number | null>(null)
-  const { data: history = [] } = useUptimeHistory(siteId, selectedCheck ?? 0)
-
-  const handleCreate = async (e: React.FormEvent) => {
-    e.preventDefault()
-    try {
-      await createCheck.mutateAsync({ url, interval: 60 })
-      setUrl('')
-      setShowForm(false)
-    } catch {}
-  }
-
-  const getStatusColor = (code: number) => {
-    if (code === 0) return 'bg-gray-100 text-gray-600'
-    if (code >= 200 && code < 300) return 'bg-green-100 text-green-700'
-    if (code >= 400) return 'bg-red-100 text-red-700'
-    return 'bg-yellow-100 text-yellow-700'
-  }
-
-  return (
-    <div className="space-y-6">
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-            <Activity size={20} className="text-blue-500" /> Uptime Monitoring
-          </h2>
-          {canManage && (
-            <button onClick={() => setShowForm(!showForm)}
-              className="flex items-center gap-1.5 px-3 py-2 text-sm text-white bg-blue-600 rounded-lg hover:bg-blue-700">
-              <Plus size={14} /> Add Check
-            </button>
-          )}
-        </div>
-
-        <p className="text-sm text-gray-500 mb-4">
-          Monitor your site&apos;s availability with periodic HTTP checks. Get notified when your site goes down.
-        </p>
-
-        {showForm && (
-          <form onSubmit={handleCreate} className="bg-gray-50 rounded-lg p-4 mb-4 flex gap-3">
-            <input value={url} onChange={e => setUrl(e.target.value)}
-              className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm"
-              placeholder="https://example.com" required />
-            <button type="submit" disabled={createCheck.isPending}
-              className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">
-              {createCheck.isPending ? 'Adding...' : 'Add'}
-            </button>
-            <button type="button" onClick={() => setShowForm(false)}
-              className="px-4 py-2 text-sm bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300">
-              Cancel
-            </button>
-          </form>
-        )}
-
-        {isLoading ? (
-          <div className="flex justify-center py-8"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600" /></div>
-        ) : checks.length === 0 ? (
-          <p className="text-sm text-gray-400 text-center py-8">No uptime checks configured</p>
-        ) : (
-          <div className="space-y-3">
-            {checks.map(check => (
-              <div key={check.id}
-                className={`p-4 border rounded-lg cursor-pointer transition-colors ${selectedCheck === check.id ? 'border-blue-300 bg-blue-50' : 'border-gray-100 hover:bg-gray-50'}`}
-                onClick={() => setSelectedCheck(selectedCheck === check.id ? null : check.id)}>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className={`w-3 h-3 rounded-full ${check.last_status >= 200 && check.last_status < 300 ? 'bg-green-500' : check.last_status === 0 && !check.last_check ? 'bg-gray-300' : 'bg-red-500'}`} />
-                    <div>
-                      <p className="text-sm font-medium text-gray-900">{check.url}</p>
-                      <p className="text-xs text-gray-500">
-                        Check every {check.interval}s
-                        {check.last_check && ` · Last: ${new Date(check.last_check).toLocaleString()}`}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${check.enabled ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
-                      {check.enabled ? 'Active' : 'Paused'}
-                    </span>
-                    {canManage && (
-                      <button onClick={(e) => { e.stopPropagation(); if (confirm('Delete this check?')) deleteCheck.mutate(check.id) }}
-                        className="p-1 text-gray-400 hover:text-red-600">
-                        <Trash2 size={14} />
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Uptime History */}
-      {selectedCheck && history.length > 0 && (
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-          <h3 className="text-sm font-semibold text-gray-900 mb-3">Recent Check History</h3>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-gray-500 border-b">
-                  <th className="pb-2 font-medium">Time</th>
-                  <th className="pb-2 font-medium">Status</th>
-                  <th className="pb-2 font-medium">Response</th>
-                  <th className="pb-2 font-medium">Error</th>
-                </tr>
-              </thead>
-              <tbody>
-                {history.slice(0, 20).map(log => (
-                  <tr key={log.id} className="border-b border-gray-50">
-                    <td className="py-2 text-gray-600">{new Date(log.created_at).toLocaleString()}</td>
-                    <td className="py-2">
-                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${getStatusColor(log.status_code)}`}>
-                        {log.status_code || 'ERR'}
-                      </span>
-                    </td>
-                    <td className="py-2 text-gray-600">{log.response_ms}ms</td>
-                    <td className="py-2 text-red-500 text-xs truncate max-w-[200px]">{log.error || '-'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
         </div>
       )}
     </div>
@@ -2179,34 +2350,70 @@ function WAFPanel({ siteId, canManage }: { siteId: number; canManage: boolean })
 
 // ==================== Security Panel ====================
 
+type HardenOptionsState = {
+  disable_xmlrpc: boolean
+  hide_wp_version: boolean
+  secure_file_perms: boolean
+  security_headers: boolean
+  disable_file_editor: boolean
+}
+
+const HARDEN_OPTIONS_LIST = [
+  { key: 'disable_xmlrpc' as const, label: 'Disable XML-RPC', desc: 'Block xmlrpc.php to prevent brute-force and DDoS attacks' },
+  { key: 'hide_wp_version' as const, label: 'Hide WordPress Version', desc: 'Remove WP version meta tag from page source' },
+  { key: 'secure_file_perms' as const, label: 'Secure File Permissions', desc: 'Set directories to 755, files to 644, wp-config.php to 600' },
+  { key: 'security_headers' as const, label: 'Add Security Headers', desc: 'Add X-Content-Type-Options, X-Frame-Options, XSS-Protection headers' },
+  { key: 'disable_file_editor' as const, label: 'Disable File Editor', desc: 'Disable the built-in WordPress theme/plugin editor' },
+]
+
 function SecurityPanel({ siteId, canManage }: { siteId: number; canManage: boolean }) {
   const harden = useHardenWordPress(siteId)
-  const [options, setOptions] = useState({
+  const revert = useRevertHardening(siteId)
+
+  const defaultOptions: HardenOptionsState = {
     disable_xmlrpc: true,
     hide_wp_version: true,
     secure_file_perms: true,
     security_headers: true,
     disable_file_editor: true,
-  })
+  }
 
-  const handleHarden = async () => {
+  const [applyOptions, setApplyOptions] = useState<HardenOptionsState>(defaultOptions)
+  const [revertOptions, setRevertOptions] = useState<HardenOptionsState>(defaultOptions)
+  const [activeAction, setActiveAction] = useState<'apply' | 'revert'>('apply')
+
+  const [applyMsg, setApplyMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [revertMsg, setRevertMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+
+  const handleApply = async () => {
     if (!confirm('Apply security hardening? This will modify server configurations.')) return
+    setApplyMsg(null)
     try {
-      await harden.mutateAsync(options)
-    } catch {}
+      await harden.mutateAsync(applyOptions)
+      setApplyMsg({ type: 'success', text: '✓ Hardening applied successfully. All selected measures are now active on the server.' })
+    } catch (err: any) {
+      setApplyMsg({ type: 'error', text: err?.response?.data?.error || 'Failed to apply hardening. Please try again.' })
+    }
   }
 
-  const toggleOption = (key: keyof typeof options) => {
-    setOptions(prev => ({ ...prev, [key]: !prev[key] }))
+  const handleRevert = async () => {
+    if (!confirm('Revert selected hardening measures? This will undo the selected security configurations.')) return
+    setRevertMsg(null)
+    try {
+      await revert.mutateAsync(revertOptions)
+      setRevertMsg({ type: 'success', text: '✓ Hardening measures reverted successfully.' })
+    } catch (err: any) {
+      setRevertMsg({ type: 'error', text: err?.response?.data?.error || 'Failed to revert hardening. Please try again.' })
+    }
   }
 
-  const hardeningOptions = [
-    { key: 'disable_xmlrpc' as const, label: 'Disable XML-RPC', desc: 'Block xmlrpc.php to prevent brute-force and DDoS attacks' },
-    { key: 'hide_wp_version' as const, label: 'Hide WordPress Version', desc: 'Remove WP version meta tag from page source' },
-    { key: 'secure_file_perms' as const, label: 'Secure File Permissions', desc: 'Set directories to 755, files to 644, wp-config.php to 600' },
-    { key: 'security_headers' as const, label: 'Add Security Headers', desc: 'Add X-Content-Type-Options, X-Frame-Options, XSS-Protection headers' },
-    { key: 'disable_file_editor' as const, label: 'Disable File Editor', desc: 'Disable the built-in WordPress theme/plugin editor' },
-  ]
+  const toggleApply = (key: keyof HardenOptionsState) =>
+    setApplyOptions(prev => ({ ...prev, [key]: !prev[key] }))
+
+  const toggleRevert = (key: keyof HardenOptionsState) =>
+    setRevertOptions(prev => ({ ...prev, [key]: !prev[key] }))
+
+  const busy = harden.isPending || revert.isPending
 
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
@@ -2214,44 +2421,116 @@ function SecurityPanel({ siteId, canManage }: { siteId: number; canManage: boole
         <Shield size={20} className="text-green-600" /> WordPress Security Hardening
       </h2>
 
-      <p className="text-sm text-gray-500 mb-6">
-        Apply security hardening measures to protect your WordPress site. Select the options below and click apply.
-      </p>
-
-      <div className="space-y-3 mb-6">
-        {hardeningOptions.map(opt => (
-          <label key={opt.key}
-            className={`flex items-start gap-3 p-4 border rounded-lg cursor-pointer transition-colors ${
-              options[opt.key] ? 'border-green-200 bg-green-50' : 'border-gray-200 hover:bg-gray-50'
-            }`}>
-            <input type="checkbox" checked={options[opt.key]} onChange={() => toggleOption(opt.key)}
-              className="mt-0.5 h-4 w-4 text-green-600 rounded border-gray-300 focus:ring-green-500" />
-            <div>
-              <p className="text-sm font-medium text-gray-900">{opt.label}</p>
-              <p className="text-xs text-gray-500 mt-0.5">{opt.desc}</p>
-            </div>
-          </label>
-        ))}
+      {/* Tab switcher */}
+      <div className="flex gap-1 mb-6 bg-gray-100 rounded-lg p-1 w-fit">
+        <button
+          onClick={() => setActiveAction('apply')}
+          className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors ${
+            activeAction === 'apply' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          Apply
+        </button>
+        <button
+          onClick={() => setActiveAction('revert')}
+          className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors ${
+            activeAction === 'revert' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          Revert
+        </button>
       </div>
 
-      {canManage && (
-        <button onClick={handleHarden} disabled={harden.isPending || !Object.values(options).some(v => v)}
-          className="flex items-center gap-2 px-4 py-2.5 text-sm text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:opacity-50">
-          {harden.isPending ? <Loader2 size={16} className="animate-spin" /> : <Shield size={16} />}
-          {harden.isPending ? 'Applying on server…' : 'Apply Hardening'}
-        </button>
-      )}
+      {activeAction === 'apply' ? (
+        <>
+          <p className="text-sm text-gray-500 mb-5">
+            Select the hardening measures to apply to this site, then click <strong>Apply Hardening</strong>.
+          </p>
 
-      {harden.isSuccess && (
-        <div className="mt-4 p-3 bg-green-50 border border-green-200 rounded-lg">
-          <p className="text-sm text-green-700">✓ Hardening applied successfully. All selected measures are now active on the server.</p>
-        </div>
-      )}
+          <div className="space-y-3 mb-6">
+            {HARDEN_OPTIONS_LIST.map(opt => (
+              <label key={opt.key}
+                className={`flex items-start gap-3 p-4 border rounded-lg cursor-pointer transition-colors ${
+                  applyOptions[opt.key] ? 'border-green-200 bg-green-50' : 'border-gray-200 hover:bg-gray-50'
+                }`}>
+                <input type="checkbox" checked={applyOptions[opt.key]} onChange={() => toggleApply(opt.key)}
+                  className="mt-0.5 h-4 w-4 text-green-600 rounded border-gray-300 focus:ring-green-500" />
+                <div>
+                  <p className="text-sm font-medium text-gray-900">{opt.label}</p>
+                  <p className="text-xs text-gray-500 mt-0.5">{opt.desc}</p>
+                </div>
+              </label>
+            ))}
+          </div>
 
-      {harden.isError && (
-        <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg">
-          <p className="text-sm text-red-700">Failed to apply hardening. Please try again.</p>
-        </div>
+          {canManage && (
+            <button
+              onClick={handleApply}
+              disabled={busy || !Object.values(applyOptions).some(v => v)}
+              className="flex items-center gap-2 px-4 py-2.5 text-sm text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:opacity-50"
+            >
+              {harden.isPending ? <><Loader2 size={16} className="animate-spin" /> Applying on server…</> : <><Shield size={16} /> Apply Hardening</>}
+            </button>
+          )}
+
+          {applyMsg && (
+            <div className={`mt-4 p-3 rounded-lg border text-sm ${
+              applyMsg.type === 'success' ? 'bg-green-50 border-green-200 text-green-700' : 'bg-red-50 border-red-200 text-red-700'
+            }`}>
+              {applyMsg.text}
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          <p className="text-sm text-gray-500 mb-5">
+            Select which hardening measures to <strong>undo</strong>. Only measures that were previously applied will be affected.
+            <br /><span className="text-amber-600 font-medium">Note: File permissions (755/644/600) are not reverted as they are safe to keep.</span>
+          </p>
+
+          <div className="space-y-3 mb-6">
+            {HARDEN_OPTIONS_LIST.filter(o => o.key !== 'secure_file_perms').map(opt => (
+              <label key={opt.key}
+                className={`flex items-start gap-3 p-4 border rounded-lg cursor-pointer transition-colors ${
+                  revertOptions[opt.key] ? 'border-amber-200 bg-amber-50' : 'border-gray-200 hover:bg-gray-50'
+                }`}>
+                <input type="checkbox" checked={revertOptions[opt.key]} onChange={() => toggleRevert(opt.key)}
+                  className="mt-0.5 h-4 w-4 text-amber-600 rounded border-gray-300 focus:ring-amber-500" />
+                <div>
+                  <p className="text-sm font-medium text-gray-900">{opt.label}</p>
+                  <p className="text-xs text-gray-500 mt-0.5">{opt.desc}</p>
+                </div>
+              </label>
+            ))}
+            {/* Secure file perms - show as disabled */}
+            <div className="flex items-start gap-3 p-4 border border-gray-100 rounded-lg opacity-50 cursor-not-allowed bg-gray-50">
+              <input type="checkbox" disabled checked={false}
+                className="mt-0.5 h-4 w-4 rounded border-gray-300" />
+              <div>
+                <p className="text-sm font-medium text-gray-500">Secure File Permissions</p>
+                <p className="text-xs text-gray-400 mt-0.5">Cannot be reverted — 755/644/600 permissions are safe to keep</p>
+              </div>
+            </div>
+          </div>
+
+          {canManage && (
+            <button
+              onClick={handleRevert}
+              disabled={busy || !HARDEN_OPTIONS_LIST.filter(o => o.key !== 'secure_file_perms').some(o => revertOptions[o.key])}
+              className="flex items-center gap-2 px-4 py-2.5 text-sm text-white bg-amber-600 rounded-lg hover:bg-amber-700 disabled:opacity-50"
+            >
+              {revert.isPending ? <><Loader2 size={16} className="animate-spin" /> Reverting on server…</> : <><Shield size={16} /> Revert Hardening</>}
+            </button>
+          )}
+
+          {revertMsg && (
+            <div className={`mt-4 p-3 rounded-lg border text-sm ${
+              revertMsg.type === 'success' ? 'bg-green-50 border-green-200 text-green-700' : 'bg-red-50 border-red-200 text-red-700'
+            }`}>
+              {revertMsg.text}
+            </div>
+          )}
+        </>
       )}
     </div>
   )

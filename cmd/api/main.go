@@ -21,6 +21,9 @@ import (
 	pkglogger "github.com/gofiber-team/wp-manage/pkg/logger"
 )
 
+// Version is set at build time via -ldflags="-X main.Version=..."
+var Version = "dev"
+
 func main() {
 	cfg := config.Load()
 	pkglogger.Init(cfg.Server.Mode)
@@ -44,7 +47,6 @@ func main() {
 	userService := services.NewUserService(db)
 	apiKeyService := services.NewAPIKeyService(db)
 	backupService := services.NewBackupService(db)
-	migrationService := services.NewMigrationService(db)
 	securityService := services.NewSecurityService(db)
 	wordpressService := services.NewWordPressService(db)
 	rolloutService := services.NewRolloutService(db)
@@ -66,10 +68,11 @@ func main() {
 	cacheService := services.NewCacheService(db)
 	importService := services.NewImportService(db)
 	dnsService := services.NewDNSService(db)
+	migrationService := services.NewMigrationService(db, dnsService)
 	sslService := services.NewSSLService(db)
 	storageService := services.NewStorageService(db)
 	fail2banService := services.NewFail2BanService(db)
-	panelUpdateService := services.NewPanelUpdateService(db, "1.0.0")
+	panelUpdateService := services.NewPanelUpdateService(db, Version)
 
 	// WebSocket Hub
 	hub := ws.NewHub()
@@ -113,6 +116,7 @@ func main() {
 	storageHandler := handlers.NewStorageHandler(storageService)
 	fail2banHandler := handlers.NewFail2BanHandler(fail2banService)
 	panelUpdateHandler := handlers.NewPanelUpdateHandler(panelUpdateService)
+	updateCheckHandler := handlers.NewUpdateCheckHandler(panelUpdateService, rolloutService, serverService)
 
 	// Fiber app
 	app := fiber.New(fiber.Config{
@@ -139,7 +143,7 @@ func main() {
 
 	// API routes
 	routes.Setup(app, cfg, authHandler, serverHandler, siteHandler, deployHandler, fileHandler,
-		userHandler, apiKeyHandler, backupHandler, migrationHandler, securityHandler, wordpressHandler, rolloutHandler, performanceHandler, multisiteHandler, imageOptHandler, teamHandler, infraHandler, activityHandler, cronHandler, domainHandler, redisHandler, sshHandler, sftpHandler, hardeningHandler, uptimeHandler, alertHandler, wpcliHandler, cacheHandler, importHandler, dnsHandler, sslHandler, storageHandler, fail2banHandler, panelUpdateHandler, userService, apiKeyService, rateLimiter)
+		userHandler, apiKeyHandler, backupHandler, migrationHandler, securityHandler, wordpressHandler, rolloutHandler, performanceHandler, multisiteHandler, imageOptHandler, teamHandler, infraHandler, activityHandler, cronHandler, domainHandler, redisHandler, sshHandler, sftpHandler, hardeningHandler, uptimeHandler, alertHandler, wpcliHandler, cacheHandler, importHandler, dnsHandler, sslHandler, storageHandler, fail2banHandler, panelUpdateHandler, updateCheckHandler, userService, apiKeyService, rateLimiter)
 
 	// Background workers
 	uptimeWorker := workers.NewUptimeWorker(uptimeService, alertService, hub)
@@ -154,12 +158,15 @@ func main() {
 	backupRotationWorker := workers.NewBackupRotationWorker(db)
 	backupRotationWorker.Start()
 
+	scanScheduleWorker := workers.NewScanScheduleWorker(db, securityService)
+	go scanScheduleWorker.Start()
+
 	// Integrate alert worker with server handler
 	serverHandler.SetAlertWorker(alertWorker)
 
 	// Health check
 	app.Get("/health", func(c *fiber.Ctx) error {
-		return c.JSON(fiber.Map{"status": "ok", "version": "1.0.0"})
+		return c.JSON(fiber.Map{"status": "ok", "version": Version})
 	})
 
 	// Start

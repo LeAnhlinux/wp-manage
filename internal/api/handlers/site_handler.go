@@ -226,11 +226,15 @@ func (h *SiteHandler) UploadSource(c *fiber.Ctx) error {
 		return c.Status(500).JSON(models.APIResponse{Error: "Failed to store file: " + err.Error()})
 	}
 
-	// Queue agent task
+	// Queue agent task — include DB credentials so agent can patch wp-config.php
 	taskData := map[string]interface{}{
 		"domain":       site.Domain,
 		"download_url": fmt.Sprintf("/api/v1/agent/files/tmp/%s", token),
 		"file_token":   token,
+		"db_name":      site.DBName,
+		"db_user":      site.DBUser,
+		"db_pass":      site.DBPassword,
+		"db_host":      "localhost",
 	}
 	if err := h.svc.CreateJSONTask(site.ServerID, id, "upload_source_zip", taskData); err != nil {
 		os.Remove(tmpPath)
@@ -277,6 +281,10 @@ func (h *SiteHandler) ImportDB(c *fiber.Ctx) error {
 		return c.Status(500).JSON(models.APIResponse{Error: "Failed to store file: " + err.Error()})
 	}
 
+	// old_domain is optional — client can pass it to trigger wp search-replace after import.
+	// e.g. POST /sites/5/import-db?old_domain=localhost or ?old_domain=old-site.com
+	oldDomain := c.Query("old_domain")
+
 	// Queue agent task and wait synchronously (up to 300s for large files)
 	taskData := map[string]interface{}{
 		"domain":       site.Domain,
@@ -284,6 +292,7 @@ func (h *SiteHandler) ImportDB(c *fiber.Ctx) error {
 		"download_url": fmt.Sprintf("/api/v1/agent/files/tmp/%s", token),
 		"file_token":   token,
 		"file_ext":     ext,
+		"old_domain":   oldDomain,
 	}
 	task, err := h.svc.CreateJSONTaskReturn(site.ServerID, id, "import_db_sql", taskData)
 	if err != nil {
@@ -364,6 +373,28 @@ func (h *SiteHandler) Autologin(c *fiber.Ctx) error {
 	return c.JSON(models.APIResponse{
 		Success: true,
 		Data:    fiber.Map{"url": url},
+	})
+}
+
+// ResetAutologin clears the stored autologin secret so the next Autologin call
+// re-installs it from the agent (reading back the secret from wp-config.php).
+func (h *SiteHandler) ResetAutologin(c *fiber.Ctx) error {
+	id, _ := strconv.ParseUint(c.Params("id"), 10, 64)
+	site, err := h.svc.GetByID(id)
+	if err != nil {
+		return c.Status(404).JSON(models.APIResponse{Error: "Site not found"})
+	}
+	// Clear secret in DB
+	if err := h.svc.UpdateAutologinSecret(id, ""); err != nil {
+		return c.Status(500).JSON(models.APIResponse{Error: "Failed to reset secret"})
+	}
+	// Trigger re-install task so agent syncs wp-config.php → DB
+	h.svc.CreateTask(site.ServerID, id, "install_autologin", map[string]string{
+		"domain": site.Domain,
+	})
+	return c.JSON(models.APIResponse{
+		Success: true,
+		Data:    fiber.Map{"message": "Autologin secret reset. Re-install task queued — try again in 15 seconds."},
 	})
 }
 

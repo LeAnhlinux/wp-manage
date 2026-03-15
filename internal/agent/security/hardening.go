@@ -176,6 +176,170 @@ func addSecurityHeaders(domain string) error {
 	return nil
 }
 
+// ==================== Revert Functions ====================
+
+// RevertHardenWordPress undoes previously applied hardening measures.
+func RevertHardenWordPress(domain string, opts HardenOptions) error {
+	slog.Info("Reverting WordPress hardening", "domain", domain)
+	wpPath := fmt.Sprintf("/var/www/%s/public", domain)
+	var errors []string
+
+	if opts.DisableXMLRPC {
+		if err := revertXMLRPC(domain); err != nil {
+			errors = append(errors, fmt.Sprintf("xmlrpc: %v", err))
+		}
+	}
+	if opts.HideWPVersion {
+		if err := revertHideVersion(wpPath); err != nil {
+			errors = append(errors, fmt.Sprintf("wp-version: %v", err))
+		}
+	}
+	if opts.SecurityHeaders {
+		if err := revertSecurityHeaders(domain); err != nil {
+			errors = append(errors, fmt.Sprintf("headers: %v", err))
+		}
+	}
+	if opts.DisableFileEditor {
+		if err := revertDisableFileEditor(wpPath); err != nil {
+			errors = append(errors, fmt.Sprintf("file-editor: %v", err))
+		}
+	}
+	// SecureFilePerms intentionally not reverted (permissions 755/644 are safe to keep)
+
+	if len(errors) > 0 {
+		return fmt.Errorf("revert partial errors: %s", strings.Join(errors, "; "))
+	}
+	slog.Info("WordPress hardening reverted", "domain", domain)
+	return nil
+}
+
+func revertXMLRPC(domain string) error {
+	nginxConf := fmt.Sprintf("/etc/nginx/sites-available/%s.conf", domain)
+	data, err := os.ReadFile(nginxConf)
+	if err != nil {
+		return err
+	}
+
+	content := string(data)
+	if !strings.Contains(content, "xmlrpc.php") {
+		return nil // Already removed
+	}
+
+	// Remove the xmlrpc location block line by line
+	lines := strings.Split(content, "\n")
+	var newLines []string
+	inBlock := false
+	braceDepth := 0
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !inBlock {
+			if strings.Contains(trimmed, "# Block XML-RPC") {
+				continue // skip comment
+			}
+			if trimmed == "location = /xmlrpc.php {" {
+				inBlock = true
+				braceDepth = 1
+				continue
+			}
+			newLines = append(newLines, line)
+		} else {
+			braceDepth += strings.Count(line, "{") - strings.Count(line, "}")
+			if braceDepth <= 0 {
+				inBlock = false
+			}
+			// skip lines inside block
+		}
+	}
+
+	newContent := strings.Join(newLines, "\n")
+	for strings.Contains(newContent, "\n\n\n") {
+		newContent = strings.ReplaceAll(newContent, "\n\n\n", "\n\n")
+	}
+	if err := os.WriteFile(nginxConf, []byte(newContent), 0644); err != nil {
+		return err
+	}
+	if out, err := exec.Command("nginx", "-t").CombinedOutput(); err != nil {
+		return fmt.Errorf("nginx test failed: %s", string(out))
+	}
+	exec.Command("systemctl", "reload", "nginx").Run()
+	return nil
+}
+
+func revertHideVersion(wpPath string) error {
+	muPlugin := wpPath + "/wp-content/mu-plugins/wp-manage-hide-version.php"
+	if err := os.Remove(muPlugin); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+func revertSecurityHeaders(domain string) error {
+	nginxConf := fmt.Sprintf("/etc/nginx/sites-available/%s.conf", domain)
+	data, err := os.ReadFile(nginxConf)
+	if err != nil {
+		return err
+	}
+
+	content := string(data)
+	if !strings.Contains(content, "X-Content-Type-Options") {
+		return nil // Already removed
+	}
+
+	lines := strings.Split(content, "\n")
+	var newLines []string
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.Contains(trimmed, "# Security Headers") ||
+			strings.HasPrefix(trimmed, "add_header X-Content-Type-Options") ||
+			strings.HasPrefix(trimmed, "add_header X-Frame-Options") ||
+			strings.HasPrefix(trimmed, "add_header X-XSS-Protection") ||
+			strings.HasPrefix(trimmed, "add_header Referrer-Policy") ||
+			strings.HasPrefix(trimmed, "add_header Permissions-Policy") {
+			continue
+		}
+		newLines = append(newLines, line)
+	}
+
+	newContent := strings.Join(newLines, "\n")
+	for strings.Contains(newContent, "\n\n\n") {
+		newContent = strings.ReplaceAll(newContent, "\n\n\n", "\n\n")
+	}
+	if err := os.WriteFile(nginxConf, []byte(newContent), 0644); err != nil {
+		return err
+	}
+	if out, err := exec.Command("nginx", "-t").CombinedOutput(); err != nil {
+		return fmt.Errorf("nginx test failed: %s", string(out))
+	}
+	exec.Command("systemctl", "reload", "nginx").Run()
+	return nil
+}
+
+func revertDisableFileEditor(wpPath string) error {
+	wpConfig := wpPath + "/wp-config.php"
+	data, err := os.ReadFile(wpConfig)
+	if err != nil {
+		return err
+	}
+
+	content := string(data)
+	if !strings.Contains(content, "DISALLOW_FILE_EDIT") {
+		return nil
+	}
+
+	lines := strings.Split(content, "\n")
+	var newLines []string
+	for _, line := range lines {
+		if strings.Contains(line, "DISALLOW_FILE_EDIT") {
+			continue
+		}
+		newLines = append(newLines, line)
+	}
+	return os.WriteFile(wpConfig, []byte(strings.Join(newLines, "\n")), 0644)
+}
+
+// ==================== Original Apply Functions ====================
+
 func disableFileEditor(wpPath string) error {
 	slog.Info("Disabling WP file editor", "path", wpPath)
 

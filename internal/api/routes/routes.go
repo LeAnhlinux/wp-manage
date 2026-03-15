@@ -45,6 +45,7 @@ func Setup(
 	storageHandler *handlers.StorageHandler,
 	fail2banHandler *handlers.Fail2BanHandler,
 	panelUpdateHandler *handlers.PanelUpdateHandler,
+	updateCheckHandler *handlers.UpdateCheckHandler,
 	userSvc *services.UserService,
 	apiKeySvc *services.APIKeyService,
 	rateLimiter *middleware.RateLimiter,
@@ -65,6 +66,8 @@ func Setup(
 	agent.Post("/tasks/complete", serverHandler.TaskComplete)
 	agent.Post("/backups/complete", serverHandler.BackupComplete)
 	agent.Post("/migrations/update", migrationHandler.Update)
+	agent.Post("/migrations/:id/setup-ssh", migrationHandler.SetupSSH)
+	agent.Post("/migrations/:id/cleanup-ssh", migrationHandler.CleanupSSH)
 	agent.Post("/scans/complete", securityHandler.ScanComplete)
 	agent.Post("/staging/complete", wordpressHandler.StagingComplete)
 	agent.Post("/updates/complete", wordpressHandler.UpdateCheckComplete)
@@ -110,6 +113,8 @@ func Setup(
 	servers.Get("/:id", serverAccess, serverHandler.Get)
 	servers.Delete("/:id", middleware.PermissionRequired("servers", "delete"), serverHandler.Delete)
 	servers.Post("/deploy", middleware.PermissionRequired("servers", "deploy"), deployHandler.AutoDeploy)
+	// DNS check for site creation (no siteId exists yet — uses serverID)
+	servers.Get("/:id/check-dns", serverAccess, domainHandler.CheckDNSByServer)
 
 	// Site routes (with RBAC)
 	sites := protected.Group("/sites")
@@ -124,6 +129,7 @@ func Setup(
 	sites.Post("/:id/ssl", middleware.PermissionRequired("sites", "manage"), siteHandler.IssueSSL)
 	sites.Get("/:id/credentials", siteHandler.Credentials)
 	sites.Post("/:id/autologin", siteHandler.Autologin)
+	sites.Post("/:id/autologin/reset", middleware.PermissionRequired("sites", "manage"), siteHandler.ResetAutologin)
 	sites.Post("/:siteId/open-basedir/toggle", middleware.PermissionRequired("sites", "manage"), siteHandler.ToggleOpenBasedir)
 	sites.Post("/:id/upload-source", middleware.PermissionRequired("sites", "manage"), siteHandler.UploadSource)
 	sites.Post("/:id/import-db", middleware.PermissionRequired("sites", "manage"), siteHandler.ImportDB)
@@ -158,6 +164,7 @@ func Setup(
 	migrations.Get("/:id", migrationHandler.Get)
 	migrations.Post("/:id/rollback", middleware.PermissionRequired("sites", "manage"), migrationHandler.Rollback)
 	migrations.Post("/:id/cancel", middleware.PermissionRequired("sites", "manage"), migrationHandler.Cancel)
+	migrations.Post("/:id/cleanup-source", middleware.PermissionRequired("sites", "manage"), migrationHandler.CleanupSource)
 	migrations.Get("/:id/logs", migrationHandler.Logs)
 
 	siteMigrations := sites.Group("/:siteId/migrate")
@@ -175,6 +182,16 @@ func Setup(
 	siteScans := sites.Group("/:siteId/scans")
 	siteScans.Post("/", middleware.PermissionRequired("sites", "manage"), securityHandler.StartScan)
 	siteScans.Get("/", securityHandler.ListSiteScans)
+	// Scan schedules
+	siteScans.Get("/schedule", securityHandler.ListSchedules)
+	siteScans.Post("/schedule", middleware.PermissionRequired("sites", "manage"), securityHandler.CreateSchedule)
+	siteScans.Put("/schedule/:schedId", middleware.PermissionRequired("sites", "manage"), securityHandler.UpdateSchedule)
+	siteScans.Delete("/schedule/:schedId", middleware.PermissionRequired("sites", "manage"), securityHandler.DeleteSchedule)
+
+	// ClamAV — server-scoped (ClamAV is installed on the server, not per site)
+	serverClamAV := servers.Group("/:id/clamav")
+	serverClamAV.Get("/status", securityHandler.GetClamAVStatus)
+	serverClamAV.Post("/install", middleware.PermissionRequired("servers", "manage"), securityHandler.InstallClamAV)
 
 	// WordPress Advanced routes (staging, auto-update, DB optimize)
 	siteStaging := sites.Group("/:siteId/staging")
@@ -214,6 +231,7 @@ func Setup(
 	siteImages := sites.Group("/:siteId/image-optimization")
 	siteImages.Get("/", imageOptHandler.GetConfig)
 	siteImages.Put("/", middleware.PermissionRequired("sites", "manage"), imageOptHandler.UpdateConfig)
+	siteImages.Post("/toggle", middleware.PermissionRequired("sites", "manage"), imageOptHandler.Toggle)
 	siteImages.Post("/run", middleware.PermissionRequired("sites", "manage"), imageOptHandler.RunOptimization)
 	siteImages.Get("/results", imageOptHandler.GetResults)
 
@@ -262,6 +280,8 @@ func Setup(
 	servers.Post("/:id/opcache", serverAccess, middleware.PermissionRequired("sites", "manage"), infraHandler.OPcacheAction)
 	servers.Post("/:id/rebuild-config", serverAccess, middleware.PermissionRequired("sites", "manage"), infraHandler.RebuildConfig)
 	servers.Post("/:id/health-check", serverAccess, infraHandler.RunHealthCheck)
+	servers.Get("/:id/services", serverAccess, infraHandler.CheckServices)
+	servers.Post("/:id/services/:service/install", serverAccess, middleware.PermissionRequired("infrastructure", "manage"), infraHandler.InstallService)
 
 	// PHP version management — static routes MUST be before :siteId wildcard
 	servers.Get("/:id/phpfpm/installed", serverAccess, middleware.PermissionRequired("infrastructure", "read"), infraHandler.ListInstalledPHPVersions)
@@ -302,8 +322,11 @@ func Setup(
 	// Domain routes (site-scoped)
 	siteDomains := sites.Group("/:siteId/domains")
 	siteDomains.Get("/", domainHandler.List)
+	siteDomains.Get("/check-dns", domainHandler.CheckDNS)
 	siteDomains.Post("/", middleware.PermissionRequired("sites", "manage"), domainHandler.Create)
+	siteDomains.Put("/:domainId", middleware.PermissionRequired("sites", "manage"), domainHandler.Update)
 	siteDomains.Delete("/:domainId", middleware.PermissionRequired("sites", "manage"), domainHandler.Delete)
+	siteDomains.Post("/:domainId/ssl", middleware.PermissionRequired("sites", "manage"), domainHandler.IssueSSL)
 
 	// Redis routes (site-scoped)
 	siteRedis := sites.Group("/:siteId/redis")
@@ -325,12 +348,30 @@ func Setup(
 
 	// WordPress hardening routes (site-scoped)
 	sites.Post("/:siteId/harden", middleware.PermissionRequired("sites", "manage"), hardeningHandler.Harden)
+	sites.Post("/:siteId/harden/revert", middleware.PermissionRequired("sites", "manage"), hardeningHandler.RevertHarden)
 
 	// Activity log routes
 	activityLogs := protected.Group("/activity-logs")
 	activityLogs.Get("/", activityHandler.List)
 	activityLogs.Get("/actions", activityHandler.GetActions)
 	activityLogs.Delete("/cleanup", middleware.PermissionRequired("settings", "manage"), activityHandler.Cleanup)
+
+	// Global DNS providers (Option B — not server-scoped)
+	protected.Get("/dns-providers", middleware.PermissionRequired("infrastructure", "read"), dnsHandler.ListAll)
+	protected.Post("/dns-providers", middleware.PermissionRequired("infrastructure", "manage"), dnsHandler.CreateGlobal)
+	protected.Delete("/dns-providers/:id", middleware.PermissionRequired("infrastructure", "manage"), dnsHandler.DeleteGlobal)
+	protected.Post("/dns-providers/test", middleware.PermissionRequired("infrastructure", "manage"), dnsHandler.TestProvider)
+	protected.Post("/dns-providers/lookup-zone", middleware.PermissionRequired("infrastructure", "manage"), dnsHandler.LookupZone)
+	protected.Post("/dns-providers/auto-create-record", middleware.PermissionRequired("infrastructure", "manage"), dnsHandler.AutoCreateRecord)
+	globalDNS := protected.Group("/dns-providers/:id", middleware.PermissionRequired("infrastructure", "read"))
+	globalDNS.Get("/records", dnsHandler.ListRecordsGlobal)
+	globalDNS.Post("/records", middleware.PermissionRequired("infrastructure", "manage"), dnsHandler.CreateRecordGlobal)
+	globalDNS.Put("/records/:recordId", middleware.PermissionRequired("infrastructure", "manage"), dnsHandler.UpdateRecordGlobal)
+	globalDNS.Delete("/records/:recordId", middleware.PermissionRequired("infrastructure", "manage"), dnsHandler.DeleteRecordGlobal)
+
+	// Global monitoring routes (all sites)
+	monitoringGroup := protected.Group("/monitoring")
+	monitoringGroup.Get("/uptime", uptimeHandler.ListAll)
 
 	// SSH Keys routes (server-scoped)
 	serverSSH := servers.Group("/:id/ssh-keys", serverAccess)
@@ -423,8 +464,16 @@ func Setup(
 	// Panel Updates (admin only)
 	settings := protected.Group("/settings/panel-update", middleware.PermissionRequired("settings", "manage"))
 	settings.Get("/", panelUpdateHandler.GetStatus)
+	settings.Get("/last-result", panelUpdateHandler.GetLastUpdateResult)
 	settings.Post("/releases", panelUpdateHandler.CreateRelease)
 	settings.Get("/releases", panelUpdateHandler.ListReleases)
+	settings.Post("/releases/:id/apply", panelUpdateHandler.TriggerUpdate) // starts wp-manage-updater, API will restart
+
+	// Simple auto-update endpoints (check mirror + one-click apply)
+	updateSettings := protected.Group("/settings/update", middleware.PermissionRequired("settings", "manage"))
+	updateSettings.Get("/check", updateCheckHandler.CheckUpdate)
+	updateSettings.Post("/apply-panel", updateCheckHandler.ApplyPanelUpdate)
+	updateSettings.Post("/apply-agents", updateCheckHandler.ApplyAgentUpdate)
 
 	// File Manager routes (with RBAC)
 	files := sites.Group("/:id/files")

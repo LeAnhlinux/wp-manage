@@ -10,11 +10,12 @@ import (
 )
 
 type MigrationService struct {
-	db *gorm.DB
+	db         *gorm.DB
+	dnsService *DNSService // optional — used to auto-update DNS after keep_domain migration
 }
 
-func NewMigrationService(db *gorm.DB) *MigrationService {
-	return &MigrationService{db: db}
+func NewMigrationService(db *gorm.DB, dnsService *DNSService) *MigrationService {
+	return &MigrationService{db: db, dnsService: dnsService}
 }
 
 // StartMigration creates a migration record and queues the task for the source server's agent
@@ -38,11 +39,23 @@ func (s *MigrationService) StartMigration(siteID uint64, req models.MigrateReque
 		return nil, fmt.Errorf("cannot migrate to the same server")
 	}
 
+	// Validate change_domain mode
+	mode := req.Mode
+	if mode == "" {
+		mode = "keep_domain"
+	}
+	if mode != "keep_domain" && mode != "change_domain" {
+		return nil, fmt.Errorf("mode phải là 'keep_domain' hoặc 'change_domain'")
+	}
+	if mode == "change_domain" && req.NewDomain == "" {
+		return nil, fmt.Errorf("new_domain là bắt buộc khi dùng mode change_domain")
+	}
+
 	// Check no existing running migration for this site
 	var count int64
 	s.db.Model(&models.Migration{}).Where("site_id = ? AND status = ?", siteID, "running").Count(&count)
 	if count > 0 {
-		return nil, fmt.Errorf("site already has a running migration")
+		return nil, fmt.Errorf("site đang có migration đang chạy")
 	}
 
 	now := time.Now()
@@ -50,6 +63,9 @@ func (s *MigrationService) StartMigration(siteID uint64, req models.MigrateReque
 		SiteID:         siteID,
 		SourceServerID: site.ServerID,
 		TargetServerID: req.TargetServerID,
+		Mode:           mode,
+		NewDomain:      req.NewDomain,
+		UpdateDNS:      req.UpdateDNS,
 		Phase:          "preparation",
 		Status:         "running",
 		Progress:       0,
@@ -59,8 +75,11 @@ func (s *MigrationService) StartMigration(siteID uint64, req models.MigrateReque
 		return nil, err
 	}
 
-	// Add initial log entry
-	s.AddLog(migration.ID, "preparation", "info", "Migration started")
+	modeLabel := "giữ nguyên domain"
+	if mode == "change_domain" {
+		modeLabel = fmt.Sprintf("đổi domain → %s", req.NewDomain)
+	}
+	s.AddLog(migration.ID, "preparation", "info", fmt.Sprintf("Bắt đầu migration [%s]", modeLabel))
 
 	// Queue migrate task for the source server's agent
 	taskData := models.AgentMigrateTask{
@@ -76,7 +95,10 @@ func (s *MigrationService) StartMigration(siteID uint64, req models.MigrateReque
 		SSLEnabled:     site.SSLEnabled,
 		WPAdminUser:    site.WPAdminUser,
 		WPAdminEmail:   site.WPAdminEmail,
-		ChangeDomain:   req.ChangeDomain,
+		LinuxUser:      site.LinuxUser,
+		Mode:           mode,
+		NewDomain:      req.NewDomain,
+		CleanupSource:  req.CleanupSource,
 	}
 	dataJSON, _ := json.Marshal(taskData)
 	task := models.TaskQueue{
@@ -156,49 +178,103 @@ func (s *MigrationService) UpdateMigration(update models.AgentMigrationUpdate) e
 		s.AddLog(update.MigrationID, update.Phase, level, update.LogMessage)
 	}
 
-	// If migration completed, update the site's server_id to target server
+	// If migration completed, update site's server_id and optionally auto-update DNS
 	if update.Status == "completed" {
 		var migration models.Migration
-		if err := s.db.First(&migration, update.MigrationID).Error; err == nil {
-			s.db.Model(&models.Site{}).Where("id = ?", migration.SiteID).Update("server_id", migration.TargetServerID)
+		if err := s.db.Preload("Site").Preload("TargetServer").First(&migration, update.MigrationID).Error; err == nil {
+			// Update site to point to target server
+			newDomain := migration.Site.Domain
+			if migration.Mode == "change_domain" && migration.NewDomain != "" {
+				newDomain = migration.NewDomain
+				// Also update domain on the site record
+				s.db.Model(&models.Site{}).Where("id = ?", migration.SiteID).Updates(map[string]interface{}{
+					"server_id": migration.TargetServerID,
+					"domain":    newDomain,
+				})
+			} else {
+				s.db.Model(&models.Site{}).Where("id = ?", migration.SiteID).Update("server_id", migration.TargetServerID)
+			}
+
+			// Auto-update DNS A record for keep_domain mode
+			if migration.Mode == "keep_domain" && migration.UpdateDNS && s.dnsService != nil && migration.TargetServer != nil {
+				targetIP := migration.TargetServer.IPAddress
+				if err := s.dnsService.AutoUpdateRecord(newDomain, targetIP); err != nil {
+					s.AddLog(migration.ID, "cleanup", "warn",
+						fmt.Sprintf("DNS tự động cập nhật thất bại: %v — Vui lòng cập nhật DNS thủ công trỏ %s → %s", err, newDomain, targetIP))
+				} else {
+					s.AddLog(migration.ID, "cleanup", "info",
+						fmt.Sprintf("DNS đã được cập nhật: %s → %s", newDomain, targetIP))
+				}
+			} else if migration.Mode == "keep_domain" && !migration.UpdateDNS {
+				s.AddLog(migration.ID, "cleanup", "info",
+					fmt.Sprintf("Vui lòng cập nhật DNS thủ công: trỏ %s → %s", newDomain, migration.TargetServer.IPAddress))
+			}
 		}
 	}
 
 	return nil
 }
 
-// Rollback a migration
+// Rollback a migration.
+// keep_domain: re-enables source nginx + cleans up target artifacts.
+// change_domain: source was never suspended; still clean up target artifacts.
 func (s *MigrationService) Rollback(id uint64) error {
 	var migration models.Migration
-	if err := s.db.First(&migration, id).Error; err != nil {
+	if err := s.db.Preload("Site").First(&migration, id).Error; err != nil {
 		return fmt.Errorf("migration not found")
 	}
-	if migration.Status != "running" {
-		return fmt.Errorf("can only rollback running migrations")
+	if migration.Status == "rolled_back" {
+		return fmt.Errorf("migration đã được rollback trước đó")
 	}
 
-	// Queue rollback task on source server
-	taskData := map[string]interface{}{
+	domain := ""
+	dbName, dbUser, dbPass := "", "", ""
+	if migration.Site != nil {
+		domain = migration.Site.Domain
+		dbName = migration.Site.DBName
+		dbUser = migration.Site.DBUser
+		dbPass = migration.Site.DBPassword
+	}
+
+	targetDomain := domain
+	if migration.Mode == "change_domain" && migration.NewDomain != "" {
+		targetDomain = migration.NewDomain
+	}
+
+	// Task 1: restore source site (re-enable nginx for keep_domain)
+	sourceData, _ := json.Marshal(map[string]interface{}{
 		"migration_id": migration.ID,
-		"domain":       "",
-	}
-	// Get site domain
-	var site models.Site
-	if err := s.db.First(&site, migration.SiteID).Error; err == nil {
-		taskData["domain"] = site.Domain
-	}
-	dataJSON, _ := json.Marshal(taskData)
-	task := models.TaskQueue{
+		"domain":       domain,
+		"mode":         migration.Mode,
+	})
+	s.db.Create(&models.TaskQueue{
 		ServerID: migration.SourceServerID,
 		SiteID:   migration.SiteID,
 		TaskType: "rollback_migration",
-		Data:     string(dataJSON),
+		Data:     string(sourceData),
 		Status:   "pending",
-	}
-	s.db.Create(&task)
+	})
 
-	s.AddLog(id, migration.Phase, "warn", "Rollback requested by user")
+	// Task 2: clean up target server (remove partially migrated data)
+	targetData, _ := json.Marshal(models.AgentMigrateTask{
+		MigrationID:   migration.ID,
+		SiteID:        migration.SiteID,
+		Domain:        targetDomain,
+		DBName:        dbName,
+		DBUser:        dbUser,
+		DBPass:        dbPass,
+		CleanupSource: true, // reuse cleanupSourceSite logic
+	})
+	s.db.Create(&models.TaskQueue{
+		ServerID: migration.TargetServerID,
+		SiteID:   migration.SiteID,
+		TaskType: "cleanup_target_migration",
+		Data:     string(targetData),
+		Status:   "pending",
+	})
 
+	s.AddLog(id, migration.Phase, "warn",
+		fmt.Sprintf("Rollback được yêu cầu [mode: %s] — đang khôi phục nguồn và dọn dẹp server đích (%s)", migration.Mode, targetDomain))
 	return nil
 }
 
@@ -232,6 +308,104 @@ func (s *MigrationService) AddLog(migrationID uint64, phase, level, message stri
 		Level:       level,
 	}
 	s.db.Create(&log)
+}
+
+// SetupMigrationSSH queues an add_authorized_key task on the target agent and waits for it.
+// This grants temporary SSH access from the source server to the target server.
+func (s *MigrationService) SetupMigrationSSH(migrationID uint64, publicKey string) error {
+	var migration models.Migration
+	if err := s.db.First(&migration, migrationID).Error; err != nil {
+		return fmt.Errorf("migration not found")
+	}
+	comment := fmt.Sprintf("wpm-migration-%d-temp", migrationID)
+	dataJSON, _ := json.Marshal(map[string]string{
+		"public_key": publicKey,
+		"comment":    comment,
+	})
+	task := models.TaskQueue{
+		ServerID: migration.TargetServerID,
+		SiteID:   migration.SiteID,
+		TaskType: "add_authorized_key",
+		Data:     string(dataJSON),
+		Status:   "pending",
+	}
+	s.db.Create(&task)
+
+	result, err := WaitForTaskComplete(s.db, task.ID)
+	if err != nil {
+		return fmt.Errorf("target agent không phản hồi: %v", err)
+	}
+	if result.Status == "failed" {
+		return fmt.Errorf("target agent từ chối SSH key: %s", result.Error)
+	}
+	s.AddLog(migrationID, "preparation", "info", "SSH key tạm thời đã được thêm vào server đích")
+	return nil
+}
+
+// CleanupMigrationSSH removes the temp SSH key from the target server (best-effort, fire-and-forget).
+func (s *MigrationService) CleanupMigrationSSH(migrationID uint64) {
+	var migration models.Migration
+	if err := s.db.First(&migration, migrationID).Error; err != nil {
+		return
+	}
+	comment := fmt.Sprintf("wpm-migration-%d-temp", migrationID)
+	dataJSON, _ := json.Marshal(map[string]string{"comment": comment})
+	task := models.TaskQueue{
+		ServerID: migration.TargetServerID,
+		SiteID:   migration.SiteID,
+		TaskType: "remove_authorized_key",
+		Data:     string(dataJSON),
+		Status:   "pending",
+	}
+	s.db.Create(&task)
+	s.AddLog(migrationID, "cleanup", "info", "SSH key tạm thời đã được xóa khỏi server đích")
+}
+
+// CleanupSource queues a cleanup_source_migration task on the SOURCE agent to remove
+// all site artifacts (files, DB, nginx/php-fpm configs, SSL cert) after migration.
+// Only allowed on completed migrations that haven't been cleaned up yet.
+func (s *MigrationService) CleanupSource(id uint64) error {
+	var migration models.Migration
+	if err := s.db.Preload("Site").First(&migration, id).Error; err != nil {
+		return fmt.Errorf("migration not found")
+	}
+	if migration.Status != "completed" {
+		return fmt.Errorf("chỉ có thể dọn dẹp migration đã hoàn tất")
+	}
+	if migration.SourceCleanedUp {
+		return fmt.Errorf("server nguồn đã được dọn dẹp trước đó")
+	}
+
+	domain := ""
+	if migration.Site != nil {
+		domain = migration.Site.Domain
+	}
+
+	taskData, _ := json.Marshal(models.AgentMigrateTask{
+		MigrationID:   migration.ID,
+		SiteID:        migration.SiteID,
+		Domain:        domain,
+		DBName:        migration.Site.DBName,
+		DBUser:        migration.Site.DBUser,
+		DBPass:        migration.Site.DBPassword,
+		CleanupSource: true,
+	})
+	task := models.TaskQueue{
+		ServerID: migration.SourceServerID,
+		SiteID:   migration.SiteID,
+		TaskType: "cleanup_source_migration",
+		Data:     string(taskData),
+		Status:   "pending",
+	}
+	if err := s.db.Create(&task).Error; err != nil {
+		return err
+	}
+
+	// Mark as cleaned up
+	s.db.Model(&migration).Update("source_cleaned_up", true)
+	s.AddLog(id, "cleanup", "warn",
+		fmt.Sprintf("Dọn dẹp server nguồn được yêu cầu — xóa files, DB, configs của %s", domain))
+	return nil
 }
 
 // GetLogs returns all log entries for a migration

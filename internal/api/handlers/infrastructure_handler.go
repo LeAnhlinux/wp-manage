@@ -176,6 +176,32 @@ func (h *InfrastructureHandler) RebuildConfig(c *fiber.Ctx) error {
 	})
 }
 
+// ==================== Services Status ====================
+
+func (h *InfrastructureHandler) InstallService(c *fiber.Ctx) error {
+	serverID, _ := strconv.ParseUint(c.Params("id"), 10, 64)
+	service := c.Params("service")
+	if service == "" {
+		return c.Status(400).JSON(models.APIResponse{Error: "service name required"})
+	}
+	if err := h.svc.InstallService(serverID, service); err != nil {
+		return c.Status(500).JSON(models.APIResponse{Error: "Install failed: " + err.Error()})
+	}
+	return c.JSON(models.APIResponse{Success: true, Message: service + " installed successfully"})
+}
+
+func (h *InfrastructureHandler) CheckServices(c *fiber.Ctx) error {
+	serverID, _ := strconv.ParseUint(c.Params("id"), 10, 64)
+	output, err := h.svc.CheckServices(serverID)
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Error: "Service check failed: " + err.Error()})
+	}
+	return c.JSON(models.APIResponse{
+		Success: true,
+		Data:    map[string]string{"services": output},
+	})
+}
+
 // ==================== Health Check ====================
 
 func (h *InfrastructureHandler) RunHealthCheck(c *fiber.Ctx) error {

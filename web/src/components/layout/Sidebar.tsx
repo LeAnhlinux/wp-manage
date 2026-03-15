@@ -1,8 +1,8 @@
 import { NavLink } from 'react-router-dom'
 import {
   Server, Globe, Shield, LayoutDashboard, Settings, LogOut,
-  HardDrive, Users, ArrowRightLeft, Rocket, UsersRound, Activity,
-  ChevronRight
+  HardDrive, Users, ArrowRightLeft, UsersRound, Activity,
+  ChevronRight, MonitorDot, Network
 } from 'lucide-react'
 import { useAuth } from '@/stores/auth'
 import { usePermissions } from '@/hooks/usePermissions'
@@ -49,9 +49,10 @@ export default function Sidebar({ mobile }: SidebarProps) {
         { to: '/security', icon: Shield, label: 'Security' },
         { to: '/teams', icon: UsersRound, label: 'Teams' },
         { to: '/activity', icon: Activity, label: 'Activity Log' },
+        { to: '/monitoring', icon: MonitorDot, label: 'Monitoring' },
+        { to: '/dns', icon: Network, label: 'DNS' },
         ...(isAdmin ? [
           { to: '/users', icon: Users, label: 'Users' },
-          { to: '/rollouts', icon: Rocket, label: 'Rollouts' },
         ] : []),
         { to: '/settings', icon: Settings, label: 'Settings' },
       ],

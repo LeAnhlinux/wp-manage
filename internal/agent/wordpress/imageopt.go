@@ -142,3 +142,66 @@ func ensureOptTools() {
 		}
 	}
 }
+
+// ToggleImageOpt installs or removes the mu-plugin that auto-compresses on WP upload.
+func ToggleImageOpt(domain string, enabled bool, quality int, webpEnabled bool) error {
+	muDir := fmt.Sprintf("/var/www/%s/public/wp-content/mu-plugins", domain)
+	muFile := muDir + "/wp-manage-imageopt.php"
+
+	if !enabled {
+		os.Remove(muFile)
+		slog.Info("Image opt mu-plugin removed", "domain", domain)
+		return nil
+	}
+
+	// Ensure tools are installed before installing plugin
+	ensureOptTools()
+
+	if err := os.MkdirAll(muDir, 0755); err != nil {
+		return fmt.Errorf("cannot create mu-plugins dir: %w", err)
+	}
+
+	webpStr := "false"
+	if webpEnabled {
+		webpStr = "true"
+	}
+
+	phpContent := fmt.Sprintf(`<?php
+/**
+ * WP Manage — Image Optimization (auto-generated, do not edit)
+ * Quality: %d | WebP: %s
+ */
+
+add_filter( 'wp_handle_upload', 'wpmanage_imageopt_on_upload' );
+
+function wpmanage_imageopt_on_upload( $upload ) {
+    if ( empty( $upload['file'] ) ) return $upload;
+    $file = $upload['file'];
+    $ext  = strtolower( pathinfo( $file, PATHINFO_EXTENSION ) );
+
+    if ( in_array( $ext, [ 'jpg', 'jpeg' ], true ) ) {
+        @exec( 'jpegoptim --max=%d --strip-all ' . escapeshellarg( $file ) . ' >/dev/null 2>&1 &' );
+    } elseif ( $ext === 'png' ) {
+        @exec( 'optipng -o2 -quiet ' . escapeshellarg( $file ) . ' >/dev/null 2>&1 &' );
+    }
+
+    if ( %s && in_array( $ext, [ 'jpg', 'jpeg', 'png' ], true ) ) {
+        $webp = $file . '.webp';
+        @exec( 'cwebp -q %d ' . escapeshellarg( $file ) . ' -o ' . escapeshellarg( $webp ) . ' >/dev/null 2>&1 &' );
+    }
+
+    return $upload;
+}
+`, quality, webpStr, quality, webpStr, quality)
+
+	if err := os.WriteFile(muFile, []byte(phpContent), 0644); err != nil {
+		return fmt.Errorf("cannot write mu-plugin: %w", err)
+	}
+
+	// Fix ownership to site user
+	siteUser := "wp_" + strings.ReplaceAll(domain, ".", "_")
+	exec.Command("chown", "-R", siteUser+":"+siteUser, muDir).Run()
+
+	slog.Info("Image opt mu-plugin installed", "domain", domain, "quality", quality, "webp", webpEnabled)
+	return nil
+}

@@ -111,6 +111,72 @@ func (h *SecurityHandler) ListAllScans(c *fiber.Ctx) error {
 	})
 }
 
+// --- ClamAV ---
+
+func (h *SecurityHandler) GetClamAVStatus(c *fiber.Ctx) error {
+	serverID, _ := strconv.ParseUint(c.Params("id"), 10, 64)
+	status, err := h.svc.GetClamAVStatus(serverID)
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Error: err.Error()})
+	}
+	return c.JSON(models.APIResponse{Success: true, Data: status})
+}
+
+func (h *SecurityHandler) InstallClamAV(c *fiber.Ctx) error {
+	serverID, _ := strconv.ParseUint(c.Params("id"), 10, 64)
+	if err := h.svc.InstallClamAV(serverID); err != nil {
+		return c.Status(500).JSON(models.APIResponse{Error: err.Error()})
+	}
+	return c.JSON(models.APIResponse{Success: true, Message: "ClamAV installed successfully"})
+}
+
+// --- Scan Schedules ---
+
+func (h *SecurityHandler) ListSchedules(c *fiber.Ctx) error {
+	siteID, _ := strconv.ParseUint(c.Params("siteId"), 10, 64)
+	schedules, err := h.svc.ListSchedules(siteID)
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Error: "Failed to fetch schedules"})
+	}
+	return c.JSON(models.APIResponse{Success: true, Data: schedules})
+}
+
+func (h *SecurityHandler) CreateSchedule(c *fiber.Ctx) error {
+	siteID, _ := strconv.ParseUint(c.Params("siteId"), 10, 64)
+	var req models.CreateScanScheduleRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(models.APIResponse{Error: "Invalid request body"})
+	}
+	schedule, err := h.svc.CreateSchedule(siteID, req)
+	if err != nil {
+		return c.Status(400).JSON(models.APIResponse{Error: err.Error()})
+	}
+	return c.Status(201).JSON(models.APIResponse{Success: true, Message: "Scan schedule created", Data: schedule})
+}
+
+func (h *SecurityHandler) UpdateSchedule(c *fiber.Ctx) error {
+	siteID, _ := strconv.ParseUint(c.Params("siteId"), 10, 64)
+	id, _ := strconv.ParseUint(c.Params("schedId"), 10, 64)
+	var req models.UpdateScanScheduleRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(models.APIResponse{Error: "Invalid request body"})
+	}
+	schedule, err := h.svc.UpdateSchedule(siteID, id, req)
+	if err != nil {
+		return c.Status(400).JSON(models.APIResponse{Error: err.Error()})
+	}
+	return c.JSON(models.APIResponse{Success: true, Message: "Schedule updated", Data: schedule})
+}
+
+func (h *SecurityHandler) DeleteSchedule(c *fiber.Ctx) error {
+	siteID, _ := strconv.ParseUint(c.Params("siteId"), 10, 64)
+	id, _ := strconv.ParseUint(c.Params("schedId"), 10, 64)
+	if err := h.svc.DeleteSchedule(siteID, id); err != nil {
+		return c.Status(500).JSON(models.APIResponse{Error: "Failed to delete schedule"})
+	}
+	return c.JSON(models.APIResponse{Success: true, Message: "Schedule deleted"})
+}
+
 // ScanComplete is called by the agent to report scan results
 func (h *SecurityHandler) ScanComplete(c *fiber.Ctx) error {
 	var result models.AgentMalwareScanResult

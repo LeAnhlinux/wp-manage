@@ -49,6 +49,10 @@ func (s *ImageOptService) UpdateConfig(siteID uint64, req models.UpdateImageOptC
 		return nil, err
 	}
 
+	enabledChanged := req.Enabled != nil && *req.Enabled != config.Enabled
+	qualityChanged := req.Quality != nil && *req.Quality != config.Quality
+	webpChanged := req.WebPEnabled != nil && *req.WebPEnabled != config.WebPEnabled
+
 	updates := map[string]interface{}{}
 	if req.Enabled != nil {
 		updates["enabled"] = *req.Enabled
@@ -72,7 +76,66 @@ func (s *ImageOptService) UpdateConfig(siteID uint64, req models.UpdateImageOptC
 		}
 	}
 
-	return s.GetConfig(siteID)
+	// Re-fetch updated config
+	config, _ = s.GetConfig(siteID)
+
+	// Queue toggle_image_opt task when enabled/quality/webp changed (mu-plugin needs update)
+	if enabledChanged || (config.Enabled && (qualityChanged || webpChanged)) {
+		s.queueToggleTask(siteID, config)
+	}
+
+	return config, nil
+}
+
+// Toggle enables/disables image auto-compression (synchronous)
+func (s *ImageOptService) Toggle(siteID uint64, enabled bool) (*models.ImageOptConfig, error) {
+	config, err := s.GetConfig(siteID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.db.Model(config).Update("enabled", enabled).Error; err != nil {
+		return nil, err
+	}
+	config.Enabled = enabled
+
+	// Queue toggle task and wait
+	taskID, err := s.queueToggleTask(siteID, config)
+	if err != nil {
+		return config, err
+	}
+	result, err := WaitForTaskComplete(s.db, taskID)
+	if err != nil {
+		return config, nil // timeout — return config anyway
+	}
+	if result.Status == "failed" {
+		return config, fmt.Errorf("%s", result.Output)
+	}
+	return config, nil
+}
+
+func (s *ImageOptService) queueToggleTask(siteID uint64, config *models.ImageOptConfig) (uint64, error) {
+	var site models.Site
+	if err := s.db.First(&site, siteID).Error; err != nil {
+		return 0, fmt.Errorf("site not found")
+	}
+	taskData := models.AgentToggleImageOptTask{
+		Domain:      site.Domain,
+		Enabled:     config.Enabled,
+		Quality:     config.Quality,
+		WebPEnabled: config.WebPEnabled,
+	}
+	data, _ := json.Marshal(taskData)
+	task := models.TaskQueue{
+		ServerID: site.ServerID,
+		SiteID:   siteID,
+		TaskType: "toggle_image_opt",
+		Data:     string(data),
+		Status:   "pending",
+	}
+	if err := s.db.Create(&task).Error; err != nil {
+		return 0, err
+	}
+	return task.ID, nil
 }
 
 // RunOptimization creates an optimization task for the agent

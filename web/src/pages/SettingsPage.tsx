@@ -1,12 +1,17 @@
-import { useState } from 'react'
-import { Key, Plus, Trash2, Copy, Check, ShieldCheck, ShieldOff, Bell, Save, Settings, Loader2 } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { Key, Plus, Trash2, Copy, Check, ShieldCheck, ShieldOff, Bell, Save, Settings, Loader2, Download, RefreshCw, CheckCircle, XCircle, AlertTriangle, Server } from 'lucide-react'
 import { useAPIKeys, useCreateAPIKey, useDeleteAPIKey } from '@/hooks/useAPIKeys'
 import { useEnable2FA, useVerify2FA, useDisable2FA } from '@/hooks/useTwoFactor'
 import { useNotificationConfig, useUpdateNotificationConfig } from '@/hooks/useAlerts'
-import { usePanelUpdateStatus, usePanelReleases } from '@/hooks/usePanelUpdate'
+import { useLastUpdateResult, useCheckUpdate, useApplyPanelUpdate, useApplyAgentUpdate, type CheckUpdateResult } from '@/hooks/usePanelUpdate'
+import { useRollout } from '@/hooks/useRollouts'
+import { useQueryClient } from '@tanstack/react-query'
+import api from '@/lib/api'
 import { useAuth } from '@/stores/auth'
 
 export default function SettingsPage() {
+  const { user } = useAuth()
+  const isAdmin = user?.role === 'admin'
   return (
     <div>
       <h1 className="text-2xl font-bold text-gray-900 mb-6">Settings</h1>
@@ -14,7 +19,7 @@ export default function SettingsPage() {
         <TwoFactorSection />
         <NotificationSection />
         <APIKeysSection />
-        <PanelUpdateSection />
+        {isAdmin && <UpdatesSection />}
       </div>
     </div>
   )
@@ -403,52 +408,301 @@ function APIKeysSection() {
   )
 }
 
-function PanelUpdateSection() {
-  const { data: status, isLoading } = usePanelUpdateStatus()
-  const { data: releases = [] } = usePanelReleases()
 
-  if (isLoading) return <div className="text-center py-4"><Loader2 size={20} className="animate-spin mx-auto" /></div>
+// =============================================================================
+// Combined Updates Section (Panel + Agent)
+// =============================================================================
+function UpdatesSection() {
+  const checkUpdate = useCheckUpdate()
+  const applyPanel = useApplyPanelUpdate()
+  const applyAgents = useApplyAgentUpdate()
+  const { data: lastResult } = useLastUpdateResult()
+  const queryClient = useQueryClient()
+
+  const [result, setResult] = useState<CheckUpdateResult | null>(null)
+  const [agentRolloutId, setAgentRolloutId] = useState<number | null>(null)
+  const [selectedServerIds, setSelectedServerIds] = useState<number[]>([])
+  const [showServerPicker, setShowServerPicker] = useState(false)
+
+  const serverAgents = result?.server_agents || []
+
+  // When result is received, pre-select only servers that need update
+  useEffect(() => {
+    if (result) {
+      setSelectedServerIds(
+        (result.server_agents || []).filter(s => s.needs_update).map(s => s.id)
+      )
+    }
+  }, [result?.agent_newer])
+
+  const toggleServer = (id: number) => {
+    setSelectedServerIds(prev =>
+      prev.includes(id) ? prev.filter(s => s !== id) : [...prev, id]
+    )
+  }
+
+  // Poll rollout status
+  const { data: rolloutData } = useRollout(agentRolloutId ?? 0)
+  const rollout = rolloutData?.data
+
+  // Panel restart polling
+  const [panelRestarting, setPanelRestarting] = useState(false)
+  const [panelDone, setPanelDone] = useState<'success' | 'timeout' | null>(null)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  useEffect(() => {
+    if (!panelRestarting) return
+    let attempts = 0
+    pollRef.current = setInterval(async () => {
+      attempts++
+      try {
+        await queryClient.fetchQuery({
+          queryKey: ['panel-update-ping'],
+          queryFn: async () => (await api.get('/settings/update/check')).data,
+          staleTime: 0,
+        })
+        clearInterval(pollRef.current!)
+        setPanelRestarting(false)
+        setPanelDone('success')
+        checkUpdate.mutate(undefined, { onSuccess: setResult })
+      } catch {
+        if (attempts >= 24) {
+          clearInterval(pollRef.current!)
+          setPanelRestarting(false)
+          setPanelDone('timeout')
+        }
+      }
+    }, 5000)
+    return () => { if (pollRef.current) clearInterval(pollRef.current) }
+  }, [panelRestarting])
+
+  const handleCheck = () => {
+    checkUpdate.mutate(undefined, { onSuccess: setResult })
+  }
+
+  const handleUpdatePanel = async () => {
+    if (!result?.latest) return
+    if (!confirm(`Update panel to ${result.latest.version}? It will restart for ~15–30s.`)) return
+    setPanelDone(null)
+    try {
+      await applyPanel.mutateAsync({
+        version: result.latest.version,
+        download_url: result.latest.panel.download_url,
+        checksum: result.latest.panel.checksum,
+      })
+      setPanelRestarting(true)
+    } catch (e: any) {
+      alert(e?.response?.data?.error || e.message)
+    }
+  }
+
+  const handleUpdateAgents = async () => {
+    if (!result?.latest) return
+    const allNeedUpdate = serverAgents.filter(s => s.needs_update)
+    const targetLabel = selectedServerIds.length === allNeedUpdate.length
+      ? `all ${selectedServerIds.length} outdated server(s)` : `${selectedServerIds.length} selected server(s)`
+    if (!confirm(`Update agents on ${targetLabel} to ${result.latest.version}?`)) return
+    try {
+      const res = await applyAgents.mutateAsync({
+        version: result.latest.version,
+        download_url: result.latest.agent.download_url,
+        checksum: result.latest.agent.checksum,
+        server_ids: selectedServerIds,
+      })
+      if (res?.rollout_id) setAgentRolloutId(res.rollout_id)
+      setShowServerPicker(false)
+    } catch (e: any) {
+      alert(e?.response?.data?.error || e.message)
+    }
+  }
+
+  const agentRunning = rollout?.status === 'running' || rollout?.status === 'pending'
 
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-      <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
-        <Settings size={20} className="text-blue-500" /> Panel Version
-      </h2>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-        <div className="p-4 bg-blue-50 rounded-lg">
-          <p className="text-xs text-gray-500 uppercase font-medium mb-1">Current Version</p>
-          <p className="text-lg font-semibold text-blue-600">{status?.current_version || 'Unknown'}</p>
-        </div>
-        <div className={`p-4 rounded-lg ${status?.update_available ? 'bg-green-50' : 'bg-gray-50'}`}>
-          <p className="text-xs text-gray-500 uppercase font-medium mb-1">Update Status</p>
-          <p className={`text-lg font-semibold ${status?.update_available ? 'text-green-600' : 'text-gray-600'}`}>
-            {status?.update_available ? 'Update Available!' : 'Up to date'}
-          </p>
-        </div>
-        {status?.latest && (
-          <div className="p-4 bg-green-50 rounded-lg">
-            <p className="text-xs text-gray-500 uppercase font-medium mb-1">Latest Version</p>
-            <p className="text-lg font-semibold text-green-600">{status.latest.version}</p>
-          </div>
-        )}
+      <div className="flex items-center justify-between mb-5">
+        <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+          <RefreshCw size={20} className="text-blue-500" /> Updates
+        </h2>
+        <button
+          onClick={handleCheck}
+          disabled={checkUpdate.isPending}
+          className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-semibold rounded-xl hover:bg-blue-700 disabled:opacity-50"
+        >
+          {checkUpdate.isPending ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+          Check for Updates
+        </button>
       </div>
 
-      {/* Recent Releases */}
-      {releases.length > 0 && (
-        <div>
-          <h3 className="text-sm font-semibold text-gray-700 mb-2">Recent Releases</h3>
-          <div className="space-y-2">
-            {releases.slice(0, 5).map(r => (
-              <div key={r.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                <div>
-                  <p className="text-sm font-medium">{r.version}</p>
-                  <p className="text-xs text-gray-500">{r.release_notes || 'No release notes'}</p>
-                </div>
-                <p className="text-xs text-gray-400">{new Date(r.created_at).toLocaleDateString()}</p>
-              </div>
-            ))}
+      {/* Last update result */}
+      {lastResult && !panelRestarting && !panelDone && (
+        <div className={`flex items-start gap-2 p-3 rounded-lg mb-4 text-sm border ${
+          lastResult.status === 'completed' ? 'bg-green-50 border-green-100' : 'bg-red-50 border-red-100'
+        }`}>
+          {lastResult.status === 'completed'
+            ? <CheckCircle size={15} className="text-green-500 mt-0.5 shrink-0" />
+            : <AlertTriangle size={15} className="text-red-500 mt-0.5 shrink-0" />}
+          <p className={lastResult.status === 'completed' ? 'text-green-800' : 'text-red-800'}>
+            Last update: {lastResult.status === 'completed'
+              ? `Panel upgraded to ${lastResult.new_version}`
+              : `${lastResult.status} — ${lastResult.error || 'rolled back'}`}
+            {lastResult.timestamp && <span className="text-gray-400 text-xs ml-2">{new Date(lastResult.timestamp).toLocaleString()}</span>}
+          </p>
+        </div>
+      )}
+
+      {/* Panel restart banner */}
+      {panelRestarting && (
+        <div className="flex items-center gap-3 p-4 bg-blue-50 border border-blue-200 rounded-xl mb-4">
+          <Loader2 size={18} className="animate-spin text-blue-500 shrink-0" />
+          <div>
+            <p className="text-sm font-medium text-blue-800">Panel is restarting…</p>
+            <p className="text-xs text-blue-600">Usually takes 15–30 seconds.</p>
           </div>
         </div>
+      )}
+      {panelDone === 'success' && (
+        <div className="flex items-center gap-2 p-3 bg-green-50 border border-green-200 rounded-xl mb-4 text-sm">
+          <CheckCircle size={16} className="text-green-500" />
+          <span className="text-green-800 font-medium">Panel updated successfully.</span>
+        </div>
+      )}
+      {panelDone === 'timeout' && (
+        <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-xl mb-4 text-sm">
+          <XCircle size={16} className="text-red-500" />
+          <span className="text-red-800">Panel did not come back within 2 minutes. Check server logs.</span>
+        </div>
+      )}
+
+      {/* Check result */}
+      {result ? (
+        <div className="space-y-3">
+          {/* Panel */}
+          <div className={`flex items-center justify-between p-4 rounded-xl border ${
+            result.panel_newer ? 'bg-amber-50 border-amber-200' : 'bg-gray-50 border-gray-100'
+          }`}>
+            <div>
+              <p className="text-sm font-semibold text-gray-800">Panel (API)</p>
+              <p className="text-xs text-gray-500 mt-0.5">
+                Current: <span className="font-mono">{result.current_panel || 'unknown'}</span>
+                {result.panel_newer && <span className="ml-2 text-amber-700">→ Latest: <span className="font-mono font-semibold">{result.latest?.version}</span></span>}
+              </p>
+            </div>
+            {result.panel_newer ? (
+              <button
+                onClick={handleUpdatePanel}
+                disabled={applyPanel.isPending || panelRestarting}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-xs font-semibold rounded-lg hover:bg-blue-700 disabled:opacity-50"
+              >
+                {applyPanel.isPending || panelRestarting ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+                Update
+              </button>
+            ) : (
+              <span className="text-xs text-green-600 font-medium flex items-center gap-1"><CheckCircle size={13} /> Up to date</span>
+            )}
+          </div>
+
+          {/* Agent */}
+          <div className={`p-4 rounded-xl border ${
+            result.agent_newer ? 'bg-amber-50 border-amber-200' : 'bg-gray-50 border-gray-100'
+          }`}>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-semibold text-gray-800">
+                  Agent
+                  {serverAgents.length > 0 && (
+                    <span className="ml-2 text-xs font-normal text-gray-500">
+                      {serverAgents.filter(s => !s.needs_update).length}/{serverAgents.length} up to date
+                    </span>
+                  )}
+                </p>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  {result.agent_newer
+                    ? <span className="text-amber-700">{serverAgents.filter(s => s.needs_update).length} server(s) need update → <span className="font-mono font-semibold">{result.latest?.version}</span></span>
+                    : <span>All servers up to date</span>
+                  }
+                </p>
+                {/* Rollout progress */}
+                {rollout && (
+                  <p className={`text-xs mt-1 font-medium ${
+                    rollout.status === 'completed' ? 'text-green-600' :
+                    rollout.status === 'failed' ? 'text-red-600' : 'text-blue-600'
+                  }`}>
+                    {agentRunning && <Loader2 size={11} className="inline animate-spin mr-1" />}
+                    {rollout.updated_count}/{rollout.total_servers} servers updated
+                    {rollout.failed_count > 0 && <span className="text-red-500"> · {rollout.failed_count} failed</span>}
+                    {' · '}{rollout.status}
+                  </p>
+                )}
+              </div>
+              {result.agent_newer ? (
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setShowServerPicker(v => !v)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-gray-200 text-gray-600 text-xs font-medium rounded-lg hover:bg-gray-50"
+                  >
+                    <Server size={12} />
+                    {selectedServerIds.length} server{selectedServerIds.length !== 1 ? 's' : ''}
+                  </button>
+                  <button
+                    onClick={handleUpdateAgents}
+                    disabled={applyAgents.isPending || agentRunning || selectedServerIds.length === 0}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-xs font-semibold rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                  >
+                    {applyAgents.isPending || agentRunning ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+                    Update
+                  </button>
+                </div>
+              ) : (
+                <span className="text-xs text-green-600 font-medium flex items-center gap-1"><CheckCircle size={13} /> Up to date</span>
+              )}
+            </div>
+
+            {/* Server picker — shows all servers, pre-selects only outdated ones */}
+            {showServerPicker && result.agent_newer && serverAgents.length > 0 && (
+              <div className="mt-3 pt-3 border-t border-amber-200">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-medium text-gray-600">Select servers to update:</span>
+                  <div className="flex gap-2">
+                    <button onClick={() => setSelectedServerIds(serverAgents.filter(s => s.needs_update).map(s => s.id))} className="text-xs text-blue-600 hover:underline">Outdated only</button>
+                    <button onClick={() => setSelectedServerIds(serverAgents.map(s => s.id))} className="text-xs text-gray-500 hover:underline">All</button>
+                    <button onClick={() => setSelectedServerIds([])} className="text-xs text-gray-400 hover:underline">None</button>
+                  </div>
+                </div>
+                <div className="space-y-1 max-h-48 overflow-y-auto">
+                  {serverAgents.map(server => (
+                    <label key={server.id} className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-amber-100 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={selectedServerIds.includes(server.id)}
+                        onChange={() => toggleServer(server.id)}
+                        className="rounded border-gray-300 text-blue-600"
+                      />
+                      <Server size={12} className="text-gray-400 shrink-0" />
+                      <span className="text-xs text-gray-700 font-medium">{server.name}</span>
+                      <span className="text-xs text-gray-400 font-mono">{server.ip_address}</span>
+                      <span className={`ml-auto text-xs font-mono font-medium ${server.needs_update ? 'text-amber-600' : 'text-green-600'}`}>
+                        {server.agent_version || 'unknown'}
+                        {!server.needs_update && ' ✓'}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {result.latest && (
+            <p className="text-xs text-gray-400 text-right">
+              Latest: <span className="font-mono">{result.latest.version}</span>
+              {' · '}{new Date(result.latest.released_at).toLocaleDateString()}
+            </p>
+          )}
+        </div>
+      ) : (
+        <p className="text-sm text-gray-400 text-center py-6">
+          Click "Check for Updates" to see if a new version is available.
+        </p>
       )}
     </div>
   )

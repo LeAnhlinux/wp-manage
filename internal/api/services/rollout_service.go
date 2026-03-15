@@ -22,21 +22,16 @@ func NewRolloutService(db *gorm.DB) *RolloutService {
 
 // CreateRelease creates a new agent release
 func (s *RolloutService) CreateRelease(req models.CreateReleaseRequest) (*models.AgentRelease, error) {
-	// Check for duplicate version
-	var count int64
-	s.db.Model(&models.AgentRelease{}).Where("version = ?", req.Version).Count(&count)
-	if count > 0 {
-		return nil, fmt.Errorf("release version %s already exists", req.Version)
-	}
-
-	release := models.AgentRelease{
-		Version:      req.Version,
-		DownloadURL:  req.DownloadURL,
-		Checksum:     req.Checksum,
-		ReleaseNotes: req.ReleaseNotes,
-		FileSize:     req.FileSize,
-	}
-	if err := s.db.Create(&release).Error; err != nil {
+	// Upsert: if same version exists, update download_url/checksum and return it.
+	release := models.AgentRelease{Version: req.Version}
+	if err := s.db.Where(models.AgentRelease{Version: req.Version}).
+		Assign(models.AgentRelease{
+			DownloadURL:  req.DownloadURL,
+			Checksum:     req.Checksum,
+			ReleaseNotes: req.ReleaseNotes,
+			FileSize:     req.FileSize,
+		}).
+		FirstOrCreate(&release).Error; err != nil {
 		return nil, err
 	}
 	return &release, nil
@@ -96,9 +91,13 @@ func (s *RolloutService) CreateRollout(req models.CreateRolloutRequest) (*models
 		}
 	}
 
-	// Get all active servers
+	// Get servers: filtered by server_ids if provided, otherwise all active
 	var servers []models.Server
-	s.db.Where("status = ?", "active").Find(&servers)
+	query := s.db.Where("status = ?", "active")
+	if len(req.ServerIDs) > 0 {
+		query = query.Where("id IN ?", req.ServerIDs)
+	}
+	query.Find(&servers)
 	if len(servers) == 0 {
 		return nil, fmt.Errorf("no active servers found")
 	}

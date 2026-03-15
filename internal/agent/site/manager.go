@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"text/template"
 )
@@ -90,6 +91,27 @@ func (m *Manager) CreateSite(params CreateParams) error {
 	phpVer := params.PHPVersion
 	if phpVer == "" {
 		phpVer = "8.2"
+	}
+
+	// Validate that the requested PHP version is actually installed on this server.
+	// Check for the FPM directory — if it doesn't exist, PHP is not installed.
+	fpmDir := fmt.Sprintf("/etc/php/%s/fpm", phpVer)
+	if _, err := os.Stat(fpmDir); err != nil {
+		// List what IS installed to give a helpful error message
+		allVersions := []string{"7.4", "8.0", "8.1", "8.2", "8.3"}
+		var installedVersions []string
+		for _, v := range allVersions {
+			if _, e := os.Stat(fmt.Sprintf("/etc/php/%s/fpm", v)); e == nil {
+				installedVersions = append(installedVersions, "PHP "+v)
+			}
+		}
+		msg := fmt.Sprintf("PHP %s chưa được cài trên server này", phpVer)
+		if len(installedVersions) > 0 {
+			msg += fmt.Sprintf(". Các version đã cài: %s", strings.Join(installedVersions, ", "))
+		} else {
+			msg += ". Không tìm thấy PHP version nào được cài. Hãy cài PHP từ tab Server > PHP trước."
+		}
+		return fmt.Errorf("%s", msg)
 	}
 
 	steps := []struct {
@@ -205,7 +227,9 @@ func (m *Manager) CreateSiteManual(params CreateParams) error {
 
 // ExtractSourceZip extracts a zip archive to the site's webroot.
 // Handles the common case where the zip has a single top-level folder (moves its contents up).
-func (m *Manager) ExtractSourceZip(domain, zipPath string) error {
+// If DB credentials are provided, wp-config.php is patched with the correct values so the
+// site connects to the panel-managed database immediately after deploy.
+func (m *Manager) ExtractSourceZip(domain, zipPath, dbName, dbUser, dbPass, dbHost string) error {
 	webRoot := fmt.Sprintf("/var/www/%s/public", domain)
 	tmpExtract := fmt.Sprintf("/tmp/wp-source-extract-%s", domain)
 
@@ -240,6 +264,17 @@ func (m *Manager) ExtractSourceZip(domain, zipPath string) error {
 		}
 	}
 
+	// Patch wp-config.php with correct DB credentials for this server.
+	// Without this, the site would try to connect to the old server's DB.
+	if dbName != "" {
+		wpConfigPath := webRoot + "/wp-config.php"
+		if err := patchWPConfig(wpConfigPath, dbName, dbUser, dbPass, dbHost); err != nil {
+			slog.Warn("Could not patch wp-config.php", "domain", domain, "error", err)
+		} else {
+			slog.Info("wp-config.php patched with new DB credentials", "domain", domain, "db_name", dbName)
+		}
+	}
+
 	// Fix permissions — use the site's dedicated Linux user
 	siteUser := SiteUser(domain)
 	owner := fmt.Sprintf("%s:%s", siteUser, siteUser)
@@ -250,6 +285,33 @@ func (m *Manager) ExtractSourceZip(domain, zipPath string) error {
 
 	slog.Info("Source zip extracted", "domain", domain, "webroot", webRoot)
 	return nil
+}
+
+// patchWPConfig rewrites DB_NAME, DB_USER, DB_PASSWORD, DB_HOST values inside wp-config.php.
+// Handles both define('KEY', 'value') and define("KEY", "value") forms.
+func patchWPConfig(configPath, dbName, dbUser, dbPass, dbHost string) error {
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		return err // wp-config.php doesn't exist — not an error for non-WP sites
+	}
+	if dbHost == "" {
+		dbHost = "localhost"
+	}
+	content := string(raw)
+	content = replaceWPDefine(content, "DB_NAME", dbName)
+	content = replaceWPDefine(content, "DB_USER", dbUser)
+	content = replaceWPDefine(content, "DB_PASSWORD", dbPass)
+	content = replaceWPDefine(content, "DB_HOST", dbHost)
+	return os.WriteFile(configPath, []byte(content), 0640)
+}
+
+// replaceWPDefine replaces  define( 'KEY', 'old' );  →  define( 'KEY', 'new' );
+// Handles single/double quotes and optional spaces around the parentheses.
+func replaceWPDefine(content, key, value string) string {
+	// Escape single quotes in value to avoid breaking the PHP string
+	safeVal := strings.ReplaceAll(value, "'", "\\'")
+	re := regexp.MustCompile(`(?i)define\s*\(\s*['"]` + regexp.QuoteMeta(key) + `['"]\s*,\s*['"][^'"]*['"]\s*\)`)
+	return re.ReplaceAllString(content, fmt.Sprintf("define( '%s', '%s' )", key, safeVal))
 }
 
 // extractZipNative extracts a zip file to destDir using Go's archive/zip (no external tools needed).
@@ -291,7 +353,9 @@ func extractZipNative(zipPath, destDir string) error {
 }
 
 // ImportDatabase imports a SQL file into the site's database.
-func (m *Manager) ImportDatabase(dbName, sqlPath string) error {
+// After import, wp-cli is used to set the correct siteurl/home for `domain`.
+// If oldDomain is non-empty, a full wp search-replace is run first to rewrite all URLs.
+func (m *Manager) ImportDatabase(dbName, sqlPath, domain, oldDomain string) error {
 	defer os.Remove(sqlPath)
 
 	// Support .sql, .gz, .sql.gz, and .zip
@@ -319,6 +383,48 @@ func (m *Manager) ImportDatabase(dbName, sqlPath string) error {
 		return fmt.Errorf("import failed: %s", string(out))
 	}
 	slog.Info("Database imported", "db_name", dbName, "file", sqlPath)
+
+	// ── Post-import: fix WordPress site URL via WP-CLI ────────────────────────
+	// This ensures the site works on the current server/domain regardless of
+	// what siteurl/home values were stored in the exported database.
+	if domain == "" {
+		return nil
+	}
+	webRoot := fmt.Sprintf("/var/www/%s/public", domain)
+
+	// Detect whether SSL cert exists for this domain → use https or http
+	scheme := "http"
+	if _, err := os.Stat(fmt.Sprintf("/etc/letsencrypt/live/%s", domain)); err == nil {
+		scheme = "https"
+	}
+	siteURL := fmt.Sprintf("%s://%s", scheme, domain)
+
+	// If old domain is provided, rewrite all occurrences (posts, meta, options, etc.)
+	if oldDomain != "" && oldDomain != domain {
+		slog.Info("Running wp search-replace for domain change", "old", oldDomain, "new", domain)
+		// Replace plain domain references
+		exec.Command("bash", "-c", fmt.Sprintf(
+			`cd %s && wp search-replace "%s" "%s" --all-tables --allow-root 2>/dev/null`,
+			webRoot, oldDomain, domain)).Run()
+		// Normalise http→https if SSL is enabled
+		if scheme == "https" {
+			exec.Command("bash", "-c", fmt.Sprintf(
+				`cd %s && wp search-replace "http://%s" "https://%s" --all-tables --allow-root 2>/dev/null`,
+				webRoot, domain, domain)).Run()
+		}
+	}
+
+	// Always force siteurl and home to the correct value (handles cases where
+	// old_domain was not supplied but the DB had a different URL).
+	out2, err2 := exec.Command("bash", "-c", fmt.Sprintf(
+		`cd %s && wp option update siteurl "%s" --allow-root 2>&1 && wp option update home "%s" --allow-root 2>&1`,
+		webRoot, siteURL, siteURL)).CombinedOutput()
+	if err2 != nil {
+		slog.Warn("wp option update failed (wp-cli not available or not a WP site)", "output", string(out2))
+	} else {
+		slog.Info("WordPress site URL updated", "domain", domain, "url", siteURL)
+	}
+
 	return nil
 }
 
@@ -534,14 +640,24 @@ func (m *Manager) installAutologin(webRoot, domain string) (string, error) {
 		return "", fmt.Errorf("generate secret: %w", err)
 	}
 
-	// 1) Add WPM_AUTOLOGIN_SECRET to wp-config.php
+	// 1) Add/sync WPM_AUTOLOGIN_SECRET in wp-config.php
 	wpConfig := webRoot + "/wp-config.php"
 	data, err := os.ReadFile(wpConfig)
 	if err != nil {
 		return "", fmt.Errorf("read wp-config: %w", err)
 	}
 	content := string(data)
-	if !strings.Contains(content, "WPM_AUTOLOGIN_SECRET") {
+	if strings.Contains(content, "WPM_AUTOLOGIN_SECRET") {
+		// Secret already in wp-config.php — read it back so DB stays in sync.
+		// (Re-generating a new secret here and storing in DB would cause a mismatch
+		// because wp-config.php still has the old value.)
+		re := regexp.MustCompile(`define\('WPM_AUTOLOGIN_SECRET',\s*'([^']+)'\)`)
+		if m := re.FindStringSubmatch(content); len(m) > 1 {
+			secret = m[1]
+		}
+		// else: define exists but can't parse — fall through with newly generated secret
+		// and overwrite below
+	} else {
 		content = strings.Replace(content, "/* That's all",
 			fmt.Sprintf("define('WPM_AUTOLOGIN_SECRET', '%s');\n/* That's all", secret), 1)
 		if err := os.WriteFile(wpConfig, []byte(content), 0644); err != nil {

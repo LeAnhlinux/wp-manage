@@ -32,6 +32,7 @@ type ProgressFunc func(progress models.DeployProgress)
 
 // Deploy connects to VPS via SSH and installs the agent binary + systemd service.
 // SSH credentials are used only during this call and never persisted.
+// Services (Nginx, PHP-FPM, MariaDB, etc.) are installed separately via the panel after deploy.
 func (s *DeployService) Deploy(req models.AutoDeployRequest, progress ProgressFunc) error {
 	totalSteps := 7
 
@@ -119,6 +120,7 @@ SyslogIdentifier=wp-manage-agent
 WantedBy=multi-user.target
 `, apiURL, server.AgentAPIKey)
 
+
 	if err := s.writeRemoteFile(client, "/etc/systemd/system/wp-manage-agent.service", serviceContent); err != nil {
 		return fmt.Errorf("tạo systemd service thất bại: %w", err)
 	}
@@ -147,10 +149,9 @@ WantedBy=multi-user.target
 		return fmt.Errorf("agent không khởi động được. Logs:\n%s", logs)
 	}
 
-	// Step 7: Update server status
-	progress(models.DeployProgress{Step: 7, Total: totalSteps, Message: "Hoàn tất deploy agent!", Status: "running"})
+	// Step 7: Finalize
+	progress(models.DeployProgress{Step: 7, Total: totalSteps, Message: "Hoàn tất...", Status: "running"})
 
-	// Detect OS info from remote
 	osVersion, _ := s.runCommand(client, `grep PRETTY_NAME /etc/os-release | cut -d'"' -f2`)
 	osVersion = strings.TrimSpace(osVersion)
 
@@ -159,7 +160,7 @@ WantedBy=multi-user.target
 		"os":     osVersion,
 	})
 
-	progress(models.DeployProgress{Step: 7, Total: totalSteps, Message: "Deploy agent thành công!", Status: "success"})
+	progress(models.DeployProgress{Step: 7, Total: totalSteps, Message: "Deploy agent thành công! Tiếp theo: cài Nginx, PHP-FPM, MariaDB trong Server Detail.", Status: "success"})
 
 	slog.Info("Auto deploy completed", "server_id", server.ID, "ip", server.IPAddress)
 	return nil

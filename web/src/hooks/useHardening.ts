@@ -10,3 +10,12 @@ export function useHardenWordPress(siteId: number) {
     },
   })
 }
+
+export function useRevertHardening(siteId: number) {
+  return useMutation({
+    mutationFn: async (req: HardenWordPressRequest) => {
+      const { data } = await api.post<APIResponse>(`/sites/${siteId}/harden/revert`, req)
+      return data
+    },
+  })
+}

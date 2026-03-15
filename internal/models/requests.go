@@ -103,7 +103,11 @@ type AgentBackupResult struct {
 
 type MigrateRequest struct {
 	TargetServerID uint64 `json:"target_server_id" validate:"required"`
-	ChangeDomain   string `json:"change_domain"`
+	// Mode: "keep_domain" (suspend source, auto DNS update) or "change_domain" (wp search-replace)
+	Mode          string `json:"mode"`
+	NewDomain     string `json:"new_domain"`     // required when mode=change_domain
+	UpdateDNS     bool   `json:"update_dns"`     // auto-update DNS A record after keep_domain migration
+	CleanupSource bool   `json:"cleanup_source"` // delete site files, DB, configs from source after migrate
 }
 
 // Migration task data for agent
@@ -120,7 +124,10 @@ type AgentMigrateTask struct {
 	SSLEnabled     bool   `json:"ssl_enabled"`
 	WPAdminUser    string `json:"wp_admin_user"`
 	WPAdminEmail   string `json:"wp_admin_email"`
-	ChangeDomain   string `json:"change_domain,omitempty"`
+	LinuxUser      string `json:"linux_user"`           // per-site Linux user for correct chown
+	Mode           string `json:"mode"`                 // "keep_domain" | "change_domain"
+	NewDomain      string `json:"new_domain,omitempty"` // for change_domain mode
+	CleanupSource  bool   `json:"cleanup_source"`       // delete files, DB, configs from source after migrate
 }
 
 type AgentMigrationUpdate struct {
@@ -239,7 +246,21 @@ type UpdateWAFRequest struct {
 
 type StartMalwareScanRequest struct {
 	ScanType string `json:"scan_type" validate:"omitempty,oneof=full quick custom"`
+	Engine   string `json:"engine" validate:"omitempty,oneof=wp_signature clamav both"` // default: wp_signature
 	Path     string `json:"path"` // custom path for custom scan type
+}
+
+type CreateScanScheduleRequest struct {
+	ScanType  string `json:"scan_type" validate:"omitempty,oneof=full quick"`
+	Engine    string `json:"engine" validate:"omitempty,oneof=wp_signature clamav both"`
+	IntervalH int    `json:"interval_h" validate:"required,min=1,max=8760"` // 1h–365d
+}
+
+type UpdateScanScheduleRequest struct {
+	ScanType  string `json:"scan_type,omitempty"`
+	Engine    string `json:"engine,omitempty"`
+	IntervalH int    `json:"interval_h,omitempty"`
+	Enabled   *bool  `json:"enabled,omitempty"`
 }
 
 type AgentWAFTask struct {
@@ -255,7 +276,16 @@ type AgentMalwareScanTask struct {
 	SiteID   uint64 `json:"site_id"`
 	Domain   string `json:"domain"`
 	ScanType string `json:"scan_type"`
+	Engine   string `json:"engine"` // wp_signature, clamav, both
 	Path     string `json:"path"`
+}
+
+type AgentClamAVStatusResult struct {
+	Installed   bool   `json:"installed"`
+	Version     string `json:"version,omitempty"`     // e.g. "ClamAV 0.103.8"
+	DBVersion   string `json:"db_version,omitempty"`  // e.g. "daily.cld 27161"
+	LastUpdated string `json:"last_updated,omitempty"` // human readable
+	Error       string `json:"error,omitempty"`
 }
 
 type AgentMalwareScanResult struct {
@@ -355,19 +385,26 @@ type AgentCreateSiteTask struct {
 }
 
 // AgentUploadSourceTask carries info for the agent to download and extract a source zip.
+// DB credentials are passed so the agent can patch wp-config.php after extraction.
 type AgentUploadSourceTask struct {
 	Domain      string `json:"domain"`
 	DownloadURL string `json:"download_url"`
 	FileToken   string `json:"file_token"`
+	DBName      string `json:"db_name"`   // used to patch wp-config.php
+	DBUser      string `json:"db_user"`
+	DBPass      string `json:"db_pass"`
+	DBHost      string `json:"db_host"` // defaults to "localhost"
 }
 
 // AgentImportDBTask carries info for the agent to download and import a SQL file.
+// OldDomain is optional: if set, wp search-replace is run to rewrite URLs after import.
 type AgentImportDBTask struct {
 	Domain      string `json:"domain"`
 	DBName      string `json:"db_name"`
 	DownloadURL string `json:"download_url"`
 	FileToken   string `json:"file_token"`
-	FileExt     string `json:"file_ext"` // ".sql" or ".gz"
+	FileExt     string `json:"file_ext"`  // ".sql", ".gz", or ".zip"
+	OldDomain   string `json:"old_domain"` // optional: source domain for search-replace
 }
 
 type AgentTaskResult struct {
@@ -404,9 +441,10 @@ type CreateReleaseRequest struct {
 }
 
 type CreateRolloutRequest struct {
-	ReleaseID    uint64 `json:"release_id" validate:"required"`
-	Strategy     string `json:"strategy" validate:"required,oneof=canary rolling immediate"`
-	BatchPercent int    `json:"batch_percent" validate:"omitempty,min=1,max=100"`
+	ReleaseID    uint64   `json:"release_id" validate:"required"`
+	Strategy     string   `json:"strategy" validate:"required,oneof=canary rolling immediate"`
+	BatchPercent int      `json:"batch_percent" validate:"omitempty,min=1,max=100"`
+	ServerIDs    []uint64 `json:"server_ids"` // optional — empty means all active servers
 }
 
 type AgentUpdateTask struct {
@@ -510,6 +548,14 @@ type AgentImageOptTask struct {
 	WebPEnabled bool   `json:"webp_enabled"`
 	MaxWidth    int    `json:"max_width"`
 	MaxHeight   int    `json:"max_height"`
+}
+
+// AgentToggleImageOptTask enables/disables auto-compress on upload (mu-plugin)
+type AgentToggleImageOptTask struct {
+	Domain      string `json:"domain"`
+	Enabled     bool   `json:"enabled"`
+	Quality     int    `json:"quality"`
+	WebPEnabled bool   `json:"webp_enabled"`
 }
 
 type AgentImageOptResult struct {
@@ -673,6 +719,19 @@ type CreateDomainRequest struct {
 	Type   string `json:"type"` // primary, alias, subdomain
 }
 
+type UpdateDomainRequest struct {
+	RedirectTo   string `json:"redirect_to"`   // empty = clear redirect
+	RedirectType int    `json:"redirect_type"`  // 301 or 302
+}
+
+type DNSCheckResult struct {
+	Domain      string   `json:"domain"`
+	ServerIP    string   `json:"server_ip"`
+	ResolvedIPs []string `json:"resolved_ips"`
+	Pointing    bool     `json:"pointing"`
+	Message     string   `json:"message"`
+}
+
 type RedisConfigRequest struct {
 	Enabled     *bool `json:"enabled"`
 	MaxMemoryMB *int  `json:"max_memory_mb"`
@@ -716,11 +775,14 @@ type AgentCronTask struct {
 }
 
 type AgentDomainTask struct {
-	Action     string `json:"action"` // add, remove
-	Domain     string `json:"domain"`
-	DomainType string `json:"domain_type"`
-	SiteDomain string `json:"site_domain"` // primary domain of the site
-	PHPVersion string `json:"php_version"`
+	Action       string `json:"action"`                  // add, remove, issue_ssl, set_redirect, remove_redirect
+	Domain       string `json:"domain"`                  // alias domain being acted on
+	DomainType   string `json:"domain_type"`
+	SiteDomain   string `json:"site_domain"`             // primary domain of the site
+	PHPVersion   string `json:"php_version"`
+	Email        string `json:"email,omitempty"`         // for certbot
+	RedirectTo   string `json:"redirect_to,omitempty"`   // set_redirect: target URL
+	RedirectType int    `json:"redirect_type,omitempty"` // 301 or 302
 }
 
 type AgentRedisTask struct {
@@ -871,6 +933,7 @@ type AgentSFTPTask struct {
 
 type AgentHardenTask struct {
 	Domain            string `json:"domain"`
+	Revert            bool   `json:"revert"` // true = revert mode
 	DisableXMLRPC     bool   `json:"disable_xmlrpc"`
 	HideWPVersion     bool   `json:"hide_wp_version"`
 	SecureFilePerms   bool   `json:"secure_file_perms"`
@@ -908,6 +971,53 @@ type CreateDNSProviderRequest struct {
 	APIEmail     string `json:"api_email"`
 	ZoneID       string `json:"zone_id"`
 	Domain       string `json:"domain" validate:"required"`
+}
+
+type CreateGlobalDNSProviderRequest struct {
+	ProviderType string `json:"provider_type" validate:"required"`
+	APIKey       string `json:"api_key" validate:"required"`
+	APIEmail     string `json:"api_email"`
+	ZoneID       string `json:"zone_id" validate:"required"`
+	Domain       string `json:"domain" validate:"required"`
+}
+
+type LookupZoneRequest struct {
+	ProviderType string `json:"provider_type" validate:"required"`
+	APIKey       string `json:"api_key" validate:"required"`
+	Domain       string `json:"domain" validate:"required"`
+}
+
+type LookupZoneResult struct {
+	ZoneID   string `json:"zone_id"`
+	ZoneName string `json:"zone_name"`
+}
+
+type TestDNSProviderRequest struct {
+	ProviderType string `json:"provider_type" validate:"required"`
+	APIKey       string `json:"api_key" validate:"required"`
+	APIEmail     string `json:"api_email"`
+	ZoneID       string `json:"zone_id" validate:"required"`
+	Domain       string `json:"domain"`
+}
+
+type TestDNSProviderResult struct {
+	Success  bool   `json:"success"`
+	Message  string `json:"message"`
+	ZoneName string `json:"zone_name,omitempty"`
+}
+
+type AutoCreateDNSRecordRequest struct {
+	Domain   string `json:"domain" validate:"required"`
+	ServerIP string `json:"server_ip" validate:"required"`
+}
+
+type AutoCreateDNSRecordResult struct {
+	RecordID   string `json:"record_id"`
+	ProviderID uint64 `json:"provider_id"`
+	Domain     string `json:"domain"`
+	IP         string `json:"ip"`
+	Action     string `json:"action"` // "created" or "updated"
+	ZoneName   string `json:"zone_name"`
 }
 
 type UpdateDNSRecordRequest struct {

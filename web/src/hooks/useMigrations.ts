@@ -9,6 +9,11 @@ export function useMigrations(page = 1) {
       const { data } = await api.get<PaginatedResponse<Migration>>(`/migrations?page=${page}`)
       return data
     },
+    refetchInterval: (query) => {
+      // Auto-refresh while any migration is running
+      const hasRunning = query.state.data?.data?.some(m => m.status === 'running')
+      return hasRunning ? 3000 : false
+    },
   })
 }
 
@@ -29,7 +34,7 @@ export function useMigration(id: number) {
   })
 }
 
-export function useMigrationLogs(id: number) {
+export function useMigrationLogs(id: number, isRunning = false) {
   return useQuery({
     queryKey: ['migration-logs', id],
     queryFn: async () => {
@@ -37,7 +42,7 @@ export function useMigrationLogs(id: number) {
       return data.data!
     },
     enabled: !!id,
-    refetchInterval: 5000, // refresh logs every 5s
+    refetchInterval: isRunning ? 3000 : false, // only poll while running
   })
 }
 
@@ -65,6 +70,19 @@ export function useRollbackMigration() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['migrations'] })
       qc.invalidateQueries({ queryKey: ['sites'] })
+    },
+  })
+}
+
+export function useCleanupMigrationSource() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (id: number) => {
+      const { data } = await api.post<APIResponse>(`/migrations/${id}/cleanup-source`)
+      return data
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['migrations'] })
     },
   })
 }

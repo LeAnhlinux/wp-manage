@@ -82,6 +82,13 @@ func (s *UptimeService) GetAllEnabled() ([]models.UptimeCheck, error) {
 	return checks, err
 }
 
+// ListAll returns all uptime checks across all sites, with Site preloaded.
+func (s *UptimeService) ListAll() ([]models.UptimeCheck, error) {
+	var checks []models.UptimeCheck
+	err := s.db.Preload("Site").Order("site_id ASC, created_at DESC").Find(&checks).Error
+	return checks, err
+}
+
 func (s *UptimeService) LogResult(checkID uint64, statusCode, responseMs int, errMsg string) error {
 	log := models.UptimeLog{
 		CheckID:    checkID,

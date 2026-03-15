@@ -35,3 +35,81 @@ export function useCreatePanelRelease() {
     },
   })
 }
+
+export function useApplyRelease() {
+  return useMutation({
+    mutationFn: async (releaseId: number) => {
+      // Returns 202 — API will restart shortly after
+      await api.post(`/settings/panel-update/releases/${releaseId}/apply`)
+    },
+  })
+}
+
+// --- Simple auto-update (check mirror + one-click apply) ---
+
+export interface ServerAgentInfo {
+  id: number
+  name: string
+  ip_address: string
+  agent_version: string
+  needs_update: boolean
+}
+
+export interface CheckUpdateResult {
+  current_panel: string
+  current_agent: string
+  latest: {
+    version: string
+    released_at: string
+    panel: { download_url: string; checksum: string }
+    agent: { download_url: string; checksum: string }
+  } | null
+  panel_newer: boolean
+  agent_newer: boolean
+  server_agents: ServerAgentInfo[]
+}
+
+export function useCheckUpdate() {
+  return useMutation({
+    mutationFn: async () => {
+      const { data } = await api.get<APIResponse<CheckUpdateResult>>('/settings/update/check')
+      return data.data!
+    },
+  })
+}
+
+export function useApplyPanelUpdate() {
+  return useMutation({
+    mutationFn: async (req: { version: string; download_url: string; checksum: string }) => {
+      await api.post('/settings/update/apply-panel', req)
+    },
+  })
+}
+
+export function useApplyAgentUpdate() {
+  return useMutation({
+    mutationFn: async (req: { version: string; download_url: string; checksum: string; server_ids?: number[] }) => {
+      const { data } = await api.post<APIResponse<{ rollout_id: number }>>('/settings/update/apply-agents', req)
+      return data.data!
+    },
+  })
+}
+
+export interface UpdateResult {
+  status: 'completed' | 'rolled_back' | 'failed'
+  new_version?: string
+  old_version?: string
+  error?: string
+  timestamp?: string
+}
+
+export function useLastUpdateResult() {
+  return useQuery({
+    queryKey: ['panel-last-result'],
+    queryFn: async () => {
+      const { data } = await api.get<APIResponse<UpdateResult>>('/settings/panel-update/last-result')
+      return data.data || null
+    },
+    retry: false,
+  })
+}

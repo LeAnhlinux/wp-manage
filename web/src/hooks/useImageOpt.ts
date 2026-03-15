@@ -25,6 +25,19 @@ export function useUpdateImageOptConfig(siteId: number) {
   })
 }
 
+export function useToggleImageOpt(siteId: number) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (enabled: boolean) => {
+      const { data } = await api.post<APIResponse<ImageOptConfig>>(`/sites/${siteId}/image-optimization/toggle`, { enabled })
+      return data.data!
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['imageopt-config', siteId] })
+    },
+  })
+}
+
 export function useRunImageOpt(siteId: number) {
   const qc = useQueryClient()
   return useMutation({
@@ -44,6 +57,11 @@ export function useImageOptResults(siteId: number, page = 1) {
     queryFn: async () => {
       const { data } = await api.get<PaginatedResponse<ImageOptResult[]>>(`/sites/${siteId}/image-optimization/results?page=${page}&per_page=10`)
       return data
+    },
+    // Auto-refresh while any run is in progress
+    refetchInterval: (query) => {
+      const results = (query.state.data?.data as ImageOptResult[] | undefined) ?? []
+      return results.some(r => r.status === 'running') ? 3000 : false
     },
   })
 }
