@@ -1127,7 +1127,8 @@ type MariaDBUser struct {
 // ==================== Batch 8: Fail2Ban ====================
 
 type Fail2BanStatus struct {
-	Jails []Fail2BanJail `json:"jails"`
+	ServiceRunning bool           `json:"service_running"`
+	Jails          []Fail2BanJail `json:"jails"`
 }
 
 type Fail2BanJail struct {

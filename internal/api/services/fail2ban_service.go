@@ -68,6 +68,29 @@ func (s *Fail2BanService) UnbanIP(serverID uint64, jail, ip string) error {
 	return nil
 }
 
+// ToggleService enables or disables the fail2ban systemd service (synchronous).
+func (s *Fail2BanService) ToggleService(serverID uint64, enable bool) error {
+	dataJSON, _ := json.Marshal(map[string]interface{}{"enable": enable})
+	task := models.TaskQueue{
+		ServerID: serverID,
+		TaskType: "fail2ban_toggle_service",
+		Data:     string(dataJSON),
+		Status:   "pending",
+	}
+	if err := s.db.Create(&task).Error; err != nil {
+		return fmt.Errorf("failed to queue task: %w", err)
+	}
+
+	result, err := WaitForTaskCompleteWithTimeout(s.db, task.ID, 20*time.Second)
+	if err != nil {
+		return fmt.Errorf("agent timeout: %w", err)
+	}
+	if result.Error != "" {
+		return fmt.Errorf("agent error: %s", result.Error)
+	}
+	return nil
+}
+
 // UpdateJail updates fail2ban jail settings (synchronous).
 func (s *Fail2BanService) UpdateJail(serverID uint64, req models.Fail2BanUpdateJailRequest) error {
 	data := map[string]interface{}{"jail": req.Jail}

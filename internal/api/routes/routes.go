@@ -571,6 +571,7 @@ func Setup(
 	// Fail2Ban routes (server-scoped)
 	serverFail2Ban := servers.Group("/:id/fail2ban", serverAccess)
 	serverFail2Ban.Get("/", fail2banHandler.GetStatus)
+	serverFail2Ban.Post("/service", middleware.PermissionRequired("infrastructure", "manage"), fail2banHandler.ToggleService)
 	serverFail2Ban.Post("/unban", middleware.PermissionRequired("infrastructure", "manage"), fail2banHandler.UnbanIP)
 	serverFail2Ban.Put("/jail", middleware.PermissionRequired("infrastructure", "manage"), fail2banHandler.UpdateJail)
 

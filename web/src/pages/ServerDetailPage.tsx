@@ -24,7 +24,7 @@ import { useCronJobsByServer, useCreateCronJob, useUpdateCronJob, useToggleCronJ
 import { useSSHKeys, useCreateSSHKey, useDeleteSSHKey } from '@/hooks/useSSHKeys'
 import { useAlertRules, useCreateAlertRule, useDeleteAlertRule, useAlertHistory, usePHPFPMAutotune } from '@/hooks/useAlerts'
 import { useStorageCredentials, useCreateStorageCredential, useDeleteStorageCredential } from '@/hooks/useStorage'
-import { useFail2BanStatus, useFail2BanUnban, useFail2BanUpdateJail } from '@/hooks/useFail2Ban'
+import { useFail2BanStatus, useFail2BanUnban, useFail2BanUpdateJail, useFail2BanToggleService } from '@/hooks/useFail2Ban'
 import { useServerRedisStats, useFlushServerRedis, useServerRedisSiteStatuses, useToggleRedis } from '@/hooks/useRedis'
 import { useServerBackups, useDeleteBackup } from '@/hooks/useBackups'
 import { usePermissions } from '@/hooks/usePermissions'
@@ -2507,6 +2507,7 @@ interface Fail2BanJail {
 }
 
 interface Fail2BanStatusData {
+  service_running: boolean
   jails: Fail2BanJail[]
 }
 
@@ -2516,14 +2517,25 @@ function Fail2BanTab({ serverId }: { serverId: number }) {
   const { data: status, isLoading, isError, error, refetch, isFetching } = useFail2BanStatus(serverId)
   const unban = useFail2BanUnban(serverId)
   const updateJail = useFail2BanUpdateJail(serverId)
+  const toggleService = useFail2BanToggleService(serverId)
   const [unbanMsg, setUnbanMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
   const [editingJail, setEditingJail] = useState<string | null>(null)
   const [editBanTime, setEditBanTime] = useState(0)
   const [editMaxRetry, setEditMaxRetry] = useState(0)
 
   const f2bData = status as Fail2BanStatusData | null
+  const serviceRunning = f2bData?.service_running ?? false
   const jails = f2bData?.jails ?? []
   const totalBanned = jails.reduce((sum, j) => sum + (j.banned_ips?.length ?? 0), 0)
+
+  const handleToggleService = async () => {
+    try {
+      await toggleService.mutateAsync(!serviceRunning)
+    } catch (e: unknown) {
+      setUnbanMsg({ type: 'err', text: e instanceof Error ? e.message : 'Failed to toggle service' })
+      setTimeout(() => setUnbanMsg(null), 4000)
+    }
+  }
 
   const handleUnbanIP = async (jail: string, ip: string) => {
     try {
@@ -2559,7 +2571,30 @@ function Fail2BanTab({ serverId }: { serverId: number }) {
               <Shield size={20} className="text-red-500" /> Fail2Ban Management
             </h2>
             {!isLoading && !isError && (
-              <div className="flex gap-3 text-sm">
+              <div className="flex gap-2 text-sm items-center">
+                {/* Service toggle */}
+                {canManage && (
+                  <button
+                    onClick={handleToggleService}
+                    disabled={toggleService.isPending || isLoading}
+                    title={serviceRunning ? 'Click to stop Fail2Ban service' : 'Click to start Fail2Ban service'}
+                    className="flex items-center gap-1.5 disabled:opacity-50"
+                  >
+                    {toggleService.isPending
+                      ? <Loader2 size={20} className="animate-spin text-gray-400" />
+                      : serviceRunning
+                        ? <ToggleRight size={24} className="text-emerald-500" />
+                        : <ToggleLeft size={24} className="text-gray-400" />}
+                    <span className={`font-medium ${serviceRunning ? 'text-emerald-600' : 'text-gray-500'}`}>
+                      {serviceRunning ? 'Running' : 'Stopped'}
+                    </span>
+                  </button>
+                )}
+                {!canManage && (
+                  <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${serviceRunning ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>
+                    {serviceRunning ? 'Running' : 'Stopped'}
+                  </span>
+                )}
                 <span className="px-2 py-0.5 bg-gray-100 rounded-full text-gray-600">
                   {jails.length} jail{jails.length !== 1 ? 's' : ''}
                 </span>

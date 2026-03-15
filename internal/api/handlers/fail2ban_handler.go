@@ -37,6 +37,24 @@ func (h *Fail2BanHandler) UnbanIP(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"success": true, "message": "IP unbanned successfully"})
 }
 
+func (h *Fail2BanHandler) ToggleService(c *fiber.Ctx) error {
+	serverID, _ := strconv.ParseUint(c.Params("id"), 10, 64)
+	var body struct {
+		Enable bool `json:"enable"`
+	}
+	if err := c.BodyParser(&body); err != nil {
+		return c.Status(400).JSON(fiber.Map{"success": false, "error": "Invalid request"})
+	}
+	if err := h.service.ToggleService(serverID, body.Enable); err != nil {
+		return c.Status(500).JSON(fiber.Map{"success": false, "error": err.Error()})
+	}
+	action := "stopped"
+	if body.Enable {
+		action = "started"
+	}
+	return c.JSON(fiber.Map{"success": true, "message": "Fail2Ban service " + action})
+}
+
 func (h *Fail2BanHandler) UpdateJail(c *fiber.Ctx) error {
 	serverID, _ := strconv.ParseUint(c.Params("id"), 10, 64)
 	var req models.Fail2BanUpdateJailRequest

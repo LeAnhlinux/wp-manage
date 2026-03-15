@@ -498,6 +498,12 @@ func (s *AgentServer) pollTasks() {
 			json.Unmarshal(task.Data, &data)
 			go s.executeFail2BanUpdateJail(task.TaskID, data)
 
+		case "fail2ban_toggle_service":
+			var data map[string]interface{}
+			json.Unmarshal(task.Data, &data)
+			enable, _ := data["enable"].(bool)
+			go s.executeFail2BanToggleService(task.TaskID, enable)
+
 		case "upload_source_zip":
 			var uploadTask models.AgentUploadSourceTask
 			json.Unmarshal(task.Data, &uploadTask)
@@ -2699,6 +2705,24 @@ func (s *AgentServer) executeFail2BanUpdateJail(taskID uint64, data map[string]i
 		result.Error = err.Error()
 	} else {
 		slog.Info("Fail2ban jail updated", "jail", jail)
+	}
+	s.reportTaskResult(result)
+}
+
+func (s *AgentServer) executeFail2BanToggleService(taskID uint64, enable bool) {
+	action := "stop"
+	if enable {
+		action = "start"
+	}
+	slog.Info("Toggling fail2ban service", "action", action)
+	result := models.AgentTaskResult{TaskID: taskID}
+
+	if err := agentfail2ban.ToggleService(enable); err != nil {
+		slog.Error("Fail2ban toggle service failed", "enable", enable, "error", err)
+		result.Error = err.Error()
+	} else {
+		slog.Info("Fail2ban service toggled", "action", action)
+		result.Output = fmt.Sprintf(`{"service_running":%v}`, enable)
 	}
 	s.reportTaskResult(result)
 }
