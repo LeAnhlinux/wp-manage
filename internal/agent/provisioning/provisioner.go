@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
+
+	agentfail2ban "github.com/gofiber-team/wp-manage/internal/agent/fail2ban"
 )
 
 type ProgressFunc func(step string, progress int, message string)
@@ -93,7 +95,15 @@ func (p *Provisioner) installCertbot() error {
 }
 
 func (p *Provisioner) installFail2Ban() error {
-	return runCmd("apt-get", "install", "-y", "fail2ban")
+	if err := runCmd("apt-get", "install", "-y", "fail2ban"); err != nil {
+		return err
+	}
+	// Auto-configure default jails (nginx + wordpress) after install.
+	// Errors are non-fatal — jails can be set up manually via panel later.
+	if err := agentfail2ban.SetupDefaultJails(); err != nil {
+		slog.Warn("fail2ban default jails setup failed (non-fatal)", "error", err)
+	}
+	return nil
 }
 
 func (p *Provisioner) configureUFW() error {

@@ -108,57 +108,102 @@ func ToggleService(enable bool) error {
 	return nil
 }
 
-// GetStatus returns fail2ban status including all jails.
-// Returns empty slice (not error) when fail2ban is stopped.
-func GetStatus() ([]JailStatus, error) {
+// configuredJails returns all jail names from wp-manage jail config file.
+// This includes stopped jails that won't appear in fail2ban-client status.
+func configuredJails() []string {
+	data, err := os.ReadFile(jailConfigPath)
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			name := line[1 : len(line)-1]
+			if name != "" && !strings.EqualFold(name, "DEFAULT") {
+				names = append(names, name)
+			}
+		}
+	}
+	return names
+}
+
+// runningJails returns the set of jail names currently active in fail2ban.
+func runningJails() map[string]bool {
 	out, err := exec.Command("fail2ban-client", "status").Output()
 	if err != nil {
-		return nil, fmt.Errorf("fail2ban-client status: %w", err)
+		return map[string]bool{}
 	}
-
-	lines := strings.Split(string(out), "\n")
-	var jailNames []string
-	for _, line := range lines {
+	running := map[string]bool{}
+	for _, line := range strings.Split(string(out), "\n") {
 		if strings.Contains(line, "Jail list:") {
 			parts := strings.SplitN(line, ":", 2)
 			if len(parts) == 2 {
-				names := strings.Split(strings.TrimSpace(parts[1]), ",")
-				for _, n := range names {
+				for _, n := range strings.Split(strings.TrimSpace(parts[1]), ",") {
 					n = strings.TrimSpace(n)
 					if n != "" {
-						jailNames = append(jailNames, n)
+						running[n] = true
 					}
 				}
 			}
+		}
+	}
+	return running
+}
+
+// GetStatus returns ALL configured jails (running + stopped).
+// Stopped jails show enabled=false so the UI can still toggle them back on.
+func GetStatus() ([]JailStatus, error) {
+	// Merge: configured jails (from file) + any extra running jails (e.g. sshd from defaults-debian.conf)
+	fromFile := configuredJails()
+	running := runningJails()
+
+	// Build union of jail names: file-configured + running
+	seen := map[string]bool{}
+	var allNames []string
+	for _, n := range fromFile {
+		if !seen[n] {
+			allNames = append(allNames, n)
+			seen[n] = true
+		}
+	}
+	for n := range running {
+		if !seen[n] {
+			allNames = append(allNames, n)
+			seen[n] = true
 		}
 	}
 
 	var jails []JailStatus
-	for _, name := range jailNames {
-		jail := JailStatus{Name: name, Enabled: true}
+	for _, name := range allNames {
+		jail := JailStatus{
+			Name:      name,
+			Enabled:   running[name],
+			BannedIPs: []string{},
+		}
 
-		jailOut, err := exec.Command("fail2ban-client", "status", name).Output()
-		if err == nil {
-			for _, line := range strings.Split(string(jailOut), "\n") {
-				line = strings.TrimSpace(line)
-				if strings.Contains(line, "Banned IP list:") {
-					parts := strings.SplitN(line, ":", 2)
-					if len(parts) == 2 {
-						jail.BannedIPs = strings.Fields(strings.TrimSpace(parts[1]))
+		// Only query live data for running jails
+		if running[name] {
+			jailOut, err := exec.Command("fail2ban-client", "status", name).Output()
+			if err == nil {
+				for _, line := range strings.Split(string(jailOut), "\n") {
+					line = strings.TrimSpace(line)
+					if strings.Contains(line, "Banned IP list:") {
+						parts := strings.SplitN(line, ":", 2)
+						if len(parts) == 2 {
+							jail.BannedIPs = strings.Fields(strings.TrimSpace(parts[1]))
+						}
 					}
-				}
-				if strings.Contains(line, "Currently banned:") {
-					parts := strings.SplitN(line, ":", 2)
-					if len(parts) == 2 {
-						jail.TotalBans, _ = strconv.Atoi(strings.TrimSpace(parts[1]))
+					if strings.Contains(line, "Currently banned:") {
+						parts := strings.SplitN(line, ":", 2)
+						if len(parts) == 2 {
+							jail.TotalBans, _ = strconv.Atoi(strings.TrimSpace(parts[1]))
+						}
 					}
 				}
 			}
 		}
 
-		if jail.BannedIPs == nil {
-			jail.BannedIPs = []string{}
-		}
 		jails = append(jails, jail)
 	}
 
