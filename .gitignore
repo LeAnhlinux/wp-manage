@@ -57,3 +57,8 @@ ziotWqsH
 # Claude internal
 # ===========================
 .claude/
+
+# ===========================
+# Sensitive server lists
+# ===========================
+scripts/agent-servers.txt
