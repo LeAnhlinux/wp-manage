@@ -37,6 +37,14 @@ func (h *Fail2BanHandler) UnbanIP(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"success": true, "message": "IP unbanned successfully"})
 }
 
+func (h *Fail2BanHandler) SetupDefaultJails(c *fiber.Ctx) error {
+	serverID, _ := strconv.ParseUint(c.Params("id"), 10, 64)
+	if err := h.service.SetupDefaultJails(serverID); err != nil {
+		return c.Status(500).JSON(fiber.Map{"success": false, "error": err.Error()})
+	}
+	return c.JSON(fiber.Map{"success": true, "message": "Default jails configured (nginx + wordpress). Fail2Ban reloaded."})
+}
+
 func (h *Fail2BanHandler) ToggleService(c *fiber.Ctx) error {
 	serverID, _ := strconv.ParseUint(c.Params("id"), 10, 64)
 	var body struct {

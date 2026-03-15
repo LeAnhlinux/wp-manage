@@ -47,3 +47,14 @@ export function useFail2BanToggleService(serverId: number) {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['fail2ban', serverId] }),
   })
 }
+
+export function useFail2BanSetupJails(serverId: number) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async () => {
+      const { data } = await api.post<APIResponse>(`/servers/${serverId}/fail2ban/setup`)
+      return data
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['fail2ban', serverId] }),
+  })
+}

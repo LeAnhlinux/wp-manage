@@ -68,6 +68,29 @@ func (s *Fail2BanService) UnbanIP(serverID uint64, jail, ip string) error {
 	return nil
 }
 
+// SetupDefaultJails installs nginx + WordPress jail configs and reloads fail2ban (synchronous).
+func (s *Fail2BanService) SetupDefaultJails(serverID uint64) error {
+	dataJSON, _ := json.Marshal(map[string]string{})
+	task := models.TaskQueue{
+		ServerID: serverID,
+		TaskType: "fail2ban_setup_jails",
+		Data:     string(dataJSON),
+		Status:   "pending",
+	}
+	if err := s.db.Create(&task).Error; err != nil {
+		return fmt.Errorf("failed to queue task: %w", err)
+	}
+
+	result, err := WaitForTaskCompleteWithTimeout(s.db, task.ID, 30*time.Second)
+	if err != nil {
+		return fmt.Errorf("agent timeout: %w", err)
+	}
+	if result.Error != "" {
+		return fmt.Errorf("agent error: %s", result.Error)
+	}
+	return nil
+}
+
 // ToggleService enables or disables the fail2ban systemd service (synchronous).
 func (s *Fail2BanService) ToggleService(serverID uint64, enable bool) error {
 	dataJSON, _ := json.Marshal(map[string]interface{}{"enable": enable})

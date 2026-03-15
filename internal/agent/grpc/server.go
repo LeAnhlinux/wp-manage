@@ -504,6 +504,9 @@ func (s *AgentServer) pollTasks() {
 			enable, _ := data["enable"].(bool)
 			go s.executeFail2BanToggleService(task.TaskID, enable)
 
+		case "fail2ban_setup_jails":
+			go s.executeFail2BanSetupJails(task.TaskID)
+
 		case "upload_source_zip":
 			var uploadTask models.AgentUploadSourceTask
 			json.Unmarshal(task.Data, &uploadTask)
@@ -2723,6 +2726,20 @@ func (s *AgentServer) executeFail2BanToggleService(taskID uint64, enable bool) {
 	} else {
 		slog.Info("Fail2ban service toggled", "action", action)
 		result.Output = fmt.Sprintf(`{"service_running":%v}`, enable)
+	}
+	s.reportTaskResult(result)
+}
+
+func (s *AgentServer) executeFail2BanSetupJails(taskID uint64) {
+	slog.Info("Setting up default fail2ban jails (nginx + wordpress)")
+	result := models.AgentTaskResult{TaskID: taskID}
+
+	if err := agentfail2ban.SetupDefaultJails(); err != nil {
+		slog.Error("Fail2ban setup jails failed", "error", err)
+		result.Error = err.Error()
+	} else {
+		slog.Info("Fail2ban default jails configured and reloaded")
+		result.Output = `{"ok":true}`
 	}
 	s.reportTaskResult(result)
 }

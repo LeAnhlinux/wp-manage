@@ -24,7 +24,7 @@ import { useCronJobsByServer, useCreateCronJob, useUpdateCronJob, useToggleCronJ
 import { useSSHKeys, useCreateSSHKey, useDeleteSSHKey } from '@/hooks/useSSHKeys'
 import { useAlertRules, useCreateAlertRule, useDeleteAlertRule, useAlertHistory, usePHPFPMAutotune } from '@/hooks/useAlerts'
 import { useStorageCredentials, useCreateStorageCredential, useDeleteStorageCredential } from '@/hooks/useStorage'
-import { useFail2BanStatus, useFail2BanUnban, useFail2BanUpdateJail, useFail2BanToggleService } from '@/hooks/useFail2Ban'
+import { useFail2BanStatus, useFail2BanUnban, useFail2BanUpdateJail, useFail2BanToggleService, useFail2BanSetupJails } from '@/hooks/useFail2Ban'
 import { useServerRedisStats, useFlushServerRedis, useServerRedisSiteStatuses, useToggleRedis } from '@/hooks/useRedis'
 import { useServerBackups, useDeleteBackup } from '@/hooks/useBackups'
 import { usePermissions } from '@/hooks/usePermissions'
@@ -2518,6 +2518,7 @@ function Fail2BanTab({ serverId }: { serverId: number }) {
   const unban = useFail2BanUnban(serverId)
   const updateJail = useFail2BanUpdateJail(serverId)
   const toggleService = useFail2BanToggleService(serverId)
+  const setupJails = useFail2BanSetupJails(serverId)
   const [unbanMsg, setUnbanMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
   const [editingJail, setEditingJail] = useState<string | null>(null)
   const [editBanTime, setEditBanTime] = useState(0)
@@ -2545,6 +2546,16 @@ function Fail2BanTab({ serverId }: { serverId: number }) {
       setUnbanMsg({ type: 'err', text: e instanceof Error ? e.message : 'Unban failed' })
     }
     setTimeout(() => setUnbanMsg(null), 4000)
+  }
+
+  const handleSetupJails = async () => {
+    try {
+      await setupJails.mutateAsync()
+      setUnbanMsg({ type: 'ok', text: 'Default jails configured (nginx + wordpress). Reloaded.' })
+    } catch (e: unknown) {
+      setUnbanMsg({ type: 'err', text: e instanceof Error ? e.message : 'Setup failed' })
+    }
+    setTimeout(() => setUnbanMsg(null), 6000)
   }
 
   const handleToggleJail = async (jail: Fail2BanJail) => {
@@ -2606,11 +2617,21 @@ function Fail2BanTab({ serverId }: { serverId: number }) {
               </div>
             )}
           </div>
-          <button onClick={() => refetch()} disabled={isFetching}
-            className="flex items-center gap-1.5 px-3 py-2 text-sm text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50">
-            <RefreshCw size={14} className={isFetching ? 'animate-spin' : ''} />
-            {isFetching ? 'Loading...' : 'Refresh'}
-          </button>
+          <div className="flex items-center gap-2">
+            {canManage && (
+              <button onClick={handleSetupJails} disabled={setupJails.isPending}
+                title="Setup nginx + wordpress jails"
+                className="flex items-center gap-1.5 px-3 py-2 text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 disabled:opacity-50">
+                {setupJails.isPending ? <Loader2 size={14} className="animate-spin" /> : <Wrench size={14} />}
+                {setupJails.isPending ? 'Setting up...' : 'Setup Default Jails'}
+              </button>
+            )}
+            <button onClick={() => refetch()} disabled={isFetching}
+              className="flex items-center gap-1.5 px-3 py-2 text-sm text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50">
+              <RefreshCw size={14} className={isFetching ? 'animate-spin' : ''} />
+              {isFetching ? 'Loading...' : 'Refresh'}
+            </button>
+          </div>
         </div>
 
         {unbanMsg && (
