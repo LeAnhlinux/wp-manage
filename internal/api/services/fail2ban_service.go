@@ -2,6 +2,8 @@ package services
 
 import (
 	"encoding/json"
+	"fmt"
+	"time"
 
 	"github.com/gofiber-team/wp-manage/internal/models"
 	"gorm.io/gorm"
@@ -15,23 +17,60 @@ func NewFail2BanService(db *gorm.DB) *Fail2BanService {
 	return &Fail2BanService{db: db}
 }
 
-func (s *Fail2BanService) GetStatus(serverID uint64) error {
-	s.queueTask(serverID, 0, "fail2ban_status", map[string]string{})
-	return nil
-}
-
-func (s *Fail2BanService) UnbanIP(serverID uint64, jail, ip string) error {
-	s.queueTask(serverID, 0, "fail2ban_unban", map[string]string{
-		"jail": jail,
-		"ip":   ip,
-	})
-	return nil
-}
-
-func (s *Fail2BanService) UpdateJail(serverID uint64, req models.Fail2BanUpdateJailRequest) error {
-	data := map[string]interface{}{
-		"jail": req.Jail,
+// GetStatus queries fail2ban status from agent (synchronous — waits for result).
+func (s *Fail2BanService) GetStatus(serverID uint64) (*models.Fail2BanStatus, error) {
+	dataJSON, _ := json.Marshal(map[string]string{})
+	task := models.TaskQueue{
+		ServerID: serverID,
+		TaskType: "fail2ban_status",
+		Data:     string(dataJSON),
+		Status:   "pending",
 	}
+	if err := s.db.Create(&task).Error; err != nil {
+		return nil, fmt.Errorf("failed to queue task: %w", err)
+	}
+
+	result, err := WaitForTaskCompleteWithTimeout(s.db, task.ID, 30*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("agent timeout: %w", err)
+	}
+	if result.Error != "" {
+		return nil, fmt.Errorf("agent error: %s", result.Error)
+	}
+
+	var status models.Fail2BanStatus
+	if err := json.Unmarshal([]byte(result.Output), &status); err != nil {
+		return nil, fmt.Errorf("failed to parse agent response: %w", err)
+	}
+	return &status, nil
+}
+
+// UnbanIP removes an IP from a fail2ban jail (synchronous).
+func (s *Fail2BanService) UnbanIP(serverID uint64, jail, ip string) error {
+	dataJSON, _ := json.Marshal(map[string]string{"jail": jail, "ip": ip})
+	task := models.TaskQueue{
+		ServerID: serverID,
+		TaskType: "fail2ban_unban",
+		Data:     string(dataJSON),
+		Status:   "pending",
+	}
+	if err := s.db.Create(&task).Error; err != nil {
+		return fmt.Errorf("failed to queue task: %w", err)
+	}
+
+	result, err := WaitForTaskCompleteWithTimeout(s.db, task.ID, 15*time.Second)
+	if err != nil {
+		return fmt.Errorf("agent timeout: %w", err)
+	}
+	if result.Error != "" {
+		return fmt.Errorf("agent error: %s", result.Error)
+	}
+	return nil
+}
+
+// UpdateJail updates fail2ban jail settings (synchronous).
+func (s *Fail2BanService) UpdateJail(serverID uint64, req models.Fail2BanUpdateJailRequest) error {
+	data := map[string]interface{}{"jail": req.Jail}
 	if req.Enabled != nil {
 		data["enabled"] = *req.Enabled
 	}
@@ -42,18 +81,23 @@ func (s *Fail2BanService) UpdateJail(serverID uint64, req models.Fail2BanUpdateJ
 		data["max_retry"] = req.MaxRetry
 	}
 
-	s.queueTask(serverID, 0, "fail2ban_update_jail", data)
-	return nil
-}
-
-func (s *Fail2BanService) queueTask(serverID, siteID uint64, taskType string, data interface{}) {
 	dataJSON, _ := json.Marshal(data)
 	task := models.TaskQueue{
 		ServerID: serverID,
-		SiteID:   siteID,
-		TaskType: taskType,
+		TaskType: "fail2ban_update_jail",
 		Data:     string(dataJSON),
 		Status:   "pending",
 	}
-	s.db.Create(&task)
+	if err := s.db.Create(&task).Error; err != nil {
+		return fmt.Errorf("failed to queue task: %w", err)
+	}
+
+	result, err := WaitForTaskCompleteWithTimeout(s.db, task.ID, 15*time.Second)
+	if err != nil {
+		return fmt.Errorf("agent timeout: %w", err)
+	}
+	if result.Error != "" {
+		return fmt.Errorf("agent error: %s", result.Error)
+	}
+	return nil
 }

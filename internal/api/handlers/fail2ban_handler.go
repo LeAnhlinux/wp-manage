@@ -18,10 +18,11 @@ func NewFail2BanHandler(service *services.Fail2BanService) *Fail2BanHandler {
 
 func (h *Fail2BanHandler) GetStatus(c *fiber.Ctx) error {
 	serverID, _ := strconv.ParseUint(c.Params("id"), 10, 64)
-	if err := h.service.GetStatus(serverID); err != nil {
+	status, err := h.service.GetStatus(serverID)
+	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"success": false, "error": err.Error()})
 	}
-	return c.JSON(fiber.Map{"success": true, "message": "Fail2Ban status request queued"})
+	return c.JSON(fiber.Map{"success": true, "data": status})
 }
 
 func (h *Fail2BanHandler) UnbanIP(c *fiber.Ctx) error {
@@ -33,7 +34,7 @@ func (h *Fail2BanHandler) UnbanIP(c *fiber.Ctx) error {
 	if err := h.service.UnbanIP(serverID, req.Jail, req.IP); err != nil {
 		return c.Status(500).JSON(fiber.Map{"success": false, "error": err.Error()})
 	}
-	return c.JSON(fiber.Map{"success": true, "message": "Unban request queued"})
+	return c.JSON(fiber.Map{"success": true, "message": "IP unbanned successfully"})
 }
 
 func (h *Fail2BanHandler) UpdateJail(c *fiber.Ctx) error {
@@ -45,5 +46,5 @@ func (h *Fail2BanHandler) UpdateJail(c *fiber.Ctx) error {
 	if err := h.service.UpdateJail(serverID, req); err != nil {
 		return c.Status(500).JSON(fiber.Map{"success": false, "error": err.Error()})
 	}
-	return c.JSON(fiber.Map{"success": true, "message": "Jail update queued"})
+	return c.JSON(fiber.Map{"success": true, "message": "Jail updated successfully"})
 }

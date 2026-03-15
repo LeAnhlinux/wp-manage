@@ -2656,9 +2656,9 @@ func (s *AgentServer) executeFail2BanStatus(taskID uint64) {
 		slog.Error("Fail2ban status failed", "error", err)
 		result.Error = err.Error()
 	} else {
+		result.Output = string(statusJSON)
 		slog.Info("Fail2ban status retrieved", "data_size", len(statusJSON))
 	}
-	_ = statusJSON // status is reported via the task result
 	s.reportTaskResult(result)
 }
 

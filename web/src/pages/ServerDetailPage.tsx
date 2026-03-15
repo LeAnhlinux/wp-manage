@@ -2496,119 +2496,243 @@ function StorageTab({ serverId }: { serverId: number }) {
   )
 }
 
+interface Fail2BanJail {
+  name: string
+  enabled: boolean
+  filter: string
+  ban_time: number
+  max_retry: number
+  banned_ips: string[]
+  total_bans: number
+}
+
+interface Fail2BanStatusData {
+  jails: Fail2BanJail[]
+}
+
 function Fail2BanTab({ serverId }: { serverId: number }) {
   const { can } = usePermissions()
   const canManage = can('infrastructure', 'manage')
-  const getStatus = useFail2BanStatus(serverId)
+  const { data: status, isLoading, isError, error, refetch, isFetching } = useFail2BanStatus(serverId)
   const unban = useFail2BanUnban(serverId)
   const updateJail = useFail2BanUpdateJail(serverId)
-  const [statusMsg, setStatusMsg] = useState<string>('')
+  const [unbanMsg, setUnbanMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
+  const [editingJail, setEditingJail] = useState<string | null>(null)
+  const [editBanTime, setEditBanTime] = useState(0)
+  const [editMaxRetry, setEditMaxRetry] = useState(0)
 
-  const handleGetStatus = async () => {
+  const f2bData = status as Fail2BanStatusData | null
+  const jails = f2bData?.jails ?? []
+  const totalBanned = jails.reduce((sum, j) => sum + (j.banned_ips?.length ?? 0), 0)
+
+  const handleUnbanIP = async (jail: string, ip: string) => {
     try {
-      await getStatus.mutateAsync()
-      setStatusMsg('Status request sent to agent. Results will appear shortly.')
-    } catch {
-      setStatusMsg('Failed to request Fail2Ban status')
+      await unban.mutateAsync({ jail, ip })
+      setUnbanMsg({ type: 'ok', text: `Unbanned ${ip} from ${jail}` })
+    } catch (e: unknown) {
+      setUnbanMsg({ type: 'err', text: e instanceof Error ? e.message : 'Unban failed' })
     }
-    setTimeout(() => setStatusMsg(''), 5000)
+    setTimeout(() => setUnbanMsg(null), 4000)
+  }
+
+  const handleToggleJail = async (jail: Fail2BanJail) => {
+    const enabled = !jail.enabled
+    try {
+      await updateJail.mutateAsync({ jail: jail.name, enabled })
+    } catch {/* refetch will update state */ }
+  }
+
+  const handleSaveJail = async (jailName: string) => {
+    try {
+      await updateJail.mutateAsync({ jail: jailName, ban_time: editBanTime, max_retry: editMaxRetry })
+      setEditingJail(null)
+    } catch {/* ignore */ }
   }
 
   return (
     <div className="space-y-6">
+      {/* Header */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-            <Shield size={20} className="text-red-500" /> Fail2Ban Management
-          </h2>
-          <button onClick={handleGetStatus} disabled={getStatus.isPending}
+          <div className="flex items-center gap-3">
+            <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+              <Shield size={20} className="text-red-500" /> Fail2Ban Management
+            </h2>
+            {!isLoading && !isError && (
+              <div className="flex gap-3 text-sm">
+                <span className="px-2 py-0.5 bg-gray-100 rounded-full text-gray-600">
+                  {jails.length} jail{jails.length !== 1 ? 's' : ''}
+                </span>
+                {totalBanned > 0 && (
+                  <span className="px-2 py-0.5 bg-red-100 text-red-700 rounded-full font-medium">
+                    {totalBanned} banned IP{totalBanned !== 1 ? 's' : ''}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+          <button onClick={() => refetch()} disabled={isFetching}
             className="flex items-center gap-1.5 px-3 py-2 text-sm text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50">
-            <RefreshCw size={14} /> Refresh Status
+            <RefreshCw size={14} className={isFetching ? 'animate-spin' : ''} />
+            {isFetching ? 'Loading...' : 'Refresh'}
           </button>
         </div>
 
-        {statusMsg && (
-          <div className="p-3 bg-blue-50 text-blue-700 rounded-lg text-sm mb-4">{statusMsg}</div>
+        {unbanMsg && (
+          <div className={`p-3 rounded-lg text-sm mb-4 ${unbanMsg.type === 'ok' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+            {unbanMsg.text}
+          </div>
         )}
 
-        <div className="space-y-4">
-          <div className="p-4 bg-gray-50 rounded-lg">
-            <p className="text-sm text-gray-600 mb-3">
-              Fail2Ban monitors log files and automatically bans IPs that show malicious signs.
-              Click "Refresh Status" to query the current Fail2Ban state from the server agent.
-            </p>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="bg-white p-4 rounded-lg border">
-                <p className="text-xs text-gray-500 uppercase font-medium mb-1">Common Jails</p>
-                <div className="space-y-1 text-sm">
-                  <p className="text-gray-700">&#8226; sshd</p>
-                  <p className="text-gray-700">&#8226; nginx-http-auth</p>
-                  <p className="text-gray-700">&#8226; nginx-botsearch</p>
-                </div>
-              </div>
-              <div className="bg-white p-4 rounded-lg border">
-                <p className="text-xs text-gray-500 uppercase font-medium mb-1">WordPress Jails</p>
-                <div className="space-y-1 text-sm">
-                  <p className="text-gray-700">&#8226; wordpress-login</p>
-                  <p className="text-gray-700">&#8226; wordpress-xmlrpc</p>
-                </div>
-              </div>
-              <div className="bg-white p-4 rounded-lg border">
-                <p className="text-xs text-gray-500 uppercase font-medium mb-1">Quick Actions</p>
-                <div className="space-y-2">
-                  <UnbanForm serverId={serverId} unban={unban} />
-                </div>
-              </div>
-            </div>
+        {isLoading && (
+          <div className="flex items-center justify-center py-12 text-gray-500 gap-2">
+            <Loader2 size={18} className="animate-spin" />
+            <span className="text-sm">Querying agent...</span>
           </div>
-        </div>
+        )}
+
+        {isError && (
+          <div className="p-4 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
+            {(error as Error)?.message ?? 'Failed to get Fail2Ban status'}
+          </div>
+        )}
+
+        {!isLoading && !isError && jails.length === 0 && (
+          <div className="text-center py-10 text-gray-500">
+            <Shield size={32} className="mx-auto mb-2 text-gray-300" />
+            <p className="text-sm">No jails found. Fail2Ban may not be running.</p>
+          </div>
+        )}
+
+        {!isLoading && !isError && jails.length > 0 && (
+          <div className="space-y-3">
+            {jails.map(jail => (
+              <div key={jail.name} className="border border-gray-200 rounded-xl overflow-hidden">
+                {/* Jail header */}
+                <div className="flex items-center justify-between px-4 py-3 bg-gray-50">
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => canManage && handleToggleJail(jail)}
+                      disabled={!canManage || updateJail.isPending}
+                      title={canManage ? (jail.enabled ? 'Disable jail' : 'Enable jail') : 'No permission'}
+                    >
+                      {jail.enabled
+                        ? <ToggleRight size={22} className="text-emerald-500" />
+                        : <ToggleLeft size={22} className="text-gray-400" />}
+                    </button>
+                    <span className="font-medium text-gray-800">{jail.name}</span>
+                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${jail.enabled ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>
+                      {jail.enabled ? 'Active' : 'Stopped'}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-4 text-sm text-gray-500">
+                    {editingJail === jail.name ? (
+                      <div className="flex items-center gap-2">
+                        <label className="text-xs">Ban time (s)</label>
+                        <input type="number" value={editBanTime} onChange={e => setEditBanTime(Number(e.target.value))}
+                          className="w-20 px-2 py-1 border rounded text-xs" />
+                        <label className="text-xs">Max retry</label>
+                        <input type="number" value={editMaxRetry} onChange={e => setEditMaxRetry(Number(e.target.value))}
+                          className="w-16 px-2 py-1 border rounded text-xs" />
+                        <button onClick={() => handleSaveJail(jail.name)} disabled={updateJail.isPending}
+                          className="px-2 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">
+                          {updateJail.isPending ? '...' : 'Save'}
+                        </button>
+                        <button onClick={() => setEditingJail(null)}
+                          className="px-2 py-1 text-xs bg-gray-200 text-gray-700 rounded hover:bg-gray-300">
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <span>Ban: <strong>{jail.ban_time}s</strong></span>
+                        <span>Max retry: <strong>{jail.max_retry}</strong></span>
+                        <span className={`font-medium ${jail.banned_ips?.length > 0 ? 'text-red-600' : 'text-gray-400'}`}>
+                          {jail.banned_ips?.length ?? 0} banned
+                        </span>
+                        {canManage && (
+                          <button onClick={() => { setEditingJail(jail.name); setEditBanTime(jail.ban_time); setEditMaxRetry(jail.max_retry) }}
+                            className="p-1 text-gray-400 hover:text-blue-600">
+                            <Settings size={14} />
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                {/* Banned IPs */}
+                {jail.banned_ips?.length > 0 && (
+                  <div className="px-4 py-3 bg-white">
+                    <p className="text-xs text-gray-500 font-medium uppercase mb-2">Banned IPs</p>
+                    <div className="flex flex-wrap gap-2">
+                      {jail.banned_ips.map(ip => (
+                        <div key={ip} className="flex items-center gap-1.5 px-2.5 py-1 bg-red-50 border border-red-200 rounded-lg text-xs">
+                          <span className="text-red-700 font-mono">{ip}</span>
+                          {canManage && (
+                            <button onClick={() => handleUnbanIP(jail.name, ip)}
+                              disabled={unban.isPending}
+                              className="text-red-400 hover:text-red-700 disabled:opacity-50"
+                              title={`Unban ${ip}`}>
+                              <XCircle size={13} />
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
-      {/* Unban IP Section */}
+      {/* Manual Unban */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-        <h3 className="text-md font-semibold text-gray-900 mb-4">Unban IP Address</h3>
-        <UnbanFormFull serverId={serverId} unban={unban} />
+        <h3 className="text-md font-semibold text-gray-900 mb-4">Manual Unban</h3>
+        <UnbanFormFull serverId={serverId} unban={unban} jails={jails.map(j => j.name)} />
       </div>
     </div>
   )
 }
 
-function UnbanForm({ serverId, unban }: { serverId: number; unban: ReturnType<typeof useFail2BanUnban> }) {
-  return (
-    <p className="text-xs text-gray-500">Use the form below to unban IPs</p>
-  )
-}
-
-function UnbanFormFull({ serverId, unban }: { serverId: number; unban: ReturnType<typeof useFail2BanUnban> }) {
-  const [jail, setJail] = useState('sshd')
+function UnbanFormFull({ serverId, unban, jails }: {
+  serverId: number
+  unban: ReturnType<typeof useFail2BanUnban>
+  jails: string[]
+}) {
+  const defaultJails = ['sshd', 'nginx-http-auth', 'nginx-botsearch', 'wordpress-login', 'wordpress-xmlrpc']
+  const jailOptions = jails.length > 0 ? jails : defaultJails
+  const [jail, setJail] = useState(jailOptions[0] ?? 'sshd')
   const [ip, setIP] = useState('')
-  const [msg, setMsg] = useState('')
+  const [msg, setMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
 
   const handleUnban = async (e: React.FormEvent) => {
     e.preventDefault()
     try {
       await unban.mutateAsync({ jail, ip })
-      setMsg(`Unban request sent for ${ip} from ${jail}`)
+      setMsg({ type: 'ok', text: `Unbanned ${ip} from ${jail}` })
       setIP('')
-    } catch {
-      setMsg('Failed to send unban request')
+    } catch (e: unknown) {
+      setMsg({ type: 'err', text: e instanceof Error ? e.message : 'Unban failed' })
     }
-    setTimeout(() => setMsg(''), 4000)
+    setTimeout(() => setMsg(null), 4000)
   }
 
   return (
     <form onSubmit={handleUnban} className="space-y-3">
-      {msg && <div className="p-2 bg-green-50 text-green-700 rounded text-sm">{msg}</div>}
+      {msg && (
+        <div className={`p-3 rounded-lg text-sm ${msg.type === 'ok' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+          {msg.text}
+        </div>
+      )}
       <div className="grid grid-cols-3 gap-3">
         <div>
           <label className="block text-xs text-gray-500 mb-1">Jail</label>
           <select value={jail} onChange={e => setJail(e.target.value)}
             className="w-full px-3 py-2 border rounded-lg text-sm">
-            <option value="sshd">sshd</option>
-            <option value="nginx-http-auth">nginx-http-auth</option>
-            <option value="nginx-botsearch">nginx-botsearch</option>
-            <option value="wordpress-login">wordpress-login</option>
-            <option value="wordpress-xmlrpc">wordpress-xmlrpc</option>
+            {jailOptions.map(j => <option key={j} value={j}>{j}</option>)}
           </select>
         </div>
         <div>
@@ -2619,7 +2743,7 @@ function UnbanFormFull({ serverId, unban }: { serverId: number; unban: ReturnTyp
         <div className="flex items-end">
           <button type="submit" disabled={unban.isPending}
             className="w-full px-4 py-2 text-sm text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:opacity-50">
-            {unban.isPending ? 'Unbanning...' : 'Unban IP'}
+            {unban.isPending ? 'Processing...' : 'Unban IP'}
           </button>
         </div>
       </div>
