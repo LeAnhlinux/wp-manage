@@ -474,9 +474,9 @@ func extractSQLFromZip(zipPath string) (string, error) {
 	}
 	defer r.Close()
 
-	// Priority: .sql > .sql.gz > .gz (backup plugins like UpdraftPlus store db as .gz inside zip)
+	// Priority: .sql > .sql.gz / -db.gz (UpdraftPlus) > any .gz
 	var sqlFile *zip.File
-	var sqlGzFile *zip.File // .sql.gz or .gz candidate
+	var sqlGzFile *zip.File
 	var allNames []string
 	for _, f := range r.File {
 		if f.FileInfo().IsDir() {
@@ -495,62 +495,106 @@ func extractSQLFromZip(zipPath string) (string, error) {
 		}
 	}
 
-	// Pick best candidate
 	chosen := sqlFile
-	isGzip := false
 	if chosen == nil && sqlGzFile != nil {
 		chosen = sqlGzFile
-		isGzip = true
 	}
 	if chosen == nil {
 		return "", fmt.Errorf("no SQL dump found in zip (files: %s) — zip must contain a .sql or .sql.gz database dump", strings.Join(allNames, ", "))
 	}
 
-	// Extract chosen file to a temp file
-	tmpFile, err := os.CreateTemp("", "wp-import-*.sql")
+	// Step 1: extract entry bytes to a raw temp file (no streaming decompression)
+	rawTmp, err := os.CreateTemp("", "wp-import-raw-*")
 	if err != nil {
 		return "", fmt.Errorf("cannot create temp file: %w", err)
 	}
+	rawPath := rawTmp.Name()
 
 	rc, err := chosen.Open()
 	if err != nil {
-		tmpFile.Close()
-		os.Remove(tmpFile.Name())
-		return "", fmt.Errorf("cannot read %s from zip: %w", chosen.Name, err)
+		rawTmp.Close()
+		os.Remove(rawPath)
+		return "", fmt.Errorf("cannot open zip entry %s: %w", chosen.Name, err)
 	}
-	defer rc.Close()
-
-	// Detect gzip by magic bytes even if extension says .sql (some tools mislabel)
-	// Read first 2 bytes to check \x1f\x8b gzip magic
-	var reader io.Reader = rc
-	header := make([]byte, 2)
-	n, _ := rc.Read(header)
-	if n == 2 && header[0] == 0x1f && header[1] == 0x8b {
-		isGzip = true
+	_, copyErr := io.Copy(rawTmp, rc)
+	rc.Close()
+	rawTmp.Close()
+	if copyErr != nil {
+		os.Remove(rawPath)
+		return "", fmt.Errorf("cannot extract %s: %w", chosen.Name, copyErr)
 	}
-	// Reconstruct full reader: prepend already-read bytes + rest
-	reader = io.MultiReader(strings.NewReader(string(header[:n])), rc)
 
-	if isGzip {
-		gzr, err := gzip.NewReader(reader)
-		if err != nil {
-			tmpFile.Close()
-			os.Remove(tmpFile.Name())
-			return "", fmt.Errorf("cannot decompress gzip in %s: %w", chosen.Name, err)
+	// Step 2: check first 2 bytes on disk for gzip magic \x1f\x8b
+	needsDecompress := strings.HasSuffix(strings.ToLower(chosen.Name), ".gz")
+	if !needsDecompress {
+		if magic, merr := readFirstBytes(rawPath, 2); merr == nil && len(magic) == 2 && magic[0] == 0x1f && magic[1] == 0x8b {
+			needsDecompress = true
+			slog.Info("Detected gzip content despite .sql extension", "entry", chosen.Name)
 		}
-		defer gzr.Close()
-		reader = gzr
 	}
 
-	if _, err := io.Copy(tmpFile, reader); err != nil {
-		tmpFile.Close()
-		os.Remove(tmpFile.Name())
-		return "", fmt.Errorf("cannot extract %s: %w", chosen.Name, err)
+	if needsDecompress {
+		// Step 3a: decompress gzip to a proper .sql temp file
+		os.Remove(rawPath) // remove raw gz file after decompression
+		sqlTmp, err := os.CreateTemp("", "wp-import-*.sql")
+		if err != nil {
+			return "", fmt.Errorf("cannot create sql temp: %w", err)
+		}
+		sqlPath := sqlTmp.Name()
+		sqlTmp.Close()
+		if err := decompressGzip(rawPath, sqlPath); err != nil {
+			os.Remove(sqlPath)
+			return "", fmt.Errorf("cannot decompress %s: %w", chosen.Name, err)
+		}
+		slog.Info("Extracted+decompressed SQL from zip", "entry", chosen.Name, "dest", sqlPath)
+		return sqlPath, nil
 	}
-	tmpFile.Close()
 
-	slog.Info("Extracted SQL from zip", "zip", zipPath, "entry", chosen.Name, "gzip", isGzip, "dest", tmpFile.Name())
-	return tmpFile.Name(), nil
+	// Step 3b: plain .sql — rename raw temp to a .sql-named temp
+	sqlTmp, err := os.CreateTemp("", "wp-import-*.sql")
+	if err != nil {
+		os.Remove(rawPath)
+		return "", fmt.Errorf("cannot create sql temp: %w", err)
+	}
+	sqlPath := sqlTmp.Name()
+	sqlTmp.Close()
+	os.Remove(sqlPath) // remove empty placeholder so Rename can overwrite
+	if err := os.Rename(rawPath, sqlPath); err != nil {
+		// cross-device rename — fall back to copy+delete
+		if err2 := copyFile(rawPath, sqlPath); err2 != nil {
+			os.Remove(rawPath)
+			return "", fmt.Errorf("cannot move extracted sql: %w", err2)
+		}
+		os.Remove(rawPath)
+	}
+	slog.Info("Extracted SQL from zip", "entry", chosen.Name, "dest", sqlPath)
+	return sqlPath, nil
+}
+
+func readFirstBytes(path string, n int) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	buf := make([]byte, n)
+	read, _ := f.Read(buf)
+	return buf[:read], nil
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, in)
+	return err
 }
 
 func (m *Manager) createDirs(siteRoot, webRoot string) error {
