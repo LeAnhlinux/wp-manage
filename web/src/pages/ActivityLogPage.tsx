@@ -18,6 +18,7 @@ export default function ActivityLogPage() {
   // Cleanup section state
   const [retentionDays, setRetentionDays] = useState(90)
   const [lastCleanupResult, setLastCleanupResult] = useState<{ deleted: number; days: number } | null>(null)
+  const [cleanupError, setCleanupError] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<number | null>(null)
 
   const { data, isLoading } = useActivityLogs(page, 25, filters)
@@ -29,18 +30,28 @@ export default function ActivityLogPage() {
   const meta = data?.meta
 
   const handleDelete = async (id: number) => {
+    if (!confirm('Delete this activity log entry?')) return
     setDeletingId(id)
     try {
       await deleteLog.mutateAsync(id)
+    } catch {
+      // silently ignore single-row delete errors
     } finally {
       setDeletingId(null)
     }
   }
 
   const handleCleanup = async () => {
-    const result = await cleanup.mutateAsync(retentionDays)
-    if (result) {
-      setLastCleanupResult({ deleted: result.deleted, days: retentionDays })
+    setCleanupError(null)
+    setLastCleanupResult(null)
+    try {
+      const result = await cleanup.mutateAsync(retentionDays)
+      setLastCleanupResult({ deleted: result?.deleted ?? 0, days: retentionDays })
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Cleanup failed'
+      // Try to extract server error message from Axios error
+      const axiosErr = err as { response?: { data?: { error?: string } } }
+      setCleanupError(axiosErr?.response?.data?.error ?? msg)
     }
   }
 
@@ -145,6 +156,11 @@ export default function ActivityLogPage() {
               ? `✓ Deleted ${lastCleanupResult.deleted} log${lastCleanupResult.deleted > 1 ? 's' : ''} older than ${lastCleanupResult.days} days`
               : `No logs older than ${lastCleanupResult.days} days found`
             }
+          </div>
+        )}
+        {cleanupError && (
+          <div className="mt-3 text-sm px-3 py-2 rounded-lg bg-red-50 text-red-700">
+            ✗ Error: {cleanupError}
           </div>
         )}
       </div>
