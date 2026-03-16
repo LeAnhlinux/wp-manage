@@ -168,8 +168,9 @@ export function useImportDB() {
       formData.append('file', file)
       const { data } = await api.post<APIResponse<{ domain: string; db_name: string; file_size: number }>>(
         `/sites/${siteId}/import-db`,
-        formData,
-        { headers: { 'Content-Type': 'multipart/form-data' } }
+        formData
+        // NOTE: Do NOT set Content-Type manually — axios auto-sets
+        // "multipart/form-data; boundary=..." when body is FormData
       )
       return data
     },

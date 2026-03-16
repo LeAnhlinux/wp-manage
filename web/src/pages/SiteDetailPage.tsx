@@ -123,10 +123,13 @@ export default function SiteDetailPage() {
     if (!importDBFile) return
     try {
       await importDB.mutateAsync({ siteId: site.id, file: importDBFile })
-      showMsg('success', 'Database file uploaded! Agent is importing...')
+      showMsg('success', `Database imported successfully into ${site.domain}`)
       setImportDBFile(null)
-    } catch {
-      showMsg('error', 'Failed to upload database file')
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error
+        || (err instanceof Error ? err.message : null)
+        || 'Failed to upload database file'
+      showMsg('error', msg)
     }
   }
 
