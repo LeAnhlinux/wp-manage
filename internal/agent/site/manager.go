@@ -2,6 +2,7 @@ package site
 
 import (
 	"archive/zip"
+	"compress/gzip"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -358,13 +359,14 @@ func extractZipNative(zipPath, destDir string) error {
 func (m *Manager) ImportDatabase(dbName, sqlPath, domain, oldDomain string) error {
 	defer os.Remove(sqlPath)
 
-	// Support .sql, .gz, .sql.gz, and .zip
+	// Support .sql, .gz, .sql.gz, and .zip — all decompressed using Go builtins (no external binaries)
 	if strings.HasSuffix(sqlPath, ".gz") {
-		if out, err := exec.Command("gunzip", "-f", sqlPath).CombinedOutput(); err != nil {
-			return fmt.Errorf("failed to decompress SQL: %s", string(out))
+		decompressed := strings.TrimSuffix(sqlPath, ".gz")
+		if err := decompressGzip(sqlPath, decompressed); err != nil {
+			return fmt.Errorf("failed to decompress .gz: %w", err)
 		}
-		sqlPath = strings.TrimSuffix(sqlPath, ".gz")
-		defer os.Remove(sqlPath)
+		defer os.Remove(decompressed)
+		sqlPath = decompressed
 	} else if strings.HasSuffix(sqlPath, ".zip") {
 		// Extract zip using Go's built-in archive/zip (no external unzip binary needed)
 		extracted, err := extractSQLFromZip(sqlPath)
@@ -436,8 +438,35 @@ func (m *Manager) ImportDatabase(dbName, sqlPath, domain, oldDomain string) erro
 }
 
 // extractSQLFromZip opens a zip archive using Go's built-in archive/zip,
-// finds the first .sql file (any depth), extracts it to a temp file, and
-// returns the temp file path. Caller is responsible for os.Remove(path).
+// finds the first SQL-containing file (.sql, .sql.gz, or .gz), extracts and
+// decompresses it if needed, and returns the temp .sql file path.
+// Caller is responsible for os.Remove(path).
+// decompressGzip decompresses src (.gz) into dst using Go's compress/gzip.
+func decompressGzip(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("open gz: %w", err)
+	}
+	defer in.Close()
+
+	gzr, err := gzip.NewReader(in)
+	if err != nil {
+		return fmt.Errorf("gzip reader: %w", err)
+	}
+	defer gzr.Close()
+
+	out, err := os.Create(dst)
+	if err != nil {
+		return fmt.Errorf("create dst: %w", err)
+	}
+	defer out.Close()
+
+	if _, err := io.Copy(out, gzr); err != nil {
+		return fmt.Errorf("decompress: %w", err)
+	}
+	return nil
+}
+
 func extractSQLFromZip(zipPath string) (string, error) {
 	r, err := zip.OpenReader(zipPath)
 	if err != nil {
@@ -445,46 +474,82 @@ func extractSQLFromZip(zipPath string) (string, error) {
 	}
 	defer r.Close()
 
-	// Find first .sql file (sorted by name for determinism)
+	// Priority: .sql > .sql.gz > .gz (backup plugins like UpdraftPlus store db as .gz inside zip)
 	var sqlFile *zip.File
+	var sqlGzFile *zip.File // .sql.gz or .gz candidate
+	var allNames []string
 	for _, f := range r.File {
-		if !f.FileInfo().IsDir() && strings.HasSuffix(strings.ToLower(f.Name), ".sql") {
+		if f.FileInfo().IsDir() {
+			continue
+		}
+		allNames = append(allNames, f.Name)
+		lower := strings.ToLower(f.Name)
+		if strings.HasSuffix(lower, ".sql") {
 			if sqlFile == nil || f.Name < sqlFile.Name {
 				sqlFile = f
 			}
-		}
-	}
-	if sqlFile == nil {
-		// List files in zip for a helpful error message
-		var names []string
-		for _, f := range r.File {
-			if !f.FileInfo().IsDir() {
-				names = append(names, f.Name)
+		} else if strings.HasSuffix(lower, ".sql.gz") || strings.HasSuffix(lower, "-db.gz") || strings.HasSuffix(lower, "_db.gz") {
+			if sqlGzFile == nil || f.Name < sqlGzFile.Name {
+				sqlGzFile = f
 			}
 		}
-		return "", fmt.Errorf("no .sql file found in zip (files: %s) — make sure the zip contains a SQL database dump", strings.Join(names, ", "))
 	}
 
-	// Extract to a temp file
+	// Pick best candidate
+	chosen := sqlFile
+	isGzip := false
+	if chosen == nil && sqlGzFile != nil {
+		chosen = sqlGzFile
+		isGzip = true
+	}
+	if chosen == nil {
+		return "", fmt.Errorf("no SQL dump found in zip (files: %s) — zip must contain a .sql or .sql.gz database dump", strings.Join(allNames, ", "))
+	}
+
+	// Extract chosen file to a temp file
 	tmpFile, err := os.CreateTemp("", "wp-import-*.sql")
 	if err != nil {
 		return "", fmt.Errorf("cannot create temp file: %w", err)
 	}
-	defer tmpFile.Close()
 
-	rc, err := sqlFile.Open()
+	rc, err := chosen.Open()
 	if err != nil {
+		tmpFile.Close()
 		os.Remove(tmpFile.Name())
-		return "", fmt.Errorf("cannot read %s from zip: %w", sqlFile.Name, err)
+		return "", fmt.Errorf("cannot read %s from zip: %w", chosen.Name, err)
 	}
 	defer rc.Close()
 
-	if _, err := io.Copy(tmpFile, rc); err != nil {
-		os.Remove(tmpFile.Name())
-		return "", fmt.Errorf("cannot extract %s: %w", sqlFile.Name, err)
+	// Detect gzip by magic bytes even if extension says .sql (some tools mislabel)
+	// Read first 2 bytes to check \x1f\x8b gzip magic
+	var reader io.Reader = rc
+	header := make([]byte, 2)
+	n, _ := rc.Read(header)
+	if n == 2 && header[0] == 0x1f && header[1] == 0x8b {
+		isGzip = true
+	}
+	// Reconstruct full reader: prepend already-read bytes + rest
+	reader = io.MultiReader(strings.NewReader(string(header[:n])), rc)
+
+	if isGzip {
+		gzr, err := gzip.NewReader(reader)
+		if err != nil {
+			tmpFile.Close()
+			os.Remove(tmpFile.Name())
+			return "", fmt.Errorf("cannot decompress gzip in %s: %w", chosen.Name, err)
+		}
+		defer gzr.Close()
+		reader = gzr
 	}
 
-	slog.Info("Extracted SQL from zip", "zip", zipPath, "sql_file", sqlFile.Name, "dest", tmpFile.Name())
+	if _, err := io.Copy(tmpFile, reader); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpFile.Name())
+		return "", fmt.Errorf("cannot extract %s: %w", chosen.Name, err)
+	}
+	tmpFile.Close()
+
+	slog.Info("Extracted SQL from zip", "zip", zipPath, "entry", chosen.Name, "gzip", isGzip, "dest", tmpFile.Name())
 	return tmpFile.Name(), nil
 }
 
