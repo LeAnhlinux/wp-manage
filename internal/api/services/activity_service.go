@@ -70,6 +70,18 @@ func (s *ActivityService) Cleanup(retentionDays int) (int64, error) {
 	return result.RowsAffected, result.Error
 }
 
+// DeleteLog removes a single activity log entry by ID
+func (s *ActivityService) DeleteLog(id uint64) error {
+	result := s.db.Delete(&models.ActivityLog{}, id)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
+}
+
 // GetActions returns all distinct action types for filtering UI
 func (s *ActivityService) GetActions() ([]string, error) {
 	var actions []string

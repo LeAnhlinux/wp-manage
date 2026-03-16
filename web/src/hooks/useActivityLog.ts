@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/lib/api'
 import type { PaginatedResponse, ActivityLog, APIResponse } from '@/types'
 
@@ -40,6 +40,33 @@ export function useActivityActions() {
     queryFn: async () => {
       const { data } = await api.get<APIResponse<string[]>>('/activity-logs/actions')
       return data.data || []
+    },
+  })
+}
+
+export function useDeleteActivityLog() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (id: number) => {
+      await api.delete(`/activity-logs/${id}`)
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['activity-logs'] })
+    },
+  })
+}
+
+export function useCleanupActivityLogs() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (days: number) => {
+      const { data } = await api.delete<APIResponse<{ deleted: number; retention_days: number }>>(
+        `/activity-logs/cleanup?days=${days}`
+      )
+      return data.data
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['activity-logs'] })
     },
   })
 }

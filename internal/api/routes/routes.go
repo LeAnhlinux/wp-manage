@@ -468,6 +468,7 @@ func Setup(
 	activityLogs.Get("/", activityHandler.List)
 	activityLogs.Get("/actions", activityHandler.GetActions)
 	activityLogs.Delete("/cleanup", middleware.PermissionRequired("settings", "manage"), activityHandler.Cleanup)
+	activityLogs.Delete("/:id", activityHandler.DeleteLog)
 
 	// Global DNS providers (Option B — not server-scoped)
 	protected.Get("/dns-providers", middleware.PermissionRequired("infrastructure", "read"), dnsHandler.ListAll)

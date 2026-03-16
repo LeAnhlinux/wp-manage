@@ -1,12 +1,14 @@
 package handlers
 
 import (
+	"errors"
 	"strconv"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber-team/wp-manage/internal/api/services"
 	"github.com/gofiber-team/wp-manage/internal/models"
+	"gorm.io/gorm"
 )
 
 type ActivityHandler struct {
@@ -78,6 +80,20 @@ func (h *ActivityHandler) GetActions(c *fiber.Ctx) error {
 		return c.Status(500).JSON(models.APIResponse{Error: "Failed to fetch actions"})
 	}
 	return c.JSON(models.APIResponse{Success: true, Data: actions})
+}
+
+func (h *ActivityHandler) DeleteLog(c *fiber.Ctx) error {
+	id, err := strconv.ParseUint(c.Params("id"), 10, 64)
+	if err != nil {
+		return c.Status(400).JSON(models.APIResponse{Error: "Invalid log ID"})
+	}
+	if err := h.svc.DeleteLog(id); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return c.Status(404).JSON(models.APIResponse{Error: "Activity log not found"})
+		}
+		return c.Status(500).JSON(models.APIResponse{Error: "Failed to delete activity log"})
+	}
+	return c.JSON(models.APIResponse{Success: true, Message: "Activity log deleted"})
 }
 
 func (h *ActivityHandler) Cleanup(c *fiber.Ctx) error {

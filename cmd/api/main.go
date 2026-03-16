@@ -186,6 +186,9 @@ func main() {
 	scanScheduleWorker := workers.NewScanScheduleWorker(db, securityService)
 	go scanScheduleWorker.Start()
 
+	activityCleanupWorker := workers.NewActivityCleanupWorker(activityService)
+	activityCleanupWorker.Start()
+
 	// Integrate alert worker with server handler
 	serverHandler.SetAlertWorker(alertWorker)
 
