@@ -366,23 +366,42 @@ func (m *Manager) ImportDatabase(dbName, sqlPath, domain, oldDomain string) erro
 		sqlPath = strings.TrimSuffix(sqlPath, ".gz")
 		defer os.Remove(sqlPath)
 	} else if strings.HasSuffix(sqlPath, ".zip") {
-		// Extract first .sql file from zip to a temp .sql file
-		extracted := strings.TrimSuffix(sqlPath, ".zip") + ".sql"
-		if out, err := exec.Command("sh", "-c", fmt.Sprintf("unzip -p '%s' '*.sql' 2>/dev/null | head -c 2147483648 > '%s'", sqlPath, extracted)).CombinedOutput(); err != nil {
-			// fallback: extract first file regardless of extension
-			if out2, err2 := exec.Command("sh", "-c", fmt.Sprintf("unzip -p '%s' > '%s'", sqlPath, extracted)).CombinedOutput(); err2 != nil {
-				return fmt.Errorf("failed to extract zip: %s %s", string(out), string(out2))
-			}
+		// Extract zip to temp dir, then find the .sql file inside (supports subdirectories)
+		tmpExtractDir := strings.TrimSuffix(sqlPath, ".zip") + "_extract"
+		if err := os.MkdirAll(tmpExtractDir, 0755); err != nil {
+			return fmt.Errorf("failed to create extract dir: %w", err)
 		}
-		sqlPath = extracted
-		defer os.Remove(sqlPath)
+		defer os.RemoveAll(tmpExtractDir)
+
+		if out, err := exec.Command("unzip", "-o", sqlPath, "-d", tmpExtractDir).CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to extract zip: %s", string(out))
+		}
+
+		// Find first .sql file recursively (covers subdirectory structure like backup/db.sql)
+		findOut, err := exec.Command("sh", "-c",
+			fmt.Sprintf("find '%s' -name '*.sql' -type f | sort | head -1", tmpExtractDir)).Output()
+		if err != nil || len(strings.TrimSpace(string(findOut))) == 0 {
+			return fmt.Errorf("no .sql file found inside zip archive — make sure the zip contains a .sql database dump")
+		}
+		sqlPath = strings.TrimSpace(string(findOut))
+		// sqlPath now points inside tmpExtractDir which is removed by defer above
+	}
+
+	// Validate SQL file is not empty before importing
+	if info, err := os.Stat(sqlPath); err != nil || info.Size() == 0 {
+		return fmt.Errorf("SQL file is empty (0 bytes) — the zip may not contain a valid database dump")
 	}
 
 	cmd := exec.Command("sh", "-c", fmt.Sprintf("mariadb '%s' < '%s'", dbName, sqlPath))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("import failed: %s", string(out))
 	}
-	slog.Info("Database imported", "db_name", dbName, "file", sqlPath)
+	slog.Info("Database imported", "db_name", dbName, "file", sqlPath, "size_bytes", func() int64 {
+		if info, err := os.Stat(sqlPath); err == nil {
+			return info.Size()
+		}
+		return -1
+	}())
 
 	// ── Post-import: fix WordPress site URL via WP-CLI ────────────────────────
 	// This ensures the site works on the current server/domain regardless of
