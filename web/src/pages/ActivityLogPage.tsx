@@ -120,32 +120,64 @@ export default function ActivityLogPage() {
           <Settings2 size={16} className="text-gray-500" />
           <span className="text-sm font-medium text-gray-700">Log Cleanup</span>
         </div>
+
+        {/* Explanation */}
+        <p className="text-xs text-gray-400 mb-3">
+          Giữ lại log trong <strong>X ngày gần nhất</strong>, xóa tất cả log cũ hơn. Đặt <strong>0</strong> để xóa toàn bộ.
+        </p>
+
         <div className="flex flex-wrap items-end gap-3">
           <div>
-            <label className="block text-xs text-gray-500 mb-1">Delete logs older than</label>
+            <label className="block text-xs text-gray-500 mb-1">Giữ lại log trong</label>
             <div className="flex items-center gap-2">
               <input
                 type="number"
-                min={1}
+                min={0}
                 max={3650}
                 value={retentionDays}
-                onChange={(e) => setRetentionDays(Math.max(1, parseInt(e.target.value) || 90))}
+                onChange={(e) => {
+                  const v = parseInt(e.target.value)
+                  setRetentionDays(isNaN(v) ? 90 : Math.max(0, v))
+                }}
                 className="w-24 border border-gray-200 rounded-lg px-3 py-2 text-sm"
               />
-              <span className="text-sm text-gray-500">days</span>
+              <span className="text-sm text-gray-500">ngày gần nhất</span>
             </div>
           </div>
+
+          {/* Quick presets */}
+          <div className="flex items-center gap-1">
+            {[
+              { label: 'Tất cả', days: 0 },
+              { label: '7 ngày', days: 7 },
+              { label: '30 ngày', days: 30 },
+              { label: '90 ngày', days: 90 },
+            ].map(preset => (
+              <button
+                key={preset.days}
+                onClick={() => setRetentionDays(preset.days)}
+                className={`px-2 py-1 rounded text-xs border transition-colors ${
+                  retentionDays === preset.days
+                    ? 'bg-blue-600 text-white border-blue-600'
+                    : 'bg-white text-gray-600 border-gray-200 hover:border-blue-300'
+                }`}
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
+
           <button
             onClick={handleCleanup}
             disabled={cleanup.isPending}
             className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-lg hover:bg-red-700 disabled:opacity-50 transition-colors"
           >
             <RefreshCw size={14} className={cleanup.isPending ? 'animate-spin' : ''} />
-            {cleanup.isPending ? 'Cleaning...' : 'Clean Now'}
+            {cleanup.isPending ? 'Đang xóa...' : retentionDays === 0 ? 'Xóa tất cả' : `Xóa log cũ hơn ${retentionDays} ngày`}
           </button>
           <div className="flex items-center gap-2 text-xs text-gray-400">
             <Clock size={13} />
-            <span>Auto-cleanup runs daily at midnight (default: 90 days)</span>
+            <span>Tự động chạy mỗi đêm lúc 00:00 (mặc định giữ 90 ngày)</span>
           </div>
         </div>
 

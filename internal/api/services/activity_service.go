@@ -63,10 +63,17 @@ func (s *ActivityService) List(userID *uint64, serverID *uint64, siteID *uint64,
 	return logs, total, err
 }
 
-// Cleanup removes activity logs older than the given number of days
+// Cleanup removes activity logs older than the given number of days.
+// retentionDays=0 deletes ALL logs.
 func (s *ActivityService) Cleanup(retentionDays int) (int64, error) {
-	cutoff := time.Now().AddDate(0, 0, -retentionDays)
-	result := s.db.Where("created_at < ?", cutoff).Delete(&models.ActivityLog{})
+	var result *gorm.DB
+	if retentionDays == 0 {
+		// Delete everything
+		result = s.db.Where("1 = 1").Delete(&models.ActivityLog{})
+	} else {
+		cutoff := time.Now().AddDate(0, 0, -retentionDays)
+		result = s.db.Where("created_at < ?", cutoff).Delete(&models.ActivityLog{})
+	}
 	return result.RowsAffected, result.Error
 }
 

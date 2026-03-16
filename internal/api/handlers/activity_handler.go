@@ -97,10 +97,12 @@ func (h *ActivityHandler) DeleteLog(c *fiber.Ctx) error {
 }
 
 func (h *ActivityHandler) Cleanup(c *fiber.Ctx) error {
-	days, _ := strconv.Atoi(c.Query("days", "90"))
-	if days < 1 {
+	daysStr := c.Query("days", "90")
+	days, err := strconv.Atoi(daysStr)
+	if err != nil || days < 0 {
 		days = 90
 	}
+	// days=0 means delete ALL logs (no retention)
 	deleted, err := h.svc.Cleanup(days)
 	if err != nil {
 		return c.Status(500).JSON(models.APIResponse{Error: "Failed to cleanup activity logs"})
