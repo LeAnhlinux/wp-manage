@@ -164,14 +164,21 @@ export function useImportDB() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async ({ siteId, file }: { siteId: number; file: File }) => {
+      // Use fetch() instead of axios — axios default Content-Type: application/json
+      // overrides the browser's auto-set "multipart/form-data; boundary=..." for FormData,
+      // causing Fiber to fail parsing the multipart body ("No file provided").
       const formData = new FormData()
       formData.append('file', file)
-      const { data } = await api.post<APIResponse<{ domain: string; db_name: string; file_size: number }>>(
-        `/sites/${siteId}/import-db`,
-        formData
-        // NOTE: Do NOT set Content-Type manually — axios auto-sets
-        // "multipart/form-data; boundary=..." when body is FormData
-      )
+      const token = localStorage.getItem('token')
+      const resp = await fetch(`/api/v1/sites/${siteId}/import-db`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: formData,
+      })
+      const data: APIResponse<{ domain: string; db_name: string; file_size: number }> = await resp.json()
+      if (!resp.ok || !data.success) {
+        throw Object.assign(new Error(data.error || 'Import failed'), { response: { data } })
+      }
       return data
     },
     onSuccess: (_d, v) => qc.invalidateQueries({ queryKey: ['site', v.siteId] }),
