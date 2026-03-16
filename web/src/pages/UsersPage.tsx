@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Plus, Trash2, Edit2, Server, X } from 'lucide-react'
+import { Plus, Trash2, Edit2, Server, X, KeyRound, Eye, EyeOff } from 'lucide-react'
 import { useUsers, useCreateUser, useUpdateUser, useDeleteUser, useAssignServer, useUnassignServer, useUserServers } from '@/hooks/useUsers'
 import { useServers } from '@/hooks/useServers'
 import { StatusBadge } from '@/components/ui/Badge'
@@ -23,6 +23,7 @@ export default function UsersPage() {
   const [showCreate, setShowCreate] = useState(false)
   const [editingId, setEditingId] = useState<number | null>(null)
   const [managingServersId, setManagingServersId] = useState<number | null>(null)
+  const [changingPasswordId, setChangingPasswordId] = useState<number | null>(null)
   const [form, setForm] = useState({ email: '', password: '', name: '', role: 'viewer' as const })
   const [editForm, setEditForm] = useState({ name: '', email: '', role: 'viewer' as string, password: '' })
 
@@ -176,6 +177,10 @@ export default function UsersPage() {
                           className="p-1.5 text-gray-400 hover:text-blue-600" title="Edit">
                           <Edit2 size={16} />
                         </button>
+                        <button onClick={() => setChangingPasswordId(user.id)}
+                          className="p-1.5 text-gray-400 hover:text-amber-600" title="Change Password">
+                          <KeyRound size={16} />
+                        </button>
                         <button onClick={() => { if (confirm(`Delete user ${user.name}?`)) deleteUser.mutate(user.id) }}
                           className="p-1.5 text-gray-400 hover:text-red-600" title="Delete">
                           <Trash2 size={16} />
@@ -200,6 +205,125 @@ export default function UsersPage() {
           onClose={() => setManagingServersId(null)}
         />
       )}
+
+      {/* Change Password Modal */}
+      {changingPasswordId && (
+        <ChangePasswordModal
+          userId={changingPasswordId}
+          userName={users.find(u => u.id === changingPasswordId)?.name ?? ''}
+          onClose={() => setChangingPasswordId(null)}
+        />
+      )}
+    </div>
+  )
+}
+
+function ChangePasswordModal({ userId, userName, onClose }: { userId: number; userName: string; onClose: () => void }) {
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [showNew, setShowNew] = useState(false)
+  const [showConfirm, setShowConfirm] = useState(false)
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState(false)
+  const updateUser = useUpdateUser()
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setError('')
+    if (newPassword.length < 8) {
+      setError('Mật khẩu phải có ít nhất 8 ký tự')
+      return
+    }
+    if (newPassword !== confirmPassword) {
+      setError('Mật khẩu xác nhận không khớp')
+      return
+    }
+    try {
+      await updateUser.mutateAsync({ id: userId, password: newPassword } as never)
+      setSuccess(true)
+      setTimeout(onClose, 1500)
+    } catch {
+      setError('Đổi mật khẩu thất bại. Vui lòng thử lại.')
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4">
+        <div className="flex items-center justify-between p-6 border-b">
+          <div className="flex items-center gap-2">
+            <KeyRound size={18} className="text-amber-600" />
+            <h2 className="text-lg font-semibold">Đổi mật khẩu</h2>
+          </div>
+          <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-600"><X size={20} /></button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          <p className="text-sm text-gray-500">
+            Đổi mật khẩu cho <span className="font-medium text-gray-800">{userName}</span>
+          </p>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Mật khẩu mới</label>
+            <div className="relative">
+              <input
+                type={showNew ? 'text' : 'password'}
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                className="w-full px-4 py-2 pr-10 border border-gray-300 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none"
+                placeholder="Tối thiểu 8 ký tự"
+                autoFocus
+              />
+              <button type="button" onClick={() => setShowNew(v => !v)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                {showNew ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
+            {newPassword && newPassword.length < 8 && (
+              <p className="mt-1 text-xs text-red-500">Cần ít nhất 8 ký tự</p>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Xác nhận mật khẩu</label>
+            <div className="relative">
+              <input
+                type={showConfirm ? 'text' : 'password'}
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                className="w-full px-4 py-2 pr-10 border border-gray-300 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none"
+                placeholder="Nhập lại mật khẩu mới"
+              />
+              <button type="button" onClick={() => setShowConfirm(v => !v)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                {showConfirm ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
+            {confirmPassword && newPassword !== confirmPassword && (
+              <p className="mt-1 text-xs text-red-500">Mật khẩu không khớp</p>
+            )}
+          </div>
+
+          {error && (
+            <div className="px-3 py-2 bg-red-50 text-red-700 text-sm rounded-lg">✗ {error}</div>
+          )}
+          {success && (
+            <div className="px-3 py-2 bg-green-50 text-green-700 text-sm rounded-lg">✓ Đổi mật khẩu thành công!</div>
+          )}
+
+          <div className="flex gap-3 pt-2">
+            <button type="submit"
+              disabled={updateUser.isPending || success}
+              className="flex-1 px-4 py-2 bg-amber-600 text-white font-medium rounded-lg hover:bg-amber-700 disabled:opacity-50 transition-colors">
+              {updateUser.isPending ? 'Đang lưu...' : 'Đổi mật khẩu'}
+            </button>
+            <button type="button" onClick={onClose}
+              className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200">
+              Hủy
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   )
 }
