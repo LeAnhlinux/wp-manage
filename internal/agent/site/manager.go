@@ -366,25 +366,13 @@ func (m *Manager) ImportDatabase(dbName, sqlPath, domain, oldDomain string) erro
 		sqlPath = strings.TrimSuffix(sqlPath, ".gz")
 		defer os.Remove(sqlPath)
 	} else if strings.HasSuffix(sqlPath, ".zip") {
-		// Extract zip to temp dir, then find the .sql file inside (supports subdirectories)
-		tmpExtractDir := strings.TrimSuffix(sqlPath, ".zip") + "_extract"
-		if err := os.MkdirAll(tmpExtractDir, 0755); err != nil {
-			return fmt.Errorf("failed to create extract dir: %w", err)
+		// Extract zip using Go's built-in archive/zip (no external unzip binary needed)
+		extracted, err := extractSQLFromZip(sqlPath)
+		if err != nil {
+			return fmt.Errorf("failed to extract zip: %s", err.Error())
 		}
-		defer os.RemoveAll(tmpExtractDir)
-
-		if out, err := exec.Command("unzip", "-o", sqlPath, "-d", tmpExtractDir).CombinedOutput(); err != nil {
-			return fmt.Errorf("failed to extract zip: %s", string(out))
-		}
-
-		// Find first .sql file recursively (covers subdirectory structure like backup/db.sql)
-		findOut, err := exec.Command("sh", "-c",
-			fmt.Sprintf("find '%s' -name '*.sql' -type f | sort | head -1", tmpExtractDir)).Output()
-		if err != nil || len(strings.TrimSpace(string(findOut))) == 0 {
-			return fmt.Errorf("no .sql file found inside zip archive — make sure the zip contains a .sql database dump")
-		}
-		sqlPath = strings.TrimSpace(string(findOut))
-		// sqlPath now points inside tmpExtractDir which is removed by defer above
+		defer os.Remove(extracted)
+		sqlPath = extracted
 	}
 
 	// Validate SQL file is not empty before importing
@@ -445,6 +433,59 @@ func (m *Manager) ImportDatabase(dbName, sqlPath, domain, oldDomain string) erro
 	}
 
 	return nil
+}
+
+// extractSQLFromZip opens a zip archive using Go's built-in archive/zip,
+// finds the first .sql file (any depth), extracts it to a temp file, and
+// returns the temp file path. Caller is responsible for os.Remove(path).
+func extractSQLFromZip(zipPath string) (string, error) {
+	r, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return "", fmt.Errorf("cannot open zip: %w", err)
+	}
+	defer r.Close()
+
+	// Find first .sql file (sorted by name for determinism)
+	var sqlFile *zip.File
+	for _, f := range r.File {
+		if !f.FileInfo().IsDir() && strings.HasSuffix(strings.ToLower(f.Name), ".sql") {
+			if sqlFile == nil || f.Name < sqlFile.Name {
+				sqlFile = f
+			}
+		}
+	}
+	if sqlFile == nil {
+		// List files in zip for a helpful error message
+		var names []string
+		for _, f := range r.File {
+			if !f.FileInfo().IsDir() {
+				names = append(names, f.Name)
+			}
+		}
+		return "", fmt.Errorf("no .sql file found in zip (files: %s) — make sure the zip contains a SQL database dump", strings.Join(names, ", "))
+	}
+
+	// Extract to a temp file
+	tmpFile, err := os.CreateTemp("", "wp-import-*.sql")
+	if err != nil {
+		return "", fmt.Errorf("cannot create temp file: %w", err)
+	}
+	defer tmpFile.Close()
+
+	rc, err := sqlFile.Open()
+	if err != nil {
+		os.Remove(tmpFile.Name())
+		return "", fmt.Errorf("cannot read %s from zip: %w", sqlFile.Name, err)
+	}
+	defer rc.Close()
+
+	if _, err := io.Copy(tmpFile, rc); err != nil {
+		os.Remove(tmpFile.Name())
+		return "", fmt.Errorf("cannot extract %s: %w", sqlFile.Name, err)
+	}
+
+	slog.Info("Extracted SQL from zip", "zip", zipPath, "sql_file", sqlFile.Name, "dest", tmpFile.Name())
+	return tmpFile.Name(), nil
 }
 
 func (m *Manager) createDirs(siteRoot, webRoot string) error {
