@@ -174,36 +174,7 @@ func (h *ServerHandler) Tasks(c *fiber.Ctx) error {
 
 	var tasks []models.AgentTask
 
-	// 1) Pending sites (create_site tasks)
-	sites, err := h.siteSvc.GetPendingSites(server.ID)
-	if err == nil {
-		for _, s := range sites {
-			installType := s.InstallType
-			if installType == "" {
-				installType = "auto"
-			}
-			tasks = append(tasks, models.AgentTask{
-				TaskType: "create_site",
-				SiteID:   s.ID,
-				Data: models.AgentCreateSiteTask{
-					Domain:       s.Domain,
-					PHPVersion:   s.PHPVersion,
-					SSLEnabled:   s.SSLEnabled,
-					InstallType:  installType,
-					DBName:       s.DBName,
-					DBUser:       s.DBUser,
-					DBPassword:   s.DBPassword,
-					WPAdminUser:  s.WPAdminUser,
-					WPAdminEmail: s.WPAdminEmail,
-					WPAdminPass:  s.WPAdminPass,
-				},
-			})
-			// Mark as provisioning to prevent re-dispatch on next agent poll
-			h.siteSvc.UpdateStatus(s.ID, "provisioning")
-		}
-	}
-
-	// 2) Queued tasks (restart, suspend, resume, delete, ssl, php update)
+	// All task types (including create_site) use task_queue for proper tracking
 	queuedTasks, err := h.siteSvc.GetPendingTasks(server.ID)
 	if err == nil {
 		for _, t := range queuedTasks {
@@ -218,7 +189,7 @@ func (h *ServerHandler) Tasks(c *fiber.Ctx) error {
 				SiteID:   t.SiteID,
 				Data:     taskData,
 			})
-			// Mark as processing
+			// Mark as processing immediately to prevent re-dispatch on next poll
 			h.siteSvc.CompleteTask(t.ID, "processing", "")
 		}
 	}

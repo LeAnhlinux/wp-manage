@@ -37,6 +37,20 @@ func (h *SiteHandler) Create(c *fiber.Ctx) error {
 		return c.Status(400).JSON(models.APIResponse{Error: err.Error()})
 	}
 
+	// Queue create_site task with a real task_id so agent can track completion
+	h.svc.CreateJSONTask(site.ServerID, site.ID, "create_site", map[string]interface{}{
+		"domain":         site.Domain,
+		"php_version":    site.PHPVersion,
+		"ssl_enabled":    site.SSLEnabled,
+		"install_type":   site.InstallType,
+		"db_name":        site.DBName,
+		"db_user":        site.DBUser,
+		"db_password":    site.DBPassword,
+		"wp_admin_user":  site.WPAdminUser,
+		"wp_admin_email": site.WPAdminEmail,
+		"wp_admin_pass":  site.WPAdminPass,
+	})
+
 	return c.Status(201).JSON(models.APIResponse{
 		Success: true,
 		Message: "Site creation initiated",

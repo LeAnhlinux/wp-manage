@@ -3,6 +3,7 @@ package site
 import (
 	"archive/zip"
 	"compress/gzip"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"regexp"
 	"strings"
 	"text/template"
+	"time"
 )
 
 // SiteUser returns the Linux username for a WordPress site.
@@ -102,6 +104,44 @@ func GetWPVersion(domain string) string {
 	return ""
 }
 
+// cleanupFailedSite removes all resources created during a failed site creation.
+// Called automatically when any CreateSite step fails.
+func (m *Manager) cleanupFailedSite(domain, dbName, dbUser string) {
+	slog.Info("Rolling back failed site creation", "domain", domain)
+	siteRoot := fmt.Sprintf("/var/www/%s", domain)
+
+	// Remove nginx configs
+	os.Remove(fmt.Sprintf("/etc/nginx/sites-enabled/%s.conf", domain))
+	os.Remove(fmt.Sprintf("/etc/nginx/sites-available/%s.conf", domain))
+
+	// Remove PHP-FPM pool for all versions
+	for _, v := range []string{"7.4", "8.0", "8.1", "8.2", "8.3"} {
+		os.Remove(fmt.Sprintf("/etc/php/%s/fpm/pool.d/%s.conf", v, domain))
+	}
+
+	// Kill connections + drop DB/user
+	if dbName != "" {
+		killDBConnections(dbName)
+		runSQL(fmt.Sprintf("DROP DATABASE IF EXISTS `%s`", dbName))
+	}
+	if dbUser != "" {
+		runSQL(fmt.Sprintf("DROP USER IF EXISTS '%s'@'localhost'", dbUser))
+		runSQL("FLUSH PRIVILEGES")
+	}
+
+	// Remove site files
+	os.RemoveAll(siteRoot)
+
+	// Remove Linux user
+	deleteSiteUser(domain)
+
+	// Reload nginx (ignore errors)
+	exec.Command("nginx", "-t").Run()
+	exec.Command("systemctl", "reload", "nginx").Run()
+
+	slog.Info("Rollback complete", "domain", domain)
+}
+
 func (m *Manager) CreateSite(params CreateParams) error {
 	siteRoot := fmt.Sprintf("/var/www/%s", params.Domain)
 	webRoot := siteRoot + "/public"
@@ -147,7 +187,11 @@ func (m *Manager) CreateSite(params CreateParams) error {
 		{"set_permissions", 85, func() error { return m.setPermissions(siteRoot, params.Domain) }},
 		{"issue_ssl", 90, func() error {
 			if params.SSLEnabled {
-				return m.issueSSL(params.Domain, params.WPAdminEmail)
+				if err := m.issueSSL(params.Domain, params.WPAdminEmail); err != nil {
+					// SSL failure is non-fatal in auto mode — site works over HTTP.
+					// DNS may not be pointing here yet. User can issue SSL later from panel.
+					slog.Warn("SSL issue failed during auto site create (non-fatal)", "domain", params.Domain, "error", err)
+				}
 			}
 			return nil
 		}},
@@ -167,6 +211,8 @@ func (m *Manager) CreateSite(params CreateParams) error {
 	for _, step := range steps {
 		m.onProgress(step.name, step.pct, fmt.Sprintf("Creating site: %s", step.name))
 		if err := step.fn(); err != nil {
+			slog.Error("Create site step failed, rolling back", "domain", params.Domain, "step", step.name, "error", err)
+			m.cleanupFailedSite(params.Domain, params.DBName, params.DBUser)
 			return fmt.Errorf("step %s failed: %w", step.name, err)
 		}
 	}
@@ -250,6 +296,8 @@ func (m *Manager) CreateSiteManual(params CreateParams) error {
 	for _, step := range steps {
 		m.onProgress(step.name, step.pct, fmt.Sprintf("Setting up site infrastructure: %s", step.name))
 		if err := step.fn(); err != nil {
+			slog.Error("Create site (manual) step failed, rolling back", "domain", params.Domain, "step", step.name, "error", err)
+			m.cleanupFailedSite(params.Domain, params.DBName, params.DBUser)
 			return fmt.Errorf("step %s failed: %w", step.name, err)
 		}
 	}
@@ -971,7 +1019,17 @@ php_admin_value[disable_functions] = exec,passthru,shell_exec,system,proc_open,p
 }
 
 func (m *Manager) downloadWordPress(webRoot string) error {
-	return exec.Command("wp", "core", "download", "--path="+webRoot, "--locale=vi", "--allow-root").Run()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "wp", "core", "download", "--path="+webRoot, "--locale=vi", "--allow-root")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("timed out downloading WordPress (3 min limit)")
+		}
+		return fmt.Errorf("wp core download failed: %s", strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 func (m *Manager) configureWordPress(p CreateParams, webRoot string) error {
@@ -985,7 +1043,13 @@ func (m *Manager) configureWordPress(p CreateParams, webRoot string) error {
 		"--dbcharset=utf8mb4",
 		"--allow-root",
 	}
-	return exec.Command("wp", args...).Run()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "wp", args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("wp config create failed: %s", strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 func (m *Manager) installWordPress(p CreateParams, webRoot string) error {
@@ -1003,8 +1067,19 @@ func (m *Manager) installWordPress(p CreateParams, webRoot string) error {
 		"--admin_password=" + p.WPAdminPass,
 		"--skip-email",
 		"--allow-root",
+		"--skip-themes",
+		"--skip-plugins",
 	}
-	return exec.Command("wp", args...).Run()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "wp", args...).CombinedOutput()
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("timed out installing WordPress (2 min limit)")
+		}
+		return fmt.Errorf("wp core install failed: %s", strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 func (m *Manager) setPermissions(siteRoot, domain string) error {

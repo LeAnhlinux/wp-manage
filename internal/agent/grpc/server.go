@@ -172,10 +172,10 @@ func (s *AgentServer) pollTasks() {
 				slog.Warn("Skipping duplicate create_site task", "site_id", task.SiteID, "domain", siteTask.Domain)
 				continue
 			}
-			go func(sID uint64, t models.AgentCreateSiteTask) {
+			go func(taskID, sID uint64, t models.AgentCreateSiteTask) {
 				defer s.activeCreations.Delete(sID)
-				s.executeCreateSite(sID, t)
-			}(task.SiteID, siteTask)
+				s.executeCreateSite(taskID, sID, t)
+			}(task.TaskID, task.SiteID, siteTask)
 
 		case "delete_site":
 			var data map[string]string
@@ -539,7 +539,7 @@ func (s *AgentServer) pollTasks() {
 	}
 }
 
-func (s *AgentServer) executeCreateSite(siteID uint64, task models.AgentCreateSiteTask) {
+func (s *AgentServer) executeCreateSite(taskID uint64, siteID uint64, task models.AgentCreateSiteTask) {
 	params := site.CreateParams{
 		Domain:       task.Domain,
 		PHPVersion:   task.PHPVersion,
@@ -573,7 +573,7 @@ func (s *AgentServer) executeCreateSite(siteID uint64, task models.AgentCreateSi
 		err = mgr.CreateSite(params)
 	}
 
-	result := models.AgentTaskResult{SiteID: siteID, Status: "active"}
+	result := models.AgentTaskResult{TaskID: taskID, SiteID: siteID, Status: "active"}
 	if err != nil {
 		slog.Error("Create site failed", "domain", task.Domain, "install_type", installType, "error", err)
 		result.Status = "error"
