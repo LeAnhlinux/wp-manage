@@ -793,6 +793,10 @@ func (m *Manager) configureNginx(p CreateParams, webRoot, phpVer string) error {
 		return err
 	}
 
+	// Ensure /etc/nginx/conf.d/webp.conf exists (defines $webp_accept variable)
+	// Must be created before nginx -t or it will fail with "unknown variable"
+	ensureWebPConfd()
+
 	// Enable site
 	enabledPath := fmt.Sprintf("/etc/nginx/sites-enabled/%s.conf", p.Domain)
 	os.Symlink(confPath, enabledPath)
