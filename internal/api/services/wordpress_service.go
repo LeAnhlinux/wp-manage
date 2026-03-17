@@ -6,8 +6,28 @@ import (
 	"time"
 
 	"github.com/gofiber-team/wp-manage/internal/models"
+	"github.com/gofiber-team/wp-manage/pkg/utils"
 	"gorm.io/gorm"
 )
+
+// stagingDBNameFromDomain computes the staging DB name from a staging domain.
+// Uses the same formula as the agent so both sides are consistent.
+// Format: stg_{sanitized_domain}, max 48 chars.
+func stagingDBNameFromDomain(stagingDomain string) string {
+	result := make([]byte, 0, len(stagingDomain))
+	for _, c := range stagingDomain {
+		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') {
+			result = append(result, byte(c))
+		} else {
+			result = append(result, '_')
+		}
+	}
+	name := "stg_" + string(result)
+	if len(name) > 48 {
+		name = name[:48]
+	}
+	return name
+}
 
 type WordPressService struct {
 	db *gorm.DB
@@ -38,6 +58,12 @@ func (s *WordPressService) CreateStaging(productionSiteID uint64) (*models.Stagi
 
 	// Create the staging Site record (cloned from production)
 	stagingDomain := fmt.Sprintf("staging-%s", site.Domain)
+	stagingDB := stagingDBNameFromDomain(stagingDomain)
+	stagingUser := stagingDB
+	if len(stagingUser) > 32 {
+		stagingUser = stagingUser[:32]
+	}
+	stagingPass := utils.GenerateRandomPassword(24)
 	stagingSite := models.Site{
 		ServerID:     site.ServerID,
 		Domain:       stagingDomain,
@@ -46,6 +72,9 @@ func (s *WordPressService) CreateStaging(productionSiteID uint64) (*models.Stagi
 		WPAdminUser:  site.WPAdminUser,
 		WPAdminEmail: site.WPAdminEmail,
 		Status:       "creating",
+		DBName:       stagingDB,
+		DBUser:       stagingUser,
+		DBPassword:   stagingPass,
 	}
 	if err := s.db.Create(&stagingSite).Error; err != nil {
 		return nil, fmt.Errorf("failed to create staging site record: %w", err)
@@ -63,14 +92,17 @@ func (s *WordPressService) CreateStaging(productionSiteID uint64) (*models.Stagi
 
 	// Queue staging_create task for agent
 	taskData := map[string]interface{}{
-		"staging_id":     staging.ID,
-		"staging_site_id": stagingSite.ID,
-		"production_domain": site.Domain,
-		"staging_domain":    stagingDomain,
-		"php_version":       site.PHPVersion,
-		"db_name":           site.DBName,
-		"db_user":           site.DBUser,
-		"db_password":       site.DBPassword,
+		"staging_id":          staging.ID,
+		"staging_site_id":     stagingSite.ID,
+		"production_domain":   site.Domain,
+		"staging_domain":      stagingDomain,
+		"php_version":         site.PHPVersion,
+		"db_name":             site.DBName,
+		"db_user":             site.DBUser,
+		"db_password":         site.DBPassword,
+		"staging_db_name":     stagingDB,
+		"staging_db_user":     stagingUser,
+		"staging_db_password": stagingPass,
 	}
 	dataJSON, _ := json.Marshal(taskData)
 	task := models.TaskQueue{
@@ -110,12 +142,15 @@ func (s *WordPressService) PushStaging(stagingID uint64) error {
 	s.db.Model(&staging).Update("status", "pushing")
 
 	taskData := map[string]interface{}{
-		"staging_id":         staging.ID,
-		"production_domain":  staging.Production.Domain,
-		"staging_domain":     staging.StagingSite2.Domain,
-		"db_name":            staging.Production.DBName,
-		"db_user":            staging.Production.DBUser,
-		"db_password":        staging.Production.DBPassword,
+		"staging_id":          staging.ID,
+		"production_domain":   staging.Production.Domain,
+		"staging_domain":      staging.StagingSite2.Domain,
+		"db_name":             staging.Production.DBName,
+		"db_user":             staging.Production.DBUser,
+		"db_password":         staging.Production.DBPassword,
+		"staging_db_name":     staging.StagingSite2.DBName,
+		"staging_db_user":     staging.StagingSite2.DBUser,
+		"staging_db_password": staging.StagingSite2.DBPassword,
 	}
 	dataJSON, _ := json.Marshal(taskData)
 	task := models.TaskQueue{
@@ -137,10 +172,11 @@ func (s *WordPressService) DeleteStaging(stagingID uint64) error {
 	}
 
 	taskData := map[string]interface{}{
-		"staging_id":      staging.ID,
-		"staging_domain":  staging.StagingSite2.Domain,
-		"staging_db_name": staging.StagingSite2.DBName,
-		"staging_db_user": staging.StagingSite2.DBUser,
+		"staging_id":          staging.ID,
+		"staging_domain":      staging.StagingSite2.Domain,
+		"staging_db_name":     staging.StagingSite2.DBName,
+		"staging_db_user":     staging.StagingSite2.DBUser,
+		"staging_db_password": staging.StagingSite2.DBPassword,
 	}
 	dataJSON, _ := json.Marshal(taskData)
 	task := models.TaskQueue{

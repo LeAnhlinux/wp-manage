@@ -893,6 +893,12 @@ const webpLocationBlock = `    # Serve WebP: rewrite URI when browser supports i
     }
 `
 
+// EnsureWebPConfd creates /etc/nginx/conf.d/webp.conf if it doesn't exist.
+// Exported wrapper so other packages (e.g. staging) can call it.
+func EnsureWebPConfd() {
+	ensureWebPConfd()
+}
+
 // EnsureWebPNginx patches an existing site's nginx config to serve WebP automatically.
 // Also creates /etc/nginx/conf.d/webp.conf with the http-level map if missing.
 // Safe to call multiple times (idempotent).

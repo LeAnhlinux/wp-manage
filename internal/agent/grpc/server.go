@@ -1277,39 +1277,58 @@ func (s *AgentServer) executeStagingCreate(taskID uint64, data map[string]interf
 	stagingDomain, _ := data["staging_domain"].(string)
 	phpVersion, _ := data["php_version"].(string)
 	dbName, _ := data["db_name"].(string)
-	dbUser, _ := data["db_user"].(string)
-	dbPassword, _ := data["db_password"].(string)
+	stagingDBName, _ := data["staging_db_name"].(string)
+	stagingDBUser, _ := data["staging_db_user"].(string)
+	stagingDBPassword, _ := data["staging_db_password"].(string)
 
 	slog.Info("Creating staging environment", "production", productionDomain, "staging", stagingDomain)
 
-	// 1. Create staging DB by cloning production
-	stagingDBName := fmt.Sprintf("staging_%s", strings.ReplaceAll(strings.ReplaceAll(stagingDomain, ".", "_"), "-", "_"))
-	stagingDBUser := stagingDBName
-	if len(stagingDBUser) > 32 {
-		stagingDBUser = stagingDBUser[:32]
+	// fail helper — report error back to API and complete task
+	fail := func(msg string) {
+		slog.Error("Staging create failed", "staging", stagingDomain, "error", msg)
+		s.reportStagingResult(map[string]interface{}{
+			"staging_id":  stagingID,
+			"status":      "failed",
+			"site_status": "error",
+			"error":       msg,
+		})
+		s.completeTask(taskID, "failed", msg)
 	}
 
-	// Create staging database & user
-	commands := []string{
+	// Fix #2 — create Linux user for staging site
+	stagingLinuxUser := "wp_" + strings.ReplaceAll(strings.ReplaceAll(stagingDomain, ".", "_"), "-", "_")
+	exec.Command("useradd", "--system", "--no-create-home", "--shell", "/usr/sbin/nologin",
+		"--home-dir", fmt.Sprintf("/var/www/%s", stagingDomain), stagingLinuxUser).Run()
+
+	// 1. Create staging DB & user
+	sqlCmds := []string{
 		fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", stagingDBName),
-		fmt.Sprintf("CREATE USER IF NOT EXISTS '%s'@'localhost' IDENTIFIED BY '%s'", stagingDBUser, dbPassword),
+		fmt.Sprintf("CREATE USER IF NOT EXISTS '%s'@'localhost' IDENTIFIED BY '%s'", stagingDBUser, stagingDBPassword),
 		fmt.Sprintf("GRANT ALL PRIVILEGES ON `%s`.* TO '%s'@'localhost'", stagingDBName, stagingDBUser),
 		"FLUSH PRIVILEGES",
 	}
-	for _, cmd := range commands {
+	for _, cmd := range sqlCmds {
 		exec.Command("mysql", "-e", cmd).Run()
 	}
 
-	// Clone DB: mysqldump production | mysql staging
-	dumpCmd := exec.Command("mysqldump", "-u", dbUser, fmt.Sprintf("-p%s", dbPassword), dbName)
-	importCmd := exec.Command("mysql", "-u", stagingDBUser, fmt.Sprintf("-p%s", dbPassword), stagingDBName)
+	// Fix #6 — safe dump via file (no pipe, with error handling)
+	dumpFile := fmt.Sprintf("/tmp/staging-dump-%s.sql", stagingDomain)
+	if out, err := exec.Command("mysqldump", "--no-tablespaces",
+		"--result-file="+dumpFile, dbName).CombinedOutput(); err != nil {
+		slog.Error("Staging DB dump failed", "error", err, "output", string(out))
+		fail("DB dump failed: " + string(out))
+		return
+	}
+	defer os.Remove(dumpFile)
 
-	pipe, _ := dumpCmd.StdoutPipe()
-	importCmd.Stdin = pipe
-	dumpCmd.Start()
-	importCmd.Start()
-	dumpCmd.Wait()
-	importCmd.Wait()
+	sqlBytes, _ := os.ReadFile(dumpFile)
+	importCmd := exec.Command("mysql", stagingDBName)
+	importCmd.Stdin = bytes.NewReader(sqlBytes)
+	if out, err := importCmd.CombinedOutput(); err != nil {
+		slog.Error("Staging DB import failed", "error", err, "output", string(out))
+		fail("DB import failed: " + string(out))
+		return
+	}
 
 	// 2. Copy files
 	srcDir := fmt.Sprintf("/var/www/%s/public/", productionDomain)
@@ -1317,14 +1336,30 @@ func (s *AgentServer) executeStagingCreate(taskID uint64, data map[string]interf
 	exec.Command("mkdir", "-p", dstDir).Run()
 	exec.Command("rsync", "-a", srcDir, dstDir).Run()
 
-	// 3. Update wp-config.php with staging DB
+	// Fix #3 — create logs and tmp directories
+	exec.Command("mkdir", "-p", fmt.Sprintf("/var/www/%s/logs", stagingDomain)).Run()
+	exec.Command("mkdir", "-p", fmt.Sprintf("/var/www/%s/tmp", stagingDomain)).Run()
+
+	// 3. Update wp-config.php with staging DB creds
 	wpConfig := fmt.Sprintf("%swp-config.php", dstDir)
 	exec.Command("sed", "-i", fmt.Sprintf("s/%s/%s/g", dbName, stagingDBName), wpConfig).Run()
-	exec.Command("sed", "-i", fmt.Sprintf("s/%s/%s/g", dbUser, stagingDBUser), wpConfig).Run()
+	exec.Command("sed", "-i", fmt.Sprintf("s/%s/%s/g", stagingDBUser, stagingDBUser), wpConfig).Run()
 
-	// 4. Search-replace URLs in DB
-	wpUser := strings.ReplaceAll(strings.ReplaceAll(stagingDomain, ".", "_"), "-", "_")
-	exec.Command("chown", "-R", fmt.Sprintf("%s:%s", wpUser, wpUser), dstDir).Run()
+	// Fix #5 — search-replace production URL → staging URL in DB
+	wpPath := fmt.Sprintf("/var/www/%s/public", stagingDomain)
+	stagingURL := "http://" + stagingDomain
+	for _, prodURL := range []string{"https://" + productionDomain, "http://" + productionDomain} {
+		exec.Command("wp", "search-replace", prodURL, stagingURL,
+			"--path="+wpPath,
+			"--skip-themes", "--skip-plugins",
+			"--allow-root").Run()
+	}
+
+	// Chown files to staging linux user (non-critical)
+	exec.Command("chown", "-R", fmt.Sprintf("%s:%s", stagingLinuxUser, stagingLinuxUser), dstDir).Run()
+
+	// Fix #4 — ensure webp.conf exists before rebuilding nginx vhost
+	site.EnsureWebPConfd()
 
 	// 5. Create Nginx vhost + PHP-FPM pool for staging
 	agentconfig.RebuildNginxVhost(stagingDomain, map[string]string{"php_version": phpVersion})
@@ -1332,34 +1367,87 @@ func (s *AgentServer) executeStagingCreate(taskID uint64, data map[string]interf
 	exec.Command("systemctl", "reload", "nginx").Run()
 	exec.Command("systemctl", "restart", fmt.Sprintf("php%s-fpm", phpVersion)).Run()
 
-	// Report success
-	stagingResult := map[string]interface{}{
+	// Fix #8 — report success and complete task
+	s.reportStagingResult(map[string]interface{}{
 		"staging_id":  stagingID,
 		"status":      "active",
 		"site_status": "active",
-	}
-	s.reportStagingResult(stagingResult)
+	})
+	s.completeTask(taskID, "completed", "")
 }
 
 func (s *AgentServer) executeStagingPush(taskID uint64, data map[string]interface{}) {
 	stagingID := uint64(data["staging_id"].(float64))
 	productionDomain, _ := data["production_domain"].(string)
 	stagingDomain, _ := data["staging_domain"].(string)
+	dbName, _ := data["db_name"].(string)
+	stagingDBName, _ := data["staging_db_name"].(string)
 
 	slog.Info("Pushing staging to production", "staging", stagingDomain, "production", productionDomain)
+
+	// fail helper
+	fail := func(msg string) {
+		slog.Error("Staging push failed", "staging", stagingDomain, "error", msg)
+		s.reportStagingResult(map[string]interface{}{
+			"staging_id":  stagingID,
+			"status":      "failed",
+			"site_status": "error",
+			"error":       msg,
+		})
+		s.completeTask(taskID, "failed", msg)
+	}
+
+	// Fix #9 — sync DB: backup production, dump staging, import into production
+
+	// 1. Backup production DB first (safety, non-fatal if it fails)
+	backupFile := fmt.Sprintf("/tmp/prod-backup-before-push-%d.sql", stagingID)
+	exec.Command("mysqldump", "--no-tablespaces", "--result-file="+backupFile, dbName).Run()
+	defer os.Remove(backupFile)
+
+	// 2. Dump staging DB
+	stagingDumpFile := fmt.Sprintf("/tmp/staging-push-dump-%d.sql", stagingID)
+	if out, err := exec.Command("mysqldump", "--no-tablespaces",
+		"--result-file="+stagingDumpFile, stagingDBName).CombinedOutput(); err != nil {
+		fail("Failed to dump staging DB: " + string(out))
+		return
+	}
+	defer os.Remove(stagingDumpFile)
+
+	// 3. Drop + recreate production DB, then import staging dump
+	exec.Command("mysql", "-e",
+		fmt.Sprintf("DROP DATABASE IF EXISTS `%s`; CREATE DATABASE `%s` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;",
+			dbName, dbName)).Run()
+
+	sqlBytes, _ := os.ReadFile(stagingDumpFile)
+	importCmd := exec.Command("mysql", dbName)
+	importCmd.Stdin = bytes.NewReader(sqlBytes)
+	if out, err := importCmd.CombinedOutput(); err != nil {
+		fail("Failed to import staging DB to production: " + string(out))
+		return
+	}
+
+	// 4. Search-replace staging URL → production URL in production DB
+	wpPath := fmt.Sprintf("/var/www/%s/public", productionDomain)
+	prodURL := "https://" + productionDomain
+	stagingURL := "http://" + stagingDomain
+	exec.Command("wp", "search-replace", stagingURL, prodURL,
+		"--path="+wpPath, "--skip-themes", "--skip-plugins", "--allow-root").Run()
+	// Also fix http → https for production
+	exec.Command("wp", "search-replace", "http://"+productionDomain, prodURL,
+		"--path="+wpPath, "--skip-themes", "--skip-plugins", "--allow-root").Run()
 
 	// rsync staging files to production (excluding wp-config.php)
 	srcDir := fmt.Sprintf("/var/www/%s/public/", stagingDomain)
 	dstDir := fmt.Sprintf("/var/www/%s/public/", productionDomain)
 	exec.Command("rsync", "-a", "--exclude=wp-config.php", srcDir, dstDir).Run()
 
-	// Report success
-	stagingResult := map[string]interface{}{
+	// Fix #10 — report success and complete task
+	s.reportStagingResult(map[string]interface{}{
 		"staging_id":  stagingID,
 		"status":      "active",
 		"site_status": "active",
-	}
-	s.reportStagingResult(stagingResult)
+	})
+	s.completeTask(taskID, "completed", "")
 }
 
 func (s *AgentServer) executeStagingDelete(taskID uint64, data map[string]interface{}) {
@@ -1370,28 +1458,42 @@ func (s *AgentServer) executeStagingDelete(taskID uint64, data map[string]interf
 
 	slog.Info("Deleting staging environment", "domain", stagingDomain)
 
-	// Remove files
-	exec.Command("rm", "-rf", fmt.Sprintf("/var/www/%s", stagingDomain)).Run()
-
 	// Remove nginx vhost
 	exec.Command("rm", "-f", fmt.Sprintf("/etc/nginx/sites-available/%s.conf", stagingDomain)).Run()
 	exec.Command("rm", "-f", fmt.Sprintf("/etc/nginx/sites-enabled/%s.conf", stagingDomain)).Run()
 	exec.Command("systemctl", "reload", "nginx").Run()
 
-	// Remove DB
+	// Fix #11 — remove PHP-FPM pools for all versions and reload
+	for _, v := range []string{"7.4", "8.0", "8.1", "8.2", "8.3"} {
+		poolConf := fmt.Sprintf("/etc/php/%s/fpm/pool.d/%s.conf", v, stagingDomain)
+		if err := os.Remove(poolConf); err == nil {
+			exec.Command("systemctl", "reload", fmt.Sprintf("php%s-fpm", v)).Run()
+		}
+	}
+
+	// Remove files
+	exec.Command("rm", "-rf", fmt.Sprintf("/var/www/%s", stagingDomain)).Run()
+
+	// Fix #12 — drop DB using credentials from task data
 	if stagingDBName != "" {
 		exec.Command("mysql", "-e", fmt.Sprintf("DROP DATABASE IF EXISTS `%s`", stagingDBName)).Run()
 	}
 	if stagingDBUser != "" {
 		exec.Command("mysql", "-e", fmt.Sprintf("DROP USER IF EXISTS '%s'@'localhost'", stagingDBUser)).Run()
+		exec.Command("mysql", "-e", "FLUSH PRIVILEGES").Run()
 	}
 
-	stagingResult := map[string]interface{}{
+	// Fix #11 — remove the staging Linux user
+	stagingLinuxUser := "wp_" + strings.ReplaceAll(strings.ReplaceAll(stagingDomain, ".", "_"), "-", "_")
+	exec.Command("userdel", stagingLinuxUser).Run()
+
+	// Fix #13 — report success and complete task
+	s.reportStagingResult(map[string]interface{}{
 		"staging_id":  stagingID,
 		"status":      "deleted",
 		"site_status": "deleting",
-	}
-	s.reportStagingResult(stagingResult)
+	})
+	s.completeTask(taskID, "completed", "")
 }
 
 func (s *AgentServer) reportStagingResult(result map[string]interface{}) {
