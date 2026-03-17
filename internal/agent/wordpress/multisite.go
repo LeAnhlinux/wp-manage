@@ -15,6 +15,7 @@ import (
 func EnableMultisite(task models.AgentEnableMultisiteTask) models.AgentEnableMultisiteResult {
 	result := models.AgentEnableMultisiteResult{
 		SiteID: task.SiteID,
+		Type:   task.Type, // Bug 3 fix: echo back so API can save multisite_type
 		Status: "completed",
 	}
 
@@ -50,20 +51,28 @@ func EnableMultisite(task models.AgentEnableMultisiteTask) models.AgentEnableMul
 
 	// For subdomain mode, update Nginx config with wildcard server_name
 	if task.Type == "subdomain" {
-		updateNginxForSubdomains(task.Domain)
+		if err := updateNginxForSubdomains(task.Domain); err != nil {
+			// Nginx update failed — report as warning, not fatal (site still works as subfolder)
+			slog.Error("Failed to update Nginx for subdomain multisite", "domain", task.Domain, "error", err)
+			result.Error = fmt.Sprintf("Multisite enabled but Nginx wildcard update failed: %s", err)
+		}
 	}
 
 	return result
 }
 
 // updateNginxForSubdomains updates Nginx vhost to support wildcard subdomains
-func updateNginxForSubdomains(domain string) {
+func updateNginxForSubdomains(domain string) error {
+	// Check both sites-available and sites-enabled
 	vhostPath := fmt.Sprintf("/etc/nginx/sites-available/%s.conf", domain)
+	if _, err := os.Stat(vhostPath); err != nil {
+		// Fall back to sites-enabled (some setups use direct symlinks)
+		vhostPath = fmt.Sprintf("/etc/nginx/sites-enabled/%s.conf", domain)
+	}
 
 	content, err := os.ReadFile(vhostPath)
 	if err != nil {
-		slog.Error("Failed to read Nginx vhost", "path", vhostPath, "error", err)
-		return
+		return fmt.Errorf("failed to read Nginx vhost %s: %w", vhostPath, err)
 	}
 
 	original := string(content)
@@ -73,26 +82,24 @@ func updateNginxForSubdomains(domain string) {
 	if !strings.Contains(original, wildcard) {
 		updated := strings.Replace(original, "server_name "+domain, "server_name "+domain+" "+wildcard, 1)
 		if err := os.WriteFile(vhostPath, []byte(updated), 0644); err != nil {
-			slog.Error("Failed to write Nginx vhost", "error", err)
-			return
+			return fmt.Errorf("failed to write Nginx vhost: %w", err)
 		}
 	}
 
 	// Test and reload Nginx
 	testCmd := exec.Command("nginx", "-t")
 	if out, err := testCmd.CombinedOutput(); err != nil {
-		slog.Error("Nginx config test failed", "error", err, "output", string(out))
-		// Restore original
-		os.WriteFile(vhostPath, []byte(original), 0644)
-		return
+		// Restore original on failure
+		_ = os.WriteFile(vhostPath, []byte(original), 0644)
+		return fmt.Errorf("nginx -t failed: %s", string(out))
 	}
 
-	reloadCmd := exec.Command("systemctl", "reload", "nginx")
-	if err := reloadCmd.Run(); err != nil {
-		slog.Error("Failed to reload Nginx", "error", err)
+	if err := exec.Command("systemctl", "reload", "nginx").Run(); err != nil {
+		return fmt.Errorf("nginx reload failed: %w", err)
 	}
 
 	slog.Info("Nginx updated for subdomain multisite", "domain", domain)
+	return nil
 }
 
 // CreateSubsite creates a new subsite using WP-CLI
@@ -100,6 +107,7 @@ func CreateSubsite(task models.AgentCreateSubsiteTask) models.AgentCreateSubsite
 	result := models.AgentCreateSubsiteResult{
 		SiteID: task.SiteID,
 		Status: "completed",
+		Title:  task.Title, // pre-fill with requested title; overwrite from WP-CLI if available
 	}
 
 	wpPath := fmt.Sprintf("/var/www/%s/public", task.Domain)
@@ -121,35 +129,42 @@ func CreateSubsite(task models.AgentCreateSubsiteTask) models.AgentCreateSubsite
 
 	slog.Info("Subsite created", "domain", task.Domain, "slug", task.Slug, "output", string(out))
 
-	// Get the newly created site details
+	// Bug 2 & 4 fix: query with blogname + exact path/domain match
 	listCmd := exec.Command("sudo", "-u", wpUser, "wp", "site", "list",
 		"--path="+wpPath,
 		"--format=json",
-		"--fields=blog_id,domain,path",
+		"--fields=blog_id,domain,path,blogname",
 	)
 	listOut, err := listCmd.Output()
 	if err == nil {
 		var sites []struct {
-			BlogID int    `json:"blog_id"`
-			Domain string `json:"domain"`
-			Path   string `json:"path"`
+			BlogID   int    `json:"blog_id"`
+			Domain   string `json:"domain"`
+			Path     string `json:"path"`
+			BlogName string `json:"blogname"`
 		}
 		if json.Unmarshal(listOut, &sites) == nil {
-			// Find the newly created site (last one or matching slug)
+			slug := strings.Trim(task.Slug, "/")
+			// Bug 4 fix: exact match — path must be "/slug/" or domain must start with "slug."
 			for _, s := range sites {
-				if strings.Contains(s.Path, task.Slug) || strings.Contains(s.Domain, task.Slug) {
+				pathSlug := strings.Trim(s.Path, "/")
+				domainPrefix := strings.SplitN(s.Domain, ".", 2)[0]
+				if pathSlug == slug || domainPrefix == slug {
 					result.WPBlogID = s.BlogID
 					result.Domain = s.Domain
 					result.Path = s.Path
+					result.Title = s.BlogName // Bug 2 fix: capture actual blogname
 					break
 				}
 			}
-			// If not found by slug, use the last entry (newest)
-			if result.WPBlogID == 0 && len(sites) > 0 {
+			// Fallback: use last entry if exact match failed (e.g. subdomain mode with full domain)
+			if result.WPBlogID == 0 && len(sites) > 1 {
 				last := sites[len(sites)-1]
 				result.WPBlogID = last.BlogID
 				result.Domain = last.Domain
 				result.Path = last.Path
+				result.Title = last.BlogName
+				slog.Warn("CreateSubsite: exact slug match failed, using last entry", "slug", task.Slug, "fallback_domain", last.Domain)
 			}
 		}
 	}
@@ -157,8 +172,15 @@ func CreateSubsite(task models.AgentCreateSubsiteTask) models.AgentCreateSubsite
 	return result
 }
 
-// DeleteSubsite deletes a subsite using WP-CLI
-func DeleteSubsite(task models.AgentDeleteSubsiteTask) error {
+// DeleteSubsite deletes a subsite using WP-CLI and returns a result for callback
+// Bug 1 fix: returns AgentDeleteSubsiteResult instead of bare error
+func DeleteSubsite(task models.AgentDeleteSubsiteTask) models.AgentDeleteSubsiteResult {
+	result := models.AgentDeleteSubsiteResult{
+		SiteID:   task.SiteID,
+		WPBlogID: task.WPBlogID,
+		Status:   "completed",
+	}
+
 	wpPath := fmt.Sprintf("/var/www/%s/public", task.Domain)
 	wpUser := "wp_" + strings.ReplaceAll(strings.ReplaceAll(task.Domain, ".", "_"), "-", "_")
 
@@ -169,11 +191,14 @@ func DeleteSubsite(task models.AgentDeleteSubsiteTask) error {
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("wp site delete failed: %s: %s", err, string(out))
+		result.Status = "failed"
+		result.Error = fmt.Sprintf("wp site delete failed: %s: %s", err, string(out))
+		slog.Error("Failed to delete subsite", "domain", task.Domain, "blog_id", task.WPBlogID, "error", result.Error)
+		return result
 	}
 
 	slog.Info("Subsite deleted", "domain", task.Domain, "blog_id", task.WPBlogID)
-	return nil
+	return result
 }
 
 // ListSubsites lists all subsites using WP-CLI

@@ -306,15 +306,42 @@ type UpdateAutoUpdateConfigRequest struct {
 }
 
 type AgentCheckUpdatesTask struct {
-	SiteID uint64 `json:"site_id"`
-	Domain string `json:"domain"`
+	SiteID     uint64 `json:"site_id"`
+	Domain     string `json:"domain"`
+	PHPVersion string `json:"php_version,omitempty"`
 }
 
 type AgentCheckUpdatesResult struct {
-	SiteID  uint64            `json:"site_id"`
-	Core    *WPUpdateInfo     `json:"core"`
-	Plugins []WPUpdateInfo    `json:"plugins"`
-	Themes  []WPUpdateInfo    `json:"themes"`
+	SiteID         uint64         `json:"site_id"`
+	CurrentVersion string         `json:"current_version"` // always set, even when no updates
+	Core           *WPUpdateInfo  `json:"core"`
+	Plugins        []WPUpdateInfo `json:"plugins"`
+	Themes         []WPUpdateInfo `json:"themes"`
+}
+
+type AgentApplyUpdatesTask struct {
+	SiteID        uint64 `json:"site_id"`
+	Domain        string `json:"domain"`
+	PHPVersion    string `json:"php_version,omitempty"`
+	DBName        string `json:"db_name"`
+	DBUser        string `json:"db_user"`
+	DBPass        string `json:"db_password"`
+	CoreUpdates   bool   `json:"core_updates"`
+	PluginUpdates bool   `json:"plugin_updates"`
+	ThemeUpdates  bool   `json:"theme_updates"`
+	BackupBefore  bool   `json:"backup_before"`
+}
+
+type AgentApplyUpdatesResult struct {
+	SiteID        uint64         `json:"site_id"`
+	Domain        string         `json:"domain"`
+	NewWPVersion  string         `json:"new_wp_version"`
+	CoreUpdated   bool           `json:"core_updated"`
+	CoreError     string         `json:"core_error,omitempty"`
+	PluginsResult []WPUpdateInfo `json:"plugins_result"`
+	ThemesResult  []WPUpdateInfo `json:"themes_result"`
+	Status        string         `json:"status"` // success, partial, failed
+	Error         string         `json:"error,omitempty"`
 }
 
 type WPUpdateInfo struct {
@@ -323,12 +350,14 @@ type WPUpdateInfo struct {
 	OldVersion string `json:"old_version"`
 	NewVersion string `json:"new_version"`
 	Status     string `json:"status"` // available, updated, failed
+	Error      string `json:"error,omitempty"`
 }
 
 type AgentDBOptimizeTask struct {
-	SiteID uint64 `json:"site_id"`
-	Domain string `json:"domain"`
-	DBName string `json:"db_name"`
+	SiteID     uint64 `json:"site_id"`
+	Domain     string `json:"domain"`
+	PHPVersion string `json:"php_version,omitempty"`
+	DBName     string `json:"db_name"`
 	DBUser string `json:"db_user"`
 	DBPass string `json:"db_password"`
 }
@@ -403,8 +432,9 @@ type AgentImportDBTask struct {
 	DBName      string `json:"db_name"`
 	DownloadURL string `json:"download_url"`
 	FileToken   string `json:"file_token"`
-	FileExt     string `json:"file_ext"`  // ".sql", ".gz", or ".zip"
+	FileExt     string `json:"file_ext"`   // ".sql", ".gz", or ".zip"
 	OldDomain   string `json:"old_domain"` // optional: source domain for search-replace
+	PHPVersion  string `json:"php_version"` // site's PHP version — used to pick correct WP-CLI binary
 }
 
 type AgentTaskResult struct {
@@ -488,6 +518,7 @@ type AgentEnableMultisiteTask struct {
 
 type AgentEnableMultisiteResult struct {
 	SiteID uint64 `json:"site_id"`
+	Type   string `json:"type"`   // "subdomain" or "subfolder" — echoed back
 	Status string `json:"status"` // completed, failed
 	Error  string `json:"error,omitempty"`
 }
@@ -504,6 +535,7 @@ type AgentCreateSubsiteResult struct {
 	WPBlogID int    `json:"wp_blog_id"`
 	Domain   string `json:"domain"`
 	Path     string `json:"path"`
+	Title    string `json:"title"` // blogname from wp site list
 	Status   string `json:"status"` // completed, failed
 	Error    string `json:"error,omitempty"`
 }
@@ -512,6 +544,13 @@ type AgentDeleteSubsiteTask struct {
 	SiteID   uint64 `json:"site_id"`
 	Domain   string `json:"domain"`
 	WPBlogID int    `json:"wp_blog_id"`
+}
+
+type AgentDeleteSubsiteResult struct {
+	SiteID   uint64 `json:"site_id"`
+	WPBlogID int    `json:"wp_blog_id"`
+	Status   string `json:"status"` // completed, failed
+	Error    string `json:"error,omitempty"`
 }
 
 type AgentListSubsitesTask struct {
@@ -556,6 +595,12 @@ type AgentToggleImageOptTask struct {
 	Enabled     bool   `json:"enabled"`
 	Quality     int    `json:"quality"`
 	WebPEnabled bool   `json:"webp_enabled"`
+}
+
+// AgentNginxWebPTask enables/disables WebP auto-serving in the site's nginx config
+type AgentNginxWebPTask struct {
+	Domain  string `json:"domain"`
+	Enabled bool   `json:"enabled"`
 }
 
 type AgentImageOptResult struct {
@@ -659,6 +704,13 @@ type AgentNginxConfigTask struct {
 type AgentOPcacheTask struct {
 	Action     string `json:"action"` // enable, disable, flush, stats
 	PHPVersion string `json:"php_version"`
+}
+
+// ==================== ionCube ====================
+
+type AgentIonCubeTask struct {
+	Action     string `json:"action"`      // get_status, enable, disable
+	PHPVersion string `json:"php_version"` // single version for enable/disable
 }
 
 type AgentOPcacheResult struct {
@@ -1027,10 +1079,11 @@ type UpdateDNSRecordRequest struct {
 
 // Agent task types for Batch 6
 type AgentWPCLITask struct {
-	HistoryID uint64 `json:"history_id"`
-	SiteID    uint64 `json:"site_id"`
-	Domain    string `json:"domain"`
-	Command   string `json:"command"`
+	HistoryID  uint64 `json:"history_id"`
+	SiteID     uint64 `json:"site_id"`
+	Domain     string `json:"domain"`
+	PHPVersion string `json:"php_version,omitempty"`
+	Command    string `json:"command"`
 }
 
 type AgentWPCLIResult struct {

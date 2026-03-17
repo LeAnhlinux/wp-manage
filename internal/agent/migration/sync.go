@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -89,19 +90,6 @@ func (r *MigrationRunner) RunMigration(task models.AgentMigrateTask) {
 	}
 	r.reportProgress(task.MigrationID, "preparation", 12, "running", "Kết nối SSH tới server đích thành công")
 
-	// Check PHP version compatibility on target
-	phpCheckCmd := fmt.Sprintf(
-		"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=30 -i %s root@%s 'php%s -v >/dev/null 2>&1 && echo OK || echo NOT_FOUND'",
-		keyFile, task.TargetServerIP, task.PHPVersion)
-	phpCheckOut, _ := exec.Command("bash", "-c", phpCheckCmd).Output()
-	if strings.Contains(string(phpCheckOut), "NOT_FOUND") {
-		r.reportProgress(task.MigrationID, "preparation", 13, "running",
-			fmt.Sprintf("⚠️  CẢNH BÁO: PHP %s chưa được cài trên server đích. Site có thể không hoạt động sau migrate. Hãy cài PHP %s trước!", task.PHPVersion, task.PHPVersion))
-	} else {
-		r.reportProgress(task.MigrationID, "preparation", 13, "running",
-			fmt.Sprintf("✓ PHP %s có trên server đích", task.PHPVersion))
-	}
-
 	// Always clean up SSH key when done (deferred)
 	defer func() {
 		os.Remove(keyFile)
@@ -109,26 +97,141 @@ func (r *MigrationRunner) RunMigration(task models.AgentMigrateTask) {
 		r.cleanupSSHAccess(task.MigrationID)
 	}()
 
+	// ── Pre-flight on target: disk space + domain conflict ────────────────────
+	// FIX #7: Check disk space before starting any transfer
+	r.reportProgress(task.MigrationID, "preparation", 13, "running", "Kiểm tra tài nguyên server đích...")
+
+	srcSizeOut, _ := exec.Command("du", "-sb", siteRoot).Output()
+	if srcFields := strings.Fields(string(srcSizeOut)); len(srcFields) > 0 {
+		diskCheckCmd := fmt.Sprintf(
+			"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=30 -i %s root@%s "+
+				"'df --output=avail -B1 /var/www 2>/dev/null || df -B1 / 2>/dev/null | tail -1 | awk \"{print \\$4}\"'",
+			keyFile, task.TargetServerIP)
+		diskOut, _ := exec.Command("bash", "-c", diskCheckCmd).Output()
+		availStr := strings.TrimSpace(strings.Split(string(diskOut), "\n")[1] /* skip header */)
+		if availStr == "" {
+			// fallback: pick last line
+			lines := strings.Fields(string(diskOut))
+			if len(lines) > 0 {
+				availStr = lines[len(lines)-1]
+			}
+		}
+		srcSize, srcErr := strconv.ParseInt(srcFields[0], 10, 64)
+		avail, availErr := strconv.ParseInt(availStr, 10, 64)
+		if srcErr == nil && availErr == nil {
+			required := srcSize * 2 // 2× source: files + DB dump
+			if avail < required {
+				r.reportFailed(task.MigrationID, "preparation",
+					fmt.Sprintf("Server đích không đủ dung lượng: cần %s, còn trống %s",
+						formatBytes(required), formatBytes(avail)))
+				return
+			}
+			r.reportProgress(task.MigrationID, "preparation", 14, "running",
+				fmt.Sprintf("✓ Dung lượng server đích đủ: %s trống (cần %s)",
+					formatBytes(avail), formatBytes(required)))
+		}
+	}
+
+	// FIX #7b: Check if target domain already exists → warn (not fail — migration may be a retry)
+	conflictCheckCmd := fmt.Sprintf(
+		"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=30 -i %s root@%s "+
+			"'[ -f /etc/nginx/sites-enabled/%s.conf ] && echo CONFLICT || echo OK'",
+		keyFile, task.TargetServerIP, targetDomain)
+	if conflictOut, _ := exec.Command("bash", "-c", conflictCheckCmd).Output(); strings.Contains(string(conflictOut), "CONFLICT") {
+		r.reportProgress(task.MigrationID, "preparation", 14, "running",
+			fmt.Sprintf("⚠️  Domain %s đã tồn tại trên server đích — dữ liệu cũ sẽ bị ghi đè", targetDomain))
+	}
+
+	// Check PHP version compatibility on target — auto-install if missing
+	phpCheckCmd := fmt.Sprintf(
+		"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=30 -i %s root@%s 'php%s -v >/dev/null 2>&1 && echo OK || echo NOT_FOUND'",
+		keyFile, task.TargetServerIP, task.PHPVersion)
+	phpCheckOut, _ := exec.Command("bash", "-c", phpCheckCmd).Output()
+	if strings.Contains(string(phpCheckOut), "NOT_FOUND") {
+		r.reportProgress(task.MigrationID, "preparation", 15, "running",
+			fmt.Sprintf("PHP %s chưa có trên server đích — đang cài tự động...", task.PHPVersion))
+
+		// Auto-install PHP version on target via SSH
+		phpInstallScript := fmt.Sprintf(`
+			export DEBIAN_FRONTEND=noninteractive
+			add-apt-repository -y ppa:ondrej/php 2>/dev/null || true
+			apt-get update -qq
+			apt-get install -y php%s-fpm php%s-mysql php%s-xml php%s-curl php%s-mbstring \
+				php%s-zip php%s-gd php%s-intl php%s-bcmath php%s-soap php%s-imagick 2>&1 | tail -3
+			systemctl enable php%s-fpm
+			systemctl start php%s-fpm
+			echo PHP_INSTALL_OK
+		`, task.PHPVersion, task.PHPVersion, task.PHPVersion, task.PHPVersion, task.PHPVersion,
+			task.PHPVersion, task.PHPVersion, task.PHPVersion, task.PHPVersion, task.PHPVersion,
+			task.PHPVersion, task.PHPVersion, task.PHPVersion)
+
+		// FIX: Use ServerAliveInterval to prevent SSH dropping on slow apt-get
+		installCmd := fmt.Sprintf(
+			"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=20 -i %s root@%s '%s'",
+			keyFile, task.TargetServerIP, phpInstallScript)
+		installOut, installErr := exec.Command("bash", "-c", installCmd).CombinedOutput()
+		if installErr != nil || !strings.Contains(string(installOut), "PHP_INSTALL_OK") {
+			r.reportFailed(task.MigrationID, "preparation",
+				fmt.Sprintf("Không thể cài PHP %s trên server đích: %s", task.PHPVersion, string(installOut)))
+			return
+		}
+
+		// Also copy ionCube loader if available on source
+		ioncubeSrc := fmt.Sprintf("/opt/wp-manage/ioncube/ioncube/ioncube_loader_lin_%s.so", task.PHPVersion)
+		if _, err := os.Stat(ioncubeSrc); err == nil {
+			extDirOut, _ := exec.Command("bash", "-c",
+				fmt.Sprintf("ssh -o StrictHostKeyChecking=no -i %s root@%s 'php%s -r \"echo PHP_EXTENSION_DIR;\"'",
+					keyFile, task.TargetServerIP, task.PHPVersion)).Output()
+			extDir := strings.TrimSpace(string(extDirOut))
+			if extDir != "" {
+				scpBase := []string{"-o", "StrictHostKeyChecking=no", "-i", keyFile}
+				scpArgs := append(scpBase, ioncubeSrc,
+					fmt.Sprintf("root@%s:%s/ioncube_loader_lin_%s.so", task.TargetServerIP, extDir, task.PHPVersion))
+				exec.Command("scp", scpArgs...).Run()
+				iniContent := fmt.Sprintf("; Managed by wp-manage\\nzend_extension=ioncube_loader_lin_%s.so", task.PHPVersion)
+				for _, sapi := range []string{"cli", "fpm"} {
+					iniCmd := fmt.Sprintf(
+						"ssh -o StrictHostKeyChecking=no -i %s root@%s 'printf \"%s\" > /etc/php/%s/%s/conf.d/00-ioncube.ini'",
+						keyFile, task.TargetServerIP, iniContent, task.PHPVersion, sapi)
+					exec.Command("bash", "-c", iniCmd).Run()
+				}
+				exec.Command("bash", "-c", fmt.Sprintf(
+					"ssh -o StrictHostKeyChecking=no -i %s root@%s 'systemctl restart php%s-fpm'",
+					keyFile, task.TargetServerIP, task.PHPVersion)).Run()
+			}
+		}
+
+		r.reportProgress(task.MigrationID, "preparation", 15, "running",
+			fmt.Sprintf("✓ PHP %s đã được cài thành công trên server đích", task.PHPVersion))
+	} else {
+		r.reportProgress(task.MigrationID, "preparation", 15, "running",
+			fmt.Sprintf("✓ PHP %s có trên server đích", task.PHPVersion))
+	}
+
 	// SSH/rsync options using temp key
 	sshOpts := fmt.Sprintf("ssh -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o BatchMode=yes -i %s", keyFile)
 
-	// Backup DB
-	r.reportProgress(task.MigrationID, "preparation", 15, "running", "Tạo backup database nguồn...")
+	// FIX #9 + #14: Backup DB
+	//   --no-tablespaces: prevents "Access denied" errors from DEFINER views with tablespace info
+	//   --result-file: writes directly to disk, avoids loading full dump into RAM (OOM on large DBs)
+	r.reportProgress(task.MigrationID, "preparation", 17, "running", "Tạo backup database nguồn...")
 	dumpCmd := exec.Command("mysqldump",
 		"--user="+task.DBUser,
 		"--password="+task.DBPass,
 		"--single-transaction",
 		"--quick",
 		"--lock-tables=false",
+		"--no-tablespaces",
+		"--result-file="+dumpFile,
 		task.DBName,
 	)
-	dumpOut, err := dumpCmd.Output()
-	if err != nil {
-		r.reportFailed(task.MigrationID, "preparation", "mysqldump thất bại: "+err.Error())
+	if out, err := dumpCmd.CombinedOutput(); err != nil {
+		r.reportFailed(task.MigrationID, "preparation",
+			fmt.Sprintf("mysqldump thất bại: %s %v", string(out), err))
 		return
 	}
-	if err := os.WriteFile(dumpFile, dumpOut, 0600); err != nil {
-		r.reportFailed(task.MigrationID, "preparation", "Ghi dump file thất bại: "+err.Error())
+	if _, statErr := os.Stat(dumpFile); statErr != nil {
+		r.reportFailed(task.MigrationID, "preparation", "Dump file không tồn tại sau mysqldump")
 		return
 	}
 	defer os.Remove(dumpFile)
@@ -140,13 +243,26 @@ func (r *MigrationRunner) RunMigration(task models.AgentMigrateTask) {
 	rsyncArgs := []string{
 		"-rltvz", "--delete",
 		"--no-owner", "--no-group", // don't copy UID/GID from source; chown explicitly after
+		"--exclude", "logs/*.log",  // skip large log files
+		"--exclude", "logs/*.gz",
 		"-e", sshOpts,
 		siteRoot + "/",
 		fmt.Sprintf("root@%s:%s/", task.TargetServerIP, targetSiteRoot),
 	}
 	if out, err := exec.Command("rsync", rsyncArgs...).CombinedOutput(); err != nil {
-		r.reportFailed(task.MigrationID, "initial_sync", fmt.Sprintf("rsync thất bại: %s", string(out)))
-		return
+		// FIX #13: rsync exit code 23 = partial transfer (some files skipped due to permission).
+		// Treat as warning, not failure — WordPress files are all there, just some system files skipped.
+		exitCode := 0
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		}
+		if exitCode == 23 || exitCode == 24 {
+			r.reportProgress(task.MigrationID, "initial_sync", 40, "running",
+				fmt.Sprintf("⚠️  rsync partial transfer (exit %d) — một số file bị skip, tiếp tục...", exitCode))
+		} else {
+			r.reportFailed(task.MigrationID, "initial_sync", fmt.Sprintf("rsync thất bại (exit %d): %s", exitCode, string(out)))
+			return
+		}
 	}
 	r.reportProgress(task.MigrationID, "initial_sync", 42, "running", "Đồng bộ files hoàn tất")
 
@@ -166,7 +282,17 @@ func (r *MigrationRunner) RunMigration(task models.AgentMigrateTask) {
 
 	// ── PHASE 3: DELTA SYNC ───────────────────────────────────────────────────
 	r.reportProgress(task.MigrationID, "delta_sync", 55, "running", "Đồng bộ lần 2 (delta sync)...")
-	exec.Command("rsync", rsyncArgs...).Run() // catch files changed during initial sync
+	// FIX #6: Check delta sync errors — non-fatal but warn
+	if deltaOut, deltaErr := exec.Command("rsync", rsyncArgs...).CombinedOutput(); deltaErr != nil {
+		exitCode := 0
+		if exitErr, ok := deltaErr.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		}
+		if exitCode != 23 && exitCode != 24 {
+			r.reportProgress(task.MigrationID, "delta_sync", 60, "running",
+				fmt.Sprintf("⚠️  Delta sync có lỗi (exit %d, non-fatal): %s", exitCode, truncateStr(string(deltaOut), 200)))
+		}
+	}
 	r.reportProgress(task.MigrationID, "delta_sync", 65, "running", "Delta sync hoàn tất")
 
 	// ── PHASE 4: SWITCHOVER ───────────────────────────────────────────────────
@@ -184,21 +310,24 @@ func (r *MigrationRunner) RunMigration(task models.AgentMigrateTask) {
 	exec.Command("bash", "-c", createUserCmd).Run()
 
 	// 4c: Create DB + user on target.
+	// FIX #8: DROP first to clear stale data from previously failed migration.
 	// Write SQL to a temp file and SCP it — avoids all SSH quoting issues with passwords.
 	r.reportProgress(task.MigrationID, "switchover", 72, "running", "Tạo database và user trên server đích...")
 	setupSQLFile := fmt.Sprintf("/tmp/migration_%d_setup.sql", task.MigrationID)
 	setupSQL := fmt.Sprintf(
-		"CREATE DATABASE IF NOT EXISTS `%s` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;\n"+
-			"CREATE USER IF NOT EXISTS '%s'@'localhost' IDENTIFIED BY '%s';\n"+
+		"DROP DATABASE IF EXISTS `%s`;\n"+
+			"CREATE DATABASE `%s` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;\n"+
+			"DROP USER IF EXISTS '%s'@'localhost';\n"+
+			"CREATE USER '%s'@'localhost' IDENTIFIED BY '%s';\n"+
 			"GRANT ALL PRIVILEGES ON `%s`.* TO '%s'@'localhost';\n"+
 			"FLUSH PRIVILEGES;\n",
-		task.DBName, task.DBUser, task.DBPass, task.DBName, task.DBUser)
+		task.DBName, task.DBName,
+		task.DBUser, task.DBUser, task.DBPass,
+		task.DBName, task.DBUser)
 	if err := os.WriteFile(setupSQLFile, []byte(setupSQL), 0600); err == nil {
-		// SCP setup SQL to target
 		scpSetup := []string{"-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=30", "-i", keyFile,
 			setupSQLFile, fmt.Sprintf("root@%s:%s", task.TargetServerIP, setupSQLFile)}
 		exec.Command("scp", scpSetup...).Run()
-		// Execute on target using mysql root (linux root → MariaDB root via unix socket, no password)
 		execSetup := fmt.Sprintf(
 			"ssh -o StrictHostKeyChecking=no -i %s root@%s 'mysql -u root < %s; rm -f %s'",
 			keyFile, task.TargetServerIP, setupSQLFile, setupSQLFile)
@@ -207,6 +336,7 @@ func (r *MigrationRunner) RunMigration(task models.AgentMigrateTask) {
 	}
 
 	// 4d: Import DB using mysql root (site user may not have sufficient privileges yet)
+	// FIX: Removed --binary-mode=1 (causes issues with standard WP dumps; not needed for utf8mb4)
 	r.reportProgress(task.MigrationID, "switchover", 75, "running", "Nhập database trên server đích...")
 	importCmd := fmt.Sprintf(
 		"ssh -o StrictHostKeyChecking=no -i %s root@%s 'mysql -u root %s < %s 2>&1'",
@@ -221,11 +351,12 @@ func (r *MigrationRunner) RunMigration(task models.AgentMigrateTask) {
 	r.reportProgress(task.MigrationID, "switchover", 82, "running", "Import database hoàn tất")
 
 	// 4e: wp search-replace (change_domain mode)
+	// FIX #2: Use --path=.../public — wp-config.php is in /public, not /var/www/domain root
 	if task.Mode == "change_domain" && task.NewDomain != "" {
 		r.reportProgress(task.MigrationID, "switchover", 85, "running",
 			fmt.Sprintf("Thay thế domain %s → %s...", task.Domain, task.NewDomain))
 		srCmd := fmt.Sprintf(
-			`ssh -o StrictHostKeyChecking=no -i %s root@%s 'cd %s && wp search-replace "%s" "%s" --all-tables --allow-root 2>&1'`,
+			`ssh -o StrictHostKeyChecking=no -i %s root@%s 'wp --path=%s/public search-replace "%s" "%s" --all-tables --allow-root 2>&1'`,
 			keyFile, task.TargetServerIP, targetSiteRoot, task.Domain, task.NewDomain)
 		if out, err := exec.Command("bash", "-c", srCmd).CombinedOutput(); err != nil {
 			r.reportFailed(task.MigrationID, "switchover",
@@ -246,10 +377,10 @@ func (r *MigrationRunner) RunMigration(task models.AgentMigrateTask) {
 
 	// 4g: Copy Nginx + ModSec + PHP-FPM configs to target and enable site
 	r.reportProgress(task.MigrationID, "switchover", 94, "running", "Cấu hình Nginx, PHP-FPM trên server đích...")
-	r.setupTargetConfigs(task, keyFile, targetDomain, linuxUser)
+	r.setupTargetConfigs(task, keyFile, targetDomain, linuxUser, sslType)
 	r.reportProgress(task.MigrationID, "switchover", 97, "running", "Nginx + PHP-FPM trên server đích đã sẵn sàng")
 
-	// ── PHASE 5: CLEANUP ─────────────────────────────────────────────────────
+	// ── PHASE 5: CLEANUP + HEALTH CHECK ─────────────────────────────────────
 	r.reportProgress(task.MigrationID, "cleanup", 98, "running", "Dọn dẹp files tạm trên server đích...")
 
 	cleanDumpCmd := fmt.Sprintf(
@@ -258,11 +389,11 @@ func (r *MigrationRunner) RunMigration(task models.AgentMigrateTask) {
 	exec.Command("bash", "-c", cleanDumpCmd).Run()
 
 	// For keep_domain: disable source nginx (site has moved to target)
+	// Phase 4a already removed the symlink; this is a belt-and-suspenders reload
 	if task.Mode == "keep_domain" {
-		disableCmd := fmt.Sprintf(
-			"rm -f /etc/nginx/sites-enabled/%s.conf && nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null || true",
-			task.Domain)
-		exec.Command("bash", "-c", disableCmd).Run()
+		exec.Command("bash", "-c", fmt.Sprintf(
+			"rm -f /etc/nginx/sites-enabled/%s.conf; nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null || true",
+			task.Domain)).Run()
 		r.reportProgress(task.MigrationID, "cleanup", 99, "running",
 			"Đã vô hiệu hóa site trên server nguồn. Đang xóa SSH key tạm...")
 	}
@@ -270,6 +401,27 @@ func (r *MigrationRunner) RunMigration(task models.AgentMigrateTask) {
 	// Optional: clean up all source artifacts (files, DB, configs)
 	if task.CleanupSource {
 		r.cleanupSourceSite(task)
+	}
+
+	// FIX #11: HTTP health check — verify target nginx is actually serving the site
+	// Use direct IP request with Host header (DNS may not have propagated yet for keep_domain)
+	r.reportProgress(task.MigrationID, "cleanup", 99, "running", "Kiểm tra site trên server đích...")
+	healthCheckCmd := fmt.Sprintf(
+		"ssh -o StrictHostKeyChecking=no -i %s root@%s "+
+			"'curl -s -o /dev/null -w %%{http_code} -H \"Host: %s\" --connect-timeout 8 http://127.0.0.1/ 2>/dev/null'",
+		keyFile, task.TargetServerIP, targetDomain)
+	if hOut, _ := exec.Command("bash", "-c", healthCheckCmd).Output(); len(hOut) > 0 {
+		httpCode := strings.TrimSpace(string(hOut))
+		if httpCode == "200" || httpCode == "301" || httpCode == "302" {
+			r.reportProgress(task.MigrationID, "cleanup", 99, "running",
+				fmt.Sprintf("✓ Health check OK — site trả về HTTP %s", httpCode))
+		} else {
+			r.reportProgress(task.MigrationID, "cleanup", 99, "running",
+				fmt.Sprintf("⚠️  Health check trả về HTTP %s — kiểm tra nginx/PHP-FPM trên server đích", httpCode))
+		}
+	} else {
+		r.reportProgress(task.MigrationID, "cleanup", 99, "running",
+			"⚠️  Health check không phản hồi — site có thể chưa sẵn sàng")
 	}
 
 	// defer will handle: os.Remove(keyFile), os.Remove(keyFile+".pub"), r.cleanupSSHAccess()
@@ -338,7 +490,7 @@ func (r *MigrationRunner) cleanupSourceSite(task models.AgentMigrateTask) {
 		if _, err := os.Stat(poolPath); err == nil {
 			os.Remove(poolPath)
 			exec.Command("bash", "-c",
-				fmt.Sprintf("php%s-fpm -t 2>/dev/null && systemctl reload php%s-fpm 2>/dev/null || true", ver, ver),
+				fmt.Sprintf("systemctl reload php%s-fpm 2>/dev/null || systemctl restart php%s-fpm 2>/dev/null || true", ver, ver),
 			).Run()
 			break
 		}
@@ -403,11 +555,11 @@ func (r *MigrationRunner) cleanupSSHAccess(migrationID uint64) {
 // setupTargetConfigs copies Nginx, ModSecurity, PHP-FPM configs and SSL certs from source
 // to target, then enables the nginx site. Handles SSL: custom (copy certs), letsencrypt
 // (try certbot on target; fall back to HTTP-only if it fails), none (skip SSL).
-func (r *MigrationRunner) setupTargetConfigs(task models.AgentMigrateTask, keyFile, targetDomain, linuxUser string) {
+// sslType is pre-detected by the caller to avoid reading source config twice.
+func (r *MigrationRunner) setupTargetConfigs(task models.AgentMigrateTask, keyFile, targetDomain, linuxUser, sslType string) {
 	sshBase := fmt.Sprintf("ssh -o StrictHostKeyChecking=no -o ConnectTimeout=30 -i %s root@%s", keyFile, task.TargetServerIP)
 	scpBase := []string{"-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=30", "-i", keyFile}
 
-	sslType := detectSSLType(task.Domain)
 	isChangeDomain := task.Mode == "change_domain" && task.NewDomain != ""
 
 	// ── Nginx config ──────────────────────────────────────────────────────────
@@ -420,8 +572,6 @@ func (r *MigrationRunner) setupTargetConfigs(task models.AgentMigrateTask, keyFi
 		raw, err := os.ReadFile(nginxSrcConf)
 		if err == nil {
 			// Always sanitize server_name: keep only targetDomain and www.targetDomain.
-			// This prevents domain aliases from source polluting target and conflicting
-			// with other sites already hosted there.
 			sanitized := sanitizeNginxServerName(raw, targetDomain)
 			if isChangeDomain {
 				sanitized = bytes.ReplaceAll(sanitized, []byte(task.Domain), []byte(task.NewDomain))
@@ -479,37 +629,61 @@ func (r *MigrationRunner) setupTargetConfigs(task models.AgentMigrateTask, keyFi
 			scpArgs := append(scpBase, phpSrcPool, fmt.Sprintf("root@%s:%s", task.TargetServerIP, phpDstPool))
 			exec.Command("scp", scpArgs...).Run()
 		}
-		exec.Command("bash", "-c", fmt.Sprintf(
-			"%s 'php%s-fpm -t 2>/dev/null && systemctl reload php%s-fpm 2>/dev/null || true'",
-			sshBase, ver, ver)).Run()
+
+		// FIX #1: Reload PHP-FPM on target — reload first, fall back to restart.
+		// Wait up to 15s for socket to appear before proceeding.
+		sockPath := fmt.Sprintf("/run/php/php%s-fpm-%s.sock", ver, targetDomain)
+		reloadScript := fmt.Sprintf(
+			"systemctl reload php%s-fpm 2>/dev/null || systemctl restart php%s-fpm 2>/dev/null; "+
+				"for i in $(seq 1 15); do [ -S %s ] && echo SOCK_OK && break; sleep 1; done",
+			ver, ver, sockPath)
+		reloadOut, _ := exec.Command("bash", "-c", fmt.Sprintf("%s '%s'", sshBase, reloadScript)).CombinedOutput()
+		if !strings.Contains(string(reloadOut), "SOCK_OK") {
+			r.reportProgress(task.MigrationID, "switchover", 95, "running",
+				fmt.Sprintf("⚠️  PHP-FPM socket chưa xuất hiện sau reload — restart php%s-fpm...", ver))
+			exec.Command("bash", "-c", fmt.Sprintf("%s 'systemctl restart php%s-fpm'", sshBase, ver)).Run()
+			// Extra 10s grace period after hard restart
+			exec.Command("bash", "-c", fmt.Sprintf(
+				"%s 'for i in $(seq 1 10); do [ -S %s ] && echo SOCK_OK2 && break; sleep 1; done'",
+				sshBase, sockPath)).Run()
+		} else {
+			r.reportProgress(task.MigrationID, "switchover", 95, "running",
+				fmt.Sprintf("✓ PHP-FPM socket sẵn sàng: %s", sockPath))
+		}
 		break
 	}
 
 	// ── SSL handling + Enable Nginx site on target ───────────────────────────
 	//
 	// IMPORTANT ordering:
-	//  - For letsencrypt: we MUST activate the site with HTTP-only config first,
-	//    then run certbot. certbot --nginx needs a working HTTP vhost to complete
-	//    the HTTP-01 ACME challenge. If we copy the source's SSL config (which
-	//    references /etc/letsencrypt/live/... paths that don't exist on target yet),
-	//    nginx -t fails → nginx never reloads → certbot can't serve the challenge →
-	//    certbot fails → 404.
-	//
-	//  - For custom SSL: copy certs first, then enable site (certs exist before nginx loads).
+	//  - For letsencrypt: MUST activate HTTP-only config FIRST, then run certbot.
+	//    certbot --nginx needs a working HTTP vhost for the HTTP-01 ACME challenge.
+	//  - For custom: copy certs first, then enable site.
 	//  - For none: just enable site.
 
-	// Helper: enable site in nginx (create symlink, test config, reload).
-	// Returns nginx -t output for diagnostics.
-	enableSite := func() string {
+	// FIX #3: Ensure logs dir exists on target — nginx conf references it; missing dir → nginx -t fails
+	exec.Command("bash", "-c", fmt.Sprintf(
+		"%s 'mkdir -p /var/www/%s/logs'", sshBase, targetDomain)).Run()
+
+	// FIX #5/#10: enableSite checks EXIT code via embedded marker — more reliable than string matching.
+	// nginx -t exit code 0 = success, non-zero = failure regardless of output wording.
+	enableSite := func() (string, bool) {
 		out, _ := exec.Command("bash", "-c", fmt.Sprintf(
-			"%s 'mkdir -p /etc/nginx/sites-enabled && ln -sf %s /etc/nginx/sites-enabled/%s.conf && nginx -t 2>&1 && systemctl reload nginx 2>/dev/null; echo EXIT:$?'",
+			"%s 'mkdir -p /etc/nginx/sites-enabled && ln -sf %s /etc/nginx/sites-enabled/%s.conf; "+
+				"nginx -t 2>&1; NGINX_RC=$?; [ $NGINX_RC -eq 0 ] && systemctl reload nginx 2>/dev/null; "+
+				"echo __EXIT__$NGINX_RC'",
 			sshBase, nginxDstConf, targetDomain)).CombinedOutput()
-		return string(out)
+		output := string(out)
+		ok := strings.Contains(output, "__EXIT__0")
+		if !ok {
+			r.reportProgress(task.MigrationID, "switchover", 96, "running",
+				fmt.Sprintf("⚠️  nginx -t thất bại trên server đích: %s", truncateStr(output, 400)))
+		}
+		return output, ok
 	}
 
 	switch sslType {
 	case "custom":
-		// Copy custom cert files to target (keep_domain only; change_domain has no valid cert for new domain)
 		if !isChangeDomain {
 			customSSLSrc := fmt.Sprintf("/etc/nginx/ssl/%s", task.Domain)
 			customSSLDst := fmt.Sprintf("/etc/nginx/ssl/%s", targetDomain)
@@ -525,34 +699,33 @@ func (r *MigrationRunner) setupTargetConfigs(task models.AgentMigrateTask, keyFi
 				}
 			} else {
 				r.reportProgress(task.MigrationID, "switchover", 96, "running",
-					"⚠️  CẢNH BÁO: Không tìm thấy thư mục SSL custom. Kiểm tra lại sau migrate.")
+					"⚠️  Không tìm thấy thư mục SSL custom — kiểm tra lại sau migrate")
 			}
 		} else {
 			r.reportProgress(task.MigrationID, "switchover", 96, "running",
-				"⚠️  CẢNH BÁO: SSL custom không thể chuyển sang domain mới. Site sẽ chạy HTTP sau migrate. Hãy cài SSL mới cho "+targetDomain)
+				"⚠️  SSL custom không thể chuyển sang domain mới — site sẽ chạy HTTP. Cài SSL mới cho "+targetDomain)
 			r.downgradeToHTTP(task, keyFile, targetDomain, task.PHPVersion)
 		}
-		nginxOut := enableSite()
-		if strings.Contains(nginxOut, "failed") || strings.Contains(nginxOut, "error") {
-			r.reportProgress(task.MigrationID, "switchover", 96, "running",
-				fmt.Sprintf("⚠️  nginx -t có lỗi: %s", truncateStr(nginxOut, 300)))
-		}
+		enableSite()
 
 	case "letsencrypt":
-		// Step 1: Deploy HTTP-only config first so nginx can serve the ACME challenge.
+		// Step 1: Deploy HTTP-only config first so nginx can serve the ACME challenge
 		r.reportProgress(task.MigrationID, "switchover", 93, "running",
 			"Kích hoạt site HTTP tạm thời để cấp SSL...")
 		r.downgradeToHTTP(task, keyFile, targetDomain, task.PHPVersion)
-		nginxOut := enableSite()
-		if strings.Contains(nginxOut, "failed") || strings.Contains(nginxOut, "error") {
-			r.reportProgress(task.MigrationID, "switchover", 94, "running",
-				fmt.Sprintf("⚠️  nginx -t lỗi khi kích hoạt HTTP: %s", truncateStr(nginxOut, 300)))
-		}
+		enableSite()
 
-		// Step 2: Run certbot — it will modify the nginx config to add SSL.
+		// FIX #4: Warn explicitly — certbot HTTP-01 requires DNS to already point to target IP.
+		// In keep_domain mode, DNS still points to source during migration.
 		certEmail := task.WPAdminEmail
 		if certEmail == "" {
 			certEmail = "admin@" + targetDomain
+		}
+		if task.Mode == "keep_domain" {
+			r.reportProgress(task.MigrationID, "switchover", 94, "running",
+				fmt.Sprintf("⚠️  Let's Encrypt cần DNS của %s trỏ về IP server đích (%s) trước khi cấp cert. "+
+					"Nếu DNS chưa cập nhật, certbot sẽ fail và site tạm chạy HTTP — bạn có thể cấp SSL sau.",
+					targetDomain, task.TargetServerIP))
 		}
 		r.reportProgress(task.MigrationID, "switchover", 95, "running",
 			fmt.Sprintf("Đang cấp SSL Let's Encrypt cho %s trên server đích...", targetDomain))
@@ -568,22 +741,20 @@ func (r *MigrationRunner) setupTargetConfigs(task models.AgentMigrateTask, keyFi
 			sshBase, targetDomain, certEmail)
 		if out, err := exec.Command("bash", "-c", certbotCmd).CombinedOutput(); err != nil {
 			r.reportProgress(task.MigrationID, "switchover", 96, "running",
-				fmt.Sprintf("⚠️  Không thể cấp SSL Let's Encrypt (DNS chưa trỏ?). Site sẽ chạy HTTP. Lỗi: %s",
+				fmt.Sprintf("⚠️  Không thể cấp SSL Let's Encrypt (DNS chưa trỏ?). Site chạy HTTP. Lỗi: %s",
 					truncateStr(string(out), 300)))
 		} else {
 			r.reportProgress(task.MigrationID, "switchover", 96, "running",
 				fmt.Sprintf("✓ SSL Let's Encrypt đã cấp thành công cho %s", targetDomain))
-			// certbot --nginx may have removed and recreated the symlink; ensure it exists
 			exec.Command("bash", "-c", fmt.Sprintf(
 				"%s 'ln -sf %s /etc/nginx/sites-enabled/%s.conf 2>/dev/null; systemctl reload nginx 2>/dev/null || true'",
 				sshBase, nginxDstConf, targetDomain)).Run()
 
-			// Update WordPress URLs from http:// → https:// in the DB so there is no
-			// mixed-content warning after SSL is issued.
+			// FIX #2 (https variant): wp search-replace http→https with correct --path
 			r.reportProgress(task.MigrationID, "switchover", 97, "running",
-				fmt.Sprintf("Cập nhật URL https trong WordPress database..."))
+				"Cập nhật URL https trong WordPress database...")
 			srHTTPS := fmt.Sprintf(
-				`%s 'cd /var/www/%s && wp search-replace "http://%s" "https://%s" --all-tables --allow-root 2>&1 | tail -5'`,
+				`%s 'wp --path=/var/www/%s/public search-replace "http://%s" "https://%s" --all-tables --allow-root 2>&1 | tail -5'`,
 				sshBase, targetDomain, targetDomain, targetDomain)
 			if srOut, srErr := exec.Command("bash", "-c", srHTTPS).CombinedOutput(); srErr != nil {
 				r.reportProgress(task.MigrationID, "switchover", 97, "running",
@@ -593,19 +764,14 @@ func (r *MigrationRunner) setupTargetConfigs(task models.AgentMigrateTask, keyFi
 					fmt.Sprintf("✓ Đã cập nhật URL https: %s", truncateStr(string(srOut), 200)))
 			}
 		}
-		// No second enableSite() call needed: either certbot reloaded nginx, or HTTP-only is already active.
-		return
+		return // certbot already reloaded nginx; no further reload needed
 
-	default: // "none" — no SSL, just enable site
+	default: // "none" — no SSL
 		r.reportProgress(task.MigrationID, "switchover", 96, "running", "Site không dùng SSL, bỏ qua bước cấp cert")
-		nginxOut := enableSite()
-		if strings.Contains(nginxOut, "failed") || strings.Contains(nginxOut, "error") {
-			r.reportProgress(task.MigrationID, "switchover", 96, "running",
-				fmt.Sprintf("⚠️  nginx -t có lỗi: %s", truncateStr(nginxOut, 300)))
-		}
+		enableSite()
 	}
 
-	// Final reload to ensure symlink is active (for custom/none paths)
+	// Final symlink + reload (for custom/none paths; letsencrypt already returned above)
 	exec.Command("bash", "-c", fmt.Sprintf(
 		"%s 'ln -sf %s /etc/nginx/sites-enabled/%s.conf 2>/dev/null; nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null || true'",
 		sshBase, nginxDstConf, targetDomain)).Run()
@@ -617,7 +783,6 @@ func (r *MigrationRunner) downgradeToHTTP(task models.AgentMigrateTask, keyFile,
 	sshBase := fmt.Sprintf("ssh -o StrictHostKeyChecking=no -o ConnectTimeout=30 -i %s root@%s", keyFile, task.TargetServerIP)
 	nginxDstConf := fmt.Sprintf("/etc/nginx/sites-available/%s.conf", targetDomain)
 
-	// Write HTTP-only nginx config to a local temp file, SCP to target
 	tmpHTTP := fmt.Sprintf("/tmp/migration_%d_http.conf", task.MigrationID)
 	httpConf := buildHTTPOnlyNginxConf(targetDomain, phpVer)
 	if err := os.WriteFile(tmpHTTP, []byte(httpConf), 0644); err != nil {
@@ -629,7 +794,6 @@ func (r *MigrationRunner) downgradeToHTTP(task models.AgentMigrateTask, keyFile,
 		tmpHTTP, fmt.Sprintf("root@%s:%s", task.TargetServerIP, nginxDstConf)}
 	exec.Command("scp", scpArgs...).Run()
 
-	// Reload nginx on target with new HTTP-only config
 	exec.Command("bash", "-c", fmt.Sprintf(
 		"%s 'nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null || true'", sshBase)).Run()
 }
@@ -698,16 +862,13 @@ func sslTypeLabel(t string) string {
 	}
 }
 
-// truncateStr truncates s to max n characters, appending "..." if cut.
 // sanitizeNginxServerName rewrites every `server_name ...;` line in the nginx
-// config so it contains ONLY `domain www.domain`. This prevents domain aliases
-// from the source server polluting the target and conflicting with other sites.
+// config so it contains ONLY `domain www.domain`.
 func sanitizeNginxServerName(raw []byte, domain string) []byte {
 	lines := strings.Split(string(raw), "\n")
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "server_name ") {
-			// Preserve leading whitespace, rewrite value
 			indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
 			lines[i] = fmt.Sprintf("%sserver_name %s www.%s;", indent, domain, domain)
 		}
@@ -722,6 +883,20 @@ func truncateStr(s string, n int) string {
 	return s[:n] + "..."
 }
 
+// formatBytes formats a byte count into a human-readable string (KB/MB/GB).
+func formatBytes(b int64) string {
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
+}
+
 // suspendSite removes the nginx sites-enabled symlink, effectively suspending the site.
 func (r *MigrationRunner) suspendSite(domain string) {
 	exec.Command("bash", "-c", fmt.Sprintf(
@@ -730,20 +905,17 @@ func (r *MigrationRunner) suspendSite(domain string) {
 }
 
 // unsuspendSite re-creates the nginx sites-enabled symlink, restoring the site.
-// Also ensures PHP-FPM is running the pool for this domain (socket may be missing
-// if FPM was reloaded while the migration had the pool config in an intermediate state).
+// Also reloads PHP-FPM so the socket is recreated if missing.
 func (r *MigrationRunner) unsuspendSite(domain string) {
-	// Re-enable nginx vhost
 	exec.Command("bash", "-c", fmt.Sprintf(
 		"ln -sf /etc/nginx/sites-available/%s.conf /etc/nginx/sites-enabled/%s.conf && nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null || true",
 		domain, domain)).Run()
 
-	// Reload PHP-FPM so the pool socket is recreated if missing.
 	for _, ver := range []string{"8.3", "8.2", "8.1", "8.0", "7.4"} {
 		poolPath := fmt.Sprintf("/etc/php/%s/fpm/pool.d/%s.conf", ver, domain)
 		if _, err := os.Stat(poolPath); err == nil {
 			exec.Command("bash", "-c", fmt.Sprintf(
-				"systemctl reload php%s-fpm 2>/dev/null || true", ver)).Run()
+				"systemctl reload php%s-fpm 2>/dev/null || systemctl restart php%s-fpm 2>/dev/null || true", ver, ver)).Run()
 			break
 		}
 	}

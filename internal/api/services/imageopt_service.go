@@ -138,6 +138,47 @@ func (s *ImageOptService) queueToggleTask(siteID uint64, config *models.ImageOpt
 	return task.ID, nil
 }
 
+// ToggleNginxWebP enables/disables WebP auto-serving in the site's nginx config (synchronous)
+func (s *ImageOptService) ToggleNginxWebP(siteID uint64, enabled bool) (*models.ImageOptConfig, error) {
+	config, err := s.GetConfig(siteID)
+	if err != nil {
+		return nil, err
+	}
+
+	var site models.Site
+	if err := s.db.First(&site, siteID).Error; err != nil {
+		return nil, fmt.Errorf("site not found")
+	}
+
+	taskData := models.AgentNginxWebPTask{Domain: site.Domain, Enabled: enabled}
+	data, _ := json.Marshal(taskData)
+	task := models.TaskQueue{
+		ServerID: site.ServerID,
+		SiteID:   siteID,
+		TaskType: "toggle_nginx_webp",
+		Data:     string(data),
+		Status:   "pending",
+	}
+	if err := s.db.Create(&task).Error; err != nil {
+		return config, err
+	}
+
+	result, err := WaitForTaskComplete(s.db, task.ID)
+	if err != nil {
+		return config, nil // timeout — return anyway
+	}
+	if result.Status == "failed" {
+		return config, fmt.Errorf("%s", result.Output)
+	}
+
+	// Save state to DB only on success
+	if err := s.db.Model(config).Update("nginx_web_p", enabled).Error; err != nil {
+		return config, err
+	}
+	config.NginxWebP = enabled
+	return config, nil
+}
+
 // RunOptimization creates an optimization task for the agent
 func (s *ImageOptService) RunOptimization(siteID uint64) (*models.ImageOptResult, error) {
 	var site models.Site
@@ -190,19 +231,54 @@ func (s *ImageOptService) RunOptimization(siteID uint64) (*models.ImageOptResult
 	return &result, nil
 }
 
-// RunOptimizationSync creates optimization task and waits for result
+// RunOptimizationSync queues optimization task and returns immediately (async).
+// Frontend polls GetResults every 3s to track live progress.
 func (s *ImageOptService) RunOptimizationSync(siteID uint64) (*models.ImageOptResult, error) {
-	result, err := s.RunOptimization(siteID)
-	if err != nil {
-		return nil, err
-	}
+	return s.RunOptimization(siteID)
+}
 
-	// Wait for agent to complete
-	completed, err := WaitForImageOptResult(s.db, result.ID)
-	if err != nil {
-		return result, nil // Return partial result on timeout
+// ProgressUpdate handles intermediate progress callbacks from the agent (called every ~50 images).
+// Returns true if the run has been cancelled and the agent should stop.
+func (s *ImageOptService) ProgressUpdate(result models.AgentImageOptResult) (cancelled bool, err error) {
+	// Check if already cancelled before updating
+	var rec models.ImageOptResult
+	if dbErr := s.db.Select("status").First(&rec, result.ResultID).Error; dbErr == nil {
+		if rec.Status == "cancelled" {
+			return true, nil
+		}
 	}
-	return completed, nil
+	updates := map[string]interface{}{
+		"total_images":    result.TotalImages,
+		"optimized_count": result.OptimizedCount,
+		"skipped_count":   result.SkippedCount,
+		"error_count":     result.ErrorCount,
+		"bytes_saved":     result.BytesSaved,
+	}
+	err = s.db.Model(&models.ImageOptResult{}).Where("id = ?", result.ResultID).Updates(updates).Error
+	return false, err
+}
+
+// CancelOptimization marks a running optimization as cancelled
+func (s *ImageOptService) CancelOptimization(siteID uint64) error {
+	now := time.Now()
+	result := s.db.Model(&models.ImageOptResult{}).
+		Where("site_id = ? AND status = 'running'", siteID).
+		Updates(map[string]interface{}{
+			"status":       "cancelled",
+			"completed_at": &now,
+			"error":        "Cancelled by user",
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("no running optimization found")
+	}
+	// Also cancel the pending/processing task in queue
+	s.db.Model(&models.TaskQueue{}).
+		Where("site_id = ? AND task_type = 'optimize_images' AND status IN ('pending','processing')", siteID).
+		Updates(map[string]interface{}{"status": "cancelled"})
+	return nil
 }
 
 // OptimizeComplete handles agent callback with optimization results

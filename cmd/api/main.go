@@ -74,6 +74,7 @@ func main() {
 	storageService := services.NewStorageService(db)
 	fail2banService := services.NewFail2BanService(db)
 	panelUpdateService := services.NewPanelUpdateService(db, Version)
+	ionCubeService := services.NewIonCubeService(db)
 
 	// WebSocket Hub
 	hub := ws.NewHub()
@@ -118,6 +119,7 @@ func main() {
 	fail2banHandler := handlers.NewFail2BanHandler(fail2banService)
 	panelUpdateHandler := handlers.NewPanelUpdateHandler(panelUpdateService)
 	updateCheckHandler := handlers.NewUpdateCheckHandler(panelUpdateService, rolloutService, serverService)
+	ionCubeHandler := handlers.NewIonCubeHandler(ionCubeService)
 
 	// ── Mobile API services & handlers ───────────────────────────────────────
 	fcmKey := cfg.FCMServerKey     // Set FCM_SERVER_KEY in env
@@ -139,7 +141,7 @@ func main() {
 	// Fiber app
 	app := fiber.New(fiber.Config{
 		AppName:                      "WP Manage API v1.0",
-		BodyLimit:                    2 * 1024 * 1024 * 1024, // 2GB for file uploads
+		BodyLimit:                    3 * 1024 * 1024 * 1024, // 3GB for file uploads
 		StreamRequestBody:            true,
 		DisablePreParseMultipartForm: true,
 		ErrorHandler:                 errorHandler,
@@ -161,7 +163,7 @@ func main() {
 
 	// API routes
 	routes.Setup(app, cfg, authHandler, serverHandler, siteHandler, deployHandler, fileHandler,
-		userHandler, apiKeyHandler, backupHandler, migrationHandler, securityHandler, wordpressHandler, rolloutHandler, performanceHandler, multisiteHandler, imageOptHandler, teamHandler, infraHandler, activityHandler, cronHandler, domainHandler, redisHandler, sshHandler, sftpHandler, hardeningHandler, uptimeHandler, alertHandler, wpcliHandler, cacheHandler, importHandler, dnsHandler, sslHandler, storageHandler, fail2banHandler, panelUpdateHandler, updateCheckHandler, userService, apiKeyService, rateLimiter)
+		userHandler, apiKeyHandler, backupHandler, migrationHandler, securityHandler, wordpressHandler, rolloutHandler, performanceHandler, multisiteHandler, imageOptHandler, teamHandler, infraHandler, activityHandler, cronHandler, domainHandler, redisHandler, sshHandler, sftpHandler, hardeningHandler, uptimeHandler, alertHandler, wpcliHandler, cacheHandler, importHandler, dnsHandler, sslHandler, storageHandler, fail2banHandler, panelUpdateHandler, ionCubeHandler, updateCheckHandler, userService, apiKeyService, rateLimiter)
 
 	// Mobile API routes — separate prefix /api/mobile/v1/
 	routes.SetupMobile(app, cfg,
@@ -188,6 +190,9 @@ func main() {
 
 	activityCleanupWorker := workers.NewActivityCleanupWorker(activityService)
 	activityCleanupWorker.Start()
+
+	autoUpdateWorker := workers.NewAutoUpdateWorker(db)
+	autoUpdateWorker.Start()
 
 	// Integrate alert worker with server handler
 	serverHandler.SetAlertWorker(alertWorker)

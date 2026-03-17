@@ -212,8 +212,8 @@ func (h *SiteHandler) UploadSource(c *fiber.Ctx) error {
 	if ext != ".zip" {
 		return c.Status(400).JSON(models.APIResponse{Error: "Only .zip files are allowed"})
 	}
-	if file.Size > 512*1024*1024 { // 512 MB limit
-		return c.Status(400).JSON(models.APIResponse{Error: "File too large (max 512 MB)"})
+	if file.Size > 3*1024*1024*1024 { // 3 GB limit
+		return c.Status(400).JSON(models.APIResponse{Error: "File too large (max 3 GB)"})
 	}
 
 	// Store file to temp dir — use hex token (URL-safe, alphanumeric only)
@@ -267,8 +267,8 @@ func (h *SiteHandler) ImportDB(c *fiber.Ctx) error {
 	if ext != ".sql" && ext != ".gz" && ext != ".zip" {
 		return c.Status(400).JSON(models.APIResponse{Error: "Only .sql, .gz, or .zip files are allowed"})
 	}
-	if file.Size > 512*1024*1024 { // 512 MB limit
-		return c.Status(400).JSON(models.APIResponse{Error: "File too large (max 512 MB)"})
+	if file.Size > 3*1024*1024*1024 { // 3 GB limit
+		return c.Status(400).JSON(models.APIResponse{Error: "File too large (max 3 GB)"})
 	}
 
 	// Store file to temp dir — use hex token (URL-safe, alphanumeric only)
@@ -293,6 +293,7 @@ func (h *SiteHandler) ImportDB(c *fiber.Ctx) error {
 		"file_token":   token,
 		"file_ext":     ext,
 		"old_domain":   oldDomain,
+		"php_version":  site.PHPVersion, // needed to pick correct WP-CLI binary (e.g. ionCube sites)
 	}
 	task, err := h.svc.CreateJSONTaskReturn(site.ServerID, id, "import_db_sql", taskData)
 	if err != nil {

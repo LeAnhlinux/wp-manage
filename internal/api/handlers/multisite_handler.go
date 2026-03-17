@@ -150,6 +150,21 @@ func (h *MultisiteHandler) SyncSubsites(c *fiber.Ctx) error {
 	})
 }
 
+// DeleteSubsiteComplete handles agent callback after subsite is deleted
+// Bug 1 fix: confirms deletion or rolls back to "active" on failure
+func (h *MultisiteHandler) DeleteSubsiteComplete(c *fiber.Ctx) error {
+	var result models.AgentDeleteSubsiteResult
+	if err := c.BodyParser(&result); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "Invalid request body")
+	}
+
+	if err := h.svc.DeleteSubsiteComplete(result); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+	}
+
+	return c.JSON(models.APIResponse{Success: true, Message: "Updated"})
+}
+
 // SyncSubsitesComplete handles agent callback with subsite list
 func (h *MultisiteHandler) SyncSubsitesComplete(c *fiber.Ctx) error {
 	var result models.AgentListSubsitesResult

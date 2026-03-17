@@ -25,6 +25,7 @@ import { useSSHKeys, useCreateSSHKey, useDeleteSSHKey } from '@/hooks/useSSHKeys
 import { useAlertRules, useCreateAlertRule, useDeleteAlertRule, useAlertHistory, usePHPFPMAutotune } from '@/hooks/useAlerts'
 import { useStorageCredentials, useCreateStorageCredential, useDeleteStorageCredential } from '@/hooks/useStorage'
 import { useFail2BanStatus, useFail2BanUnban, useFail2BanUpdateJail, useFail2BanToggleService, useFail2BanSetupJails } from '@/hooks/useFail2Ban'
+import { useIonCubeStatus, useEnableIonCube, useDisableIonCube } from '@/hooks/useIonCube'
 import { useServerRedisStats, useFlushServerRedis, useServerRedisSiteStatuses, useToggleRedis } from '@/hooks/useRedis'
 import { useServerBackups, useDeleteBackup } from '@/hooks/useBackups'
 import { usePermissions } from '@/hooks/usePermissions'
@@ -136,6 +137,7 @@ export default function ServerDetailPage() {
             { id: 'firewall', label: 'Firewall', icon: Shield },
             { id: 'nginx', label: 'Nginx', icon: Settings },
             { id: 'opcache', label: 'OPcache', icon: Zap },
+            { id: 'ioncube', label: 'ionCube', icon: Zap },
             { id: 'phpfpm', label: 'PHP-FPM', icon: Settings },
             { id: 'mariadb', label: 'MariaDB', icon: Database },
             { id: 'redis', label: 'Redis', icon: Database },
@@ -315,6 +317,7 @@ export default function ServerDetailPage() {
       {activeTab === 'firewall' && <FirewallTab serverId={serverId} />}
       {activeTab === 'nginx' && <NginxConfigTab serverId={serverId} />}
       {activeTab === 'opcache' && <OPcacheTab serverId={serverId} />}
+      {activeTab === 'ioncube' && <IonCubeTab serverId={serverId} />}
       {activeTab === 'phpfpm' && <PHPFPMTab serverId={serverId} sites={server.sites || []} />}
       {activeTab === 'mariadb' && <MariaDBTab serverId={serverId} />}
       {activeTab === 'cron' && <CronJobsTab serverId={serverId} />}
@@ -725,6 +728,153 @@ function OPcacheTab({ serverId }: { serverId: number }) {
             <p className={`text-sm ${msg.type === 'success' ? 'text-green-700' : 'text-red-700'}`}>{msg.text}</p>
           </div>
         )}
+      </div>
+    </div>
+  )
+}
+
+// ==================== ionCube Tab ====================
+
+function IonCubeTab({ serverId }: { serverId: number }) {
+  const { data: statuses = [], isLoading, refetch } = useIonCubeStatus(serverId)
+  const enable = useEnableIonCube(serverId)
+  const disable = useDisableIonCube(serverId)
+  const [actionVersion, setActionVersion] = useState<string | null>(null)
+  const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+
+  const isRunning = enable.isPending || disable.isPending
+
+  const handleToggle = async (version: string, currentlyEnabled: boolean) => {
+    setActionVersion(version)
+    setMsg(null)
+    try {
+      if (currentlyEnabled) {
+        await disable.mutateAsync(version)
+        setMsg({ type: 'success', text: `ionCube disabled for PHP ${version}` })
+      } else {
+        await enable.mutateAsync(version)
+        setMsg({ type: 'success', text: `ionCube enabled for PHP ${version}` })
+      }
+      refetch()
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error
+        || (err instanceof Error ? err.message : null)
+        || 'Operation failed'
+      setMsg({ type: 'error', text: msg })
+    } finally {
+      setActionVersion(null)
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+        <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2 mb-1">
+          <Zap size={20} className="text-purple-500" /> ionCube Loader
+        </h2>
+        <p className="text-sm text-gray-500 mb-6">
+          ionCube Loader decrypts and executes PHP files encoded with the ionCube PHP Encoder.
+          Supported versions: PHP 7.1–8.3. PHP 8.4+ is not yet supported by ionCube.
+        </p>
+
+        {isLoading ? (
+          <div className="flex items-center gap-2 text-sm text-gray-500 py-4">
+            <Loader2 size={16} className="animate-spin" /> Querying ionCube status from server...
+          </div>
+        ) : statuses.length === 0 ? (
+          <p className="text-sm text-gray-500 py-4">No PHP versions detected on this server.</p>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {statuses.map(v => {
+              const isActing = actionVersion === v.version && isRunning
+              return (
+                <div key={v.version}
+                  className={`rounded-xl border-2 p-4 transition-all ${
+                    !v.supported
+                      ? 'border-gray-100 bg-gray-50 opacity-60'
+                      : v.enabled
+                      ? 'border-emerald-200 bg-emerald-50'
+                      : 'border-gray-200 bg-white'
+                  }`}>
+                  {/* Header row */}
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-bold text-gray-800">PHP {v.version}</span>
+                    {!v.supported ? (
+                      <span className="text-xs px-2 py-0.5 bg-gray-200 text-gray-500 rounded-full">
+                        Not Supported
+                      </span>
+                    ) : v.enabled ? (
+                      <span className="text-xs px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full font-medium">
+                        Enabled
+                      </span>
+                    ) : (
+                      <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-500 rounded-full">
+                        Disabled
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Loader file indicator */}
+                  <p className="text-xs text-gray-400 mb-3">
+                    {v.installed
+                      ? <span className="text-emerald-600">✓ Loader installed</span>
+                      : <span className="text-gray-400">✗ Loader not installed</span>}
+                  </p>
+
+                  {/* Action button */}
+                  {v.supported ? (
+                    <button
+                      onClick={() => handleToggle(v.version, v.enabled)}
+                      disabled={isRunning}
+                      className={`w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                        v.enabled
+                          ? 'bg-red-50 border border-red-200 text-red-700 hover:bg-red-100'
+                          : 'bg-blue-600 text-white hover:bg-blue-700'
+                      }`}>
+                      {isActing
+                        ? <Loader2 size={14} className="animate-spin" />
+                        : v.enabled
+                        ? <ToggleLeft size={14} />
+                        : <ToggleRight size={14} />}
+                      {isActing
+                        ? (v.enabled ? 'Disabling...' : 'Enabling...')
+                        : (v.enabled ? 'Disable' : 'Enable')}
+                    </button>
+                  ) : (
+                    <div className="w-full px-3 py-2 rounded-lg text-sm text-center text-gray-400 bg-gray-100 border border-gray-200">
+                      Not supported by ionCube
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        {msg && (
+          <div className={`mt-4 p-3 rounded-lg border flex items-center gap-2 ${
+            msg.type === 'success' ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'
+          }`}>
+            {msg.type === 'success'
+              ? <CheckCircle2 size={16} className="text-green-600 flex-shrink-0" />
+              : <XCircle size={16} className="text-red-600 flex-shrink-0" />}
+            <p className={`text-sm ${msg.type === 'success' ? 'text-green-700' : 'text-red-700'}`}>
+              {msg.text}
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* Info card */}
+      <div className="bg-purple-50 border border-purple-200 rounded-xl p-4">
+        <h3 className="text-sm font-semibold text-purple-800 mb-2">About ionCube Loader</h3>
+        <ul className="text-xs text-purple-700 space-y-1 list-disc list-inside">
+          <li>ionCube is a Zend extension — must load <strong>before</strong> all other extensions (loaded as <code className="bg-purple-100 px-1 rounded">00-ioncube.ini</code>)</li>
+          <li>The first Enable may take up to 60 seconds to download the ionCube package (~60 MB)</li>
+          <li>Subsequent enables are instant — the package is cached on the server</li>
+          <li>PHP-FPM is automatically reloaded after each change</li>
+          <li>Disable removes the ini file only; the .so file stays cached for fast re-enable</li>
+        </ul>
       </div>
     </div>
   )

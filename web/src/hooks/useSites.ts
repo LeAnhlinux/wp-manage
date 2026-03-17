@@ -146,15 +146,29 @@ export function useAutologin() {
 export function useUploadSource() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async ({ siteId, file }: { siteId: number; file: File }) => {
-      const formData = new FormData()
-      formData.append('file', file)
-      const { data } = await api.post<APIResponse<{ domain: string; file_size: number }>>(
-        `/sites/${siteId}/upload-source`,
-        formData,
-        { headers: { 'Content-Type': 'multipart/form-data' } }
-      )
-      return data
+    mutationFn: async ({
+      siteId, file, onProgress,
+    }: { siteId: number; file: File; onProgress?: (pct: number) => void }) => {
+      return new Promise<APIResponse<{ domain: string; file_size: number }>>((resolve, reject) => {
+        const formData = new FormData()
+        formData.append('file', file)
+        const token = localStorage.getItem('token')
+        const xhr = new XMLHttpRequest()
+        xhr.open('POST', `/api/v1/sites/${siteId}/upload-source`)
+        if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) onProgress?.(Math.round((e.loaded / e.total) * 100))
+        }
+        xhr.onload = () => {
+          try {
+            const data = JSON.parse(xhr.responseText)
+            if (xhr.status >= 200 && xhr.status < 300 && data.success) resolve(data)
+            else reject(Object.assign(new Error(data.error || 'Upload failed'), { response: { data } }))
+          } catch { reject(new Error('Invalid server response')) }
+        }
+        xhr.onerror = () => reject(new Error('Network error during upload'))
+        xhr.send(formData)
+      })
     },
     onSuccess: (_d, v) => qc.invalidateQueries({ queryKey: ['site', v.siteId] }),
   })
@@ -163,23 +177,32 @@ export function useUploadSource() {
 export function useImportDB() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async ({ siteId, file }: { siteId: number; file: File }) => {
-      // Use fetch() instead of axios — axios default Content-Type: application/json
-      // overrides the browser's auto-set "multipart/form-data; boundary=..." for FormData,
-      // causing Fiber to fail parsing the multipart body ("No file provided").
-      const formData = new FormData()
-      formData.append('file', file)
-      const token = localStorage.getItem('token')
-      const resp = await fetch(`/api/v1/sites/${siteId}/import-db`, {
-        method: 'POST',
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-        body: formData,
+    mutationFn: async ({
+      siteId, file, oldDomain, onProgress,
+    }: { siteId: number; file: File; oldDomain?: string; onProgress?: (pct: number) => void }) => {
+      return new Promise<APIResponse<{ domain: string; db_name: string; file_size: number }>>((resolve, reject) => {
+        const formData = new FormData()
+        formData.append('file', file)
+        const token = localStorage.getItem('token')
+        const url = oldDomain?.trim()
+          ? `/api/v1/sites/${siteId}/import-db?old_domain=${encodeURIComponent(oldDomain.trim())}`
+          : `/api/v1/sites/${siteId}/import-db`
+        const xhr = new XMLHttpRequest()
+        xhr.open('POST', url)
+        if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) onProgress?.(Math.round((e.loaded / e.total) * 100))
+        }
+        xhr.onload = () => {
+          try {
+            const data = JSON.parse(xhr.responseText)
+            if (xhr.status >= 200 && xhr.status < 300 && data.success) resolve(data)
+            else reject(Object.assign(new Error(data.error || 'Import failed'), { response: { data } }))
+          } catch { reject(new Error('Invalid server response')) }
+        }
+        xhr.onerror = () => reject(new Error('Network error during upload'))
+        xhr.send(formData)
       })
-      const data: APIResponse<{ domain: string; db_name: string; file_size: number }> = await resp.json()
-      if (!resp.ok || !data.success) {
-        throw Object.assign(new Error(data.error || 'Import failed'), { response: { data } })
-      }
-      return data
     },
     onSuccess: (_d, v) => qc.invalidateQueries({ queryKey: ['site', v.siteId] }),
   })

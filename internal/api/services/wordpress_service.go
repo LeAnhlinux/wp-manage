@@ -221,19 +221,20 @@ func (s *WordPressService) UpdateAutoUpdateConfig(siteID uint64, req models.Upda
 
 // --- Check Updates ---
 
-// CheckUpdates queues a task for agent to check available WP updates
-func (s *WordPressService) CheckUpdates(siteID uint64) error {
+// CheckUpdates queues a task for agent to check available WP updates; returns taskID
+func (s *WordPressService) CheckUpdates(siteID uint64) (uint64, error) {
 	var site models.Site
 	if err := s.db.First(&site, siteID).Error; err != nil {
-		return fmt.Errorf("site not found")
+		return 0, fmt.Errorf("site not found")
 	}
 	if site.Status != "active" {
-		return fmt.Errorf("site must be active")
+		return 0, fmt.Errorf("site must be active")
 	}
 
 	taskData := models.AgentCheckUpdatesTask{
-		SiteID: siteID,
-		Domain: site.Domain,
+		SiteID:     siteID,
+		Domain:     site.Domain,
+		PHPVersion: site.PHPVersion,
 	}
 	dataJSON, _ := json.Marshal(taskData)
 	task := models.TaskQueue{
@@ -243,21 +244,29 @@ func (s *WordPressService) CheckUpdates(siteID uint64) error {
 		Data:     string(dataJSON),
 		Status:   "pending",
 	}
-	return s.db.Create(&task).Error
+	if err := s.db.Create(&task).Error; err != nil {
+		return 0, err
+	}
+	return task.ID, nil
 }
 
 // CheckUpdatesSync queues update check and waits for result synchronously
 func (s *WordPressService) CheckUpdatesSync(siteID uint64) (interface{}, error) {
 	startTime := time.Now()
-	if err := s.CheckUpdates(siteID); err != nil {
-		return nil, err
-	}
-
-	// Wait for agent to callback with results
-	logs, err := WaitForUpdateLogs(s.db, siteID, startTime)
+	taskID, err := s.CheckUpdates(siteID)
 	if err != nil {
 		return nil, err
 	}
+
+	// Wait for agent to mark the task as completed (works even when no updates available)
+	if _, err := WaitForTaskComplete(s.db, taskID); err != nil {
+		return nil, err
+	}
+
+	// Read UpdateLog records created during this check
+	var logs []models.UpdateLog
+	s.db.Where("site_id = ? AND created_at >= ?", siteID, startTime).
+		Order("created_at DESC").Find(&logs)
 
 	if len(logs) == 0 {
 		return map[string]interface{}{
@@ -292,6 +301,11 @@ func (s *WordPressService) CheckUpdatesSync(siteID uint64) (interface{}, error) 
 // SaveUpdateResult saves update check result from agent
 func (s *WordPressService) SaveUpdateResult(result models.AgentCheckUpdatesResult) error {
 	now := time.Now()
+
+	// Always update the site's current WP version
+	if result.CurrentVersion != "" {
+		s.db.Model(&models.Site{}).Where("id = ?", result.SiteID).Update("wp_version", result.CurrentVersion)
+	}
 
 	// Save core update if available
 	if result.Core != nil && result.Core.NewVersion != "" {
@@ -338,6 +352,65 @@ func (s *WordPressService) SaveUpdateResult(result models.AgentCheckUpdatesResul
 	return nil
 }
 
+// SaveApplyUpdatesResult saves apply-updates result from agent and updates sites.wp_version
+func (s *WordPressService) SaveApplyUpdatesResult(result models.AgentApplyUpdatesResult) error {
+	now := time.Now()
+
+	// Update site WP version if core was updated
+	if result.NewWPVersion != "" {
+		s.db.Model(&models.Site{}).Where("domain = ?", result.Domain).Update("wp_version", result.NewWPVersion)
+	}
+
+	// Log core update result
+	if result.CoreUpdated || result.CoreError != "" {
+		status := "success"
+		errMsg := ""
+		if result.CoreError != "" {
+			status = "failed"
+			errMsg = result.CoreError
+		}
+		s.db.Create(&models.UpdateLog{
+			SiteID:    result.SiteID,
+			UpdateType: "core",
+			ItemName:  "WordPress",
+			ToVersion: result.NewWPVersion,
+			Status:    status,
+			Error:     errMsg,
+			CreatedAt: now,
+		})
+	}
+
+	// Log plugin update results
+	for _, p := range result.PluginsResult {
+		s.db.Create(&models.UpdateLog{
+			SiteID:      result.SiteID,
+			UpdateType:  "plugin",
+			ItemName:    p.Name,
+			FromVersion: p.OldVersion,
+			ToVersion:   p.NewVersion,
+			Status:      p.Status,
+			Error:       p.Error,
+			CreatedAt:   now,
+		})
+	}
+
+	// Log theme update results
+	for _, t := range result.ThemesResult {
+		s.db.Create(&models.UpdateLog{
+			SiteID:      result.SiteID,
+			UpdateType:  "theme",
+			ItemName:    t.Name,
+			FromVersion: t.OldVersion,
+			ToVersion:   t.NewVersion,
+			Status:      t.Status,
+			Error:       t.Error,
+			CreatedAt:   now,
+		})
+	}
+
+	return nil
+}
+
 // GetUpdateLogs returns update logs for a site
 func (s *WordPressService) GetUpdateLogs(siteID uint64, page, perPage int) ([]models.UpdateLog, int64, error) {
 	var logs []models.UpdateLog
@@ -354,22 +427,23 @@ func (s *WordPressService) GetUpdateLogs(siteID uint64, page, perPage int) ([]mo
 
 // --- DB Optimize ---
 
-// OptimizeDatabase queues a DB optimization task for agent
-func (s *WordPressService) OptimizeDatabase(siteID uint64) error {
+// OptimizeDatabase queues a DB optimization task for agent; returns taskID
+func (s *WordPressService) OptimizeDatabase(siteID uint64) (uint64, error) {
 	var site models.Site
 	if err := s.db.First(&site, siteID).Error; err != nil {
-		return fmt.Errorf("site not found")
+		return 0, fmt.Errorf("site not found")
 	}
 	if site.Status != "active" {
-		return fmt.Errorf("site must be active")
+		return 0, fmt.Errorf("site must be active")
 	}
 
 	taskData := models.AgentDBOptimizeTask{
-		SiteID: siteID,
-		Domain: site.Domain,
-		DBName: site.DBName,
-		DBUser: site.DBUser,
-		DBPass: site.DBPassword,
+		SiteID:     siteID,
+		Domain:     site.Domain,
+		PHPVersion: site.PHPVersion,
+		DBName:     site.DBName,
+		DBUser:     site.DBUser,
+		DBPass:     site.DBPassword,
 	}
 	dataJSON, _ := json.Marshal(taskData)
 	task := models.TaskQueue{
@@ -379,22 +453,31 @@ func (s *WordPressService) OptimizeDatabase(siteID uint64) error {
 		Data:     string(dataJSON),
 		Status:   "pending",
 	}
-	return s.db.Create(&task).Error
+	if err := s.db.Create(&task).Error; err != nil {
+		return 0, err
+	}
+	return task.ID, nil
 }
 
 // OptimizeDatabaseSync queues DB optimization and waits for result
 func (s *WordPressService) OptimizeDatabaseSync(siteID uint64) (interface{}, error) {
 	startTime := time.Now()
-	if err := s.OptimizeDatabase(siteID); err != nil {
+	taskID, err := s.OptimizeDatabase(siteID)
+	if err != nil {
 		return nil, err
 	}
 
-	// Wait for db_optimize result in UpdateLog
-	logs, _ := WaitForUpdateLogs(s.db, siteID, startTime)
-	for _, l := range logs {
-		if l.UpdateType == "db_optimize" {
-			return l, nil
-		}
+	// Wait for agent to mark task complete
+	if _, err := WaitForTaskComplete(s.db, taskID); err != nil {
+		return nil, err
+	}
+
+	// Read db_optimize result from UpdateLog
+	var logs []models.UpdateLog
+	s.db.Where("site_id = ? AND update_type = ? AND created_at >= ?", siteID, "db_optimize", startTime).
+		Order("created_at DESC").Limit(1).Find(&logs)
+	if len(logs) > 0 {
+		return logs[0], nil
 	}
 	return map[string]string{"message": "Database optimization completed"}, nil
 }

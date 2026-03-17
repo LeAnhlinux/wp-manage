@@ -5,14 +5,14 @@ import {
   ExternalLink, Trash2, Pause, Play, Shield, Database,
   Code, Clock, Settings, AlertTriangle, Eye, EyeOff, Key, Copy, Check,
   FolderOpen, LayoutDashboard, Layers, Download, Loader2, HardDrive,
-  CheckCircle2, XCircle, ChevronLeft, ChevronRight, Network, Plus, ImageIcon, Zap, Archive,
-  ShieldCheck, AlertCircle, CornerDownRight, X, Edit2
+  CheckCircle2, CheckCircle, XCircle, ChevronLeft, ChevronRight, Network, Plus, ImageIcon, Zap, Archive,
+  ShieldCheck, AlertCircle, CornerDownRight, X, Edit2, Upload
 } from 'lucide-react'
 import { useSite, useDeleteSite, useUpdatePHP, useRestartSite, useSuspendSite, useResumeSite, useIssueSSL, useSiteCredentials, useAutologin, useUploadSource, useImportDB, useToggleOpenBasedir } from '@/hooks/useSites'
 import { useStagingSites, useCreateStaging, usePushStaging, useDeleteStaging, useAutoUpdateConfig, useUpdateAutoUpdateConfig, useCheckUpdates, useUpdateLogs, useOptimizeDatabase } from '@/hooks/useWordPress'
 import { useLatestPerformance, usePerformanceMetrics, useRunPageSpeed } from '@/hooks/usePerformance'
 import { useSubsites, useEnableMultisite, useCreateSubsite, useDeleteSubsite, useSyncSubsites } from '@/hooks/useMultisite'
-import { useImageOptConfig, useUpdateImageOptConfig, useToggleImageOpt, useRunImageOpt, useImageOptResults } from '@/hooks/useImageOpt'
+import { useImageOptConfig, useUpdateImageOptConfig, useToggleImageOpt, useRunImageOpt, useImageOptResults, useRunningImageOpt, useCancelImageOpt, useToggleNginxWebP } from '@/hooks/useImageOpt'
 import { useDomains, useCreateDomain, useUpdateDomain, useDeleteDomain, useIssueDomainSSL, useCheckDNS } from '@/hooks/useDomains'
 import { useRedisConfig, useToggleRedis } from '@/hooks/useRedis'
 import { useCronJobsBySite } from '@/hooks/useCronJobs'
@@ -54,6 +54,17 @@ export default function SiteDetailPage() {
   const [deleteConfirmText, setDeleteConfirmText] = useState('')
   const [uploadSourceFile, setUploadSourceFile] = useState<File | null>(null)
   const [importDBFile, setImportDBFile] = useState<File | null>(null)
+  const [importDBOldDomain, setImportDBOldDomain] = useState('')
+
+  // Deploy progress states
+  type DeployPhase = 'idle' | 'uploading' | 'processing' | 'done' | 'error'
+  type DeployResult = { success: boolean; message: string; detail?: string }
+  const [sourcePhase, setSourcePhase] = useState<DeployPhase>('idle')
+  const [sourceUploadPct, setSourceUploadPct] = useState(0)
+  const [sourceResult, setSourceResult] = useState<DeployResult | null>(null)
+  const [dbPhase, setDbPhase] = useState<DeployPhase>('idle')
+  const [dbUploadPct, setDbUploadPct] = useState(0)
+  const [dbResult, setDbResult] = useState<DeployResult | null>(null)
   const { can } = usePermissions()
   const [showPHPModal, setShowPHPModal] = useState(false)
   const [selectedPHP, setSelectedPHP] = useState('')
@@ -85,6 +96,9 @@ export default function SiteDetailPage() {
     setTimeout(() => setActionMsg(null), 4000)
   }
 
+  // Use http:// or https:// based on ssl_enabled
+  const siteBaseUrl = `${site.ssl_enabled ? 'https' : 'http'}://${site.domain}`
+
   const copyToClipboard = (text: string, field: string) => {
     navigator.clipboard.writeText(text)
     setCopiedField(field)
@@ -110,26 +124,56 @@ export default function SiteDetailPage() {
 
   const handleUploadSource = async () => {
     if (!uploadSourceFile) return
+    setSourceResult(null)
+    setSourceUploadPct(0)
+    setSourcePhase('uploading')
     try {
-      await uploadSource.mutateAsync({ siteId: site.id, file: uploadSourceFile })
-      showMsg('success', 'Source uploaded! Agent is extracting the files...')
+      const res = await uploadSource.mutateAsync({
+        siteId: site.id,
+        file: uploadSourceFile,
+        onProgress: (pct) => setSourceUploadPct(pct),
+      })
+      setSourcePhase('processing')
+      // backend is sync — when mutate resolves, agent has finished extracting
+      setSourcePhase('done')
+      const mb = res.data?.file_size ? (res.data.file_size / 1048576).toFixed(1) : '?'
+      setSourceResult({ success: true, message: 'Source deployed thành công!', detail: `Đã upload ${mb} MB và extract vào /var/www/${site.domain}/public/` })
       setUploadSourceFile(null)
-    } catch {
-      showMsg('error', 'Failed to upload source file')
+    } catch (err: unknown) {
+      setSourcePhase('error')
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error
+        || (err instanceof Error ? err.message : null)
+        || 'Upload source thất bại'
+      setSourceResult({ success: false, message: 'Deploy thất bại', detail: msg ?? undefined })
     }
   }
 
   const handleImportDB = async () => {
     if (!importDBFile) return
+    setDbResult(null)
+    setDbUploadPct(0)
+    setDbPhase('uploading')
     try {
-      await importDB.mutateAsync({ siteId: site.id, file: importDBFile })
-      showMsg('success', `Database imported successfully into ${site.domain}`)
+      await importDB.mutateAsync({
+        siteId: site.id,
+        file: importDBFile,
+        oldDomain: importDBOldDomain,
+        onProgress: (pct) => setDbUploadPct(pct),
+      })
+      setDbPhase('processing')
+      setDbPhase('done')
+      const detail = importDBOldDomain.trim()
+        ? `Import xong + đã chạy wp search-replace: ${importDBOldDomain} → ${site.domain}. siteurl/home đã cập nhật.`
+        : `Database đã import vào ${site.db_name}. siteurl/home đã cập nhật thành https://${site.domain}.`
+      setDbResult({ success: true, message: 'Database imported thành công!', detail })
       setImportDBFile(null)
+      setImportDBOldDomain('')
     } catch (err: unknown) {
+      setDbPhase('error')
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error
         || (err instanceof Error ? err.message : null)
-        || 'Failed to upload database file'
-      showMsg('error', msg)
+        || 'Import database thất bại'
+      setDbResult({ success: false, message: 'Import thất bại', detail: msg ?? undefined })
     }
   }
 
@@ -226,7 +270,7 @@ export default function SiteDetailPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <a href={`https://${site.domain}`} target="_blank" rel="noopener"
+          <a href={siteBaseUrl} target="_blank" rel="noopener"
             className="flex items-center gap-1.5 px-3 py-2 text-sm text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50">
             <ExternalLink size={14} /> Visit
           </a>
@@ -383,7 +427,7 @@ export default function SiteDetailPage() {
             <h2 className="text-lg font-semibold text-gray-900 mb-4">WordPress Info</h2>
             <dl className="space-y-3">
               <DetailRow label="Domain" value={
-                <a href={`https://${site.domain}`} target="_blank" rel="noopener" className="text-blue-600 hover:underline">
+                <a href={siteBaseUrl} target="_blank" rel="noopener" className="text-blue-600 hover:underline">
                   {site.domain}
                 </a>
               } />
@@ -391,7 +435,7 @@ export default function SiteDetailPage() {
               <DetailRow label="Admin User" value={site.wp_admin_user} />
               <DetailRow label="Admin Email" value={site.wp_admin_email} />
               <DetailRow label="WP Admin URL" value={
-                <a href={`https://${site.domain}/wp-admin`} target="_blank" rel="noopener" className="text-blue-600 hover:underline">
+                <a href={`${siteBaseUrl}/wp-admin`} target="_blank" rel="noopener" className="text-blue-600 hover:underline">
                   {site.domain}/wp-admin
                 </a>
               } />
@@ -566,38 +610,200 @@ export default function SiteDetailPage() {
 
           {/* Manual Install Upload Section */}
           {site.install_type === 'manual' && (
-            <div className="bg-white rounded-xl shadow-sm border border-blue-100 p-6">
-              <h2 className="text-lg font-semibold text-blue-700 mb-1">Deploy Source & Database</h2>
-              <p className="text-xs text-gray-500 mb-4">Site này được tạo theo chế độ manual. Upload source zip và import SQL database.</p>
-              {/* Upload Source */}
-              <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-700 mb-1">Source Code (.zip)</label>
-                <div className="flex gap-2">
-                  <input type="file" accept=".zip"
-                    onChange={(e) => setUploadSourceFile(e.target.files?.[0] || null)}
-                    className="flex-1 text-sm border border-gray-300 rounded-lg px-3 py-1.5 file:mr-3 file:text-xs file:bg-blue-50 file:border-0 file:rounded file:px-2 file:py-1" />
-                  <button onClick={handleUploadSource}
-                    disabled={!uploadSourceFile || uploadSource.isPending}
-                    className="px-4 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 disabled:opacity-50 whitespace-nowrap">
-                    {uploadSource.isPending ? 'Uploading...' : 'Upload & Deploy'}
-                  </button>
-                </div>
-                <p className="text-xs text-gray-400 mt-1">Max 512 MB. Sẽ extract vào /var/www/{site.domain}/public/</p>
-              </div>
-              {/* Import DB */}
+            <div className="bg-white rounded-xl shadow-sm border border-blue-100 p-6 space-y-6">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Database (.sql / .gz / .zip)</label>
-                <div className="flex gap-2">
-                  <input type="file" accept=".sql,.gz,.sql.gz,.zip"
-                    onChange={(e) => setImportDBFile(e.target.files?.[0] || null)}
-                    className="flex-1 text-sm border border-gray-300 rounded-lg px-3 py-1.5 file:mr-3 file:text-xs file:bg-green-50 file:border-0 file:rounded file:px-2 file:py-1" />
-                  <button onClick={handleImportDB}
-                    disabled={!importDBFile || importDB.isPending}
-                    className="px-4 py-1.5 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700 disabled:opacity-50 whitespace-nowrap">
-                    {importDB.isPending ? 'Importing...' : 'Import DB'}
-                  </button>
+                <h2 className="text-lg font-semibold text-blue-700">Deploy Source & Database</h2>
+                <p className="text-xs text-gray-500 mt-0.5">Upload source zip và import SQL database cho site manual.</p>
+              </div>
+
+              {/* ── Upload Source ── */}
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 rounded-full bg-blue-100 flex items-center justify-center text-xs font-bold text-blue-600">1</div>
+                  <span className="text-sm font-semibold text-gray-800">Source Code (.zip)</span>
                 </div>
-                <p className="text-xs text-gray-400 mt-1">Sẽ import vào database: {site.db_name}</p>
+
+                {/* File picker + button */}
+                {sourcePhase === 'idle' || sourcePhase === 'done' || sourcePhase === 'error' ? (
+                  <div className="space-y-2">
+                    <div className="flex gap-2">
+                      <input type="file" accept=".zip"
+                        onChange={(e) => { setUploadSourceFile(e.target.files?.[0] || null); setSourceResult(null); setSourcePhase('idle') }}
+                        className="flex-1 text-sm border border-gray-200 rounded-lg px-3 py-1.5 file:mr-3 file:text-xs file:bg-blue-50 file:border-0 file:rounded file:px-2 file:py-1 file:text-blue-700" />
+                      <button onClick={handleUploadSource}
+                        disabled={!uploadSourceFile}
+                        className="px-4 py-1.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-40 whitespace-nowrap flex items-center gap-1.5">
+                        <Upload size={14} /> Deploy
+                      </button>
+                    </div>
+                    <p className="text-xs text-gray-400">Max 3 GB · Extract vào <code className="bg-gray-100 px-1 rounded">/var/www/{site.domain}/public/</code></p>
+                  </div>
+                ) : null}
+
+                {/* Progress panel */}
+                {(sourcePhase === 'uploading' || sourcePhase === 'processing') && (
+                  <div className="rounded-xl border border-blue-100 bg-blue-50 p-4 space-y-3">
+                    {/* Step 1: Upload */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between text-xs">
+                        <div className="flex items-center gap-2 font-medium text-blue-700">
+                          {sourcePhase === 'uploading'
+                            ? <div className="w-3.5 h-3.5 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
+                            : <CheckCircle size={14} className="text-emerald-500" />}
+                          Uploading file lên server
+                        </div>
+                        <span className="text-blue-600 font-semibold">{sourceUploadPct}%</span>
+                      </div>
+                      <div className="h-1.5 bg-blue-200 rounded-full overflow-hidden">
+                        <div className="h-full bg-blue-500 rounded-full transition-all duration-300"
+                          style={{ width: `${sourceUploadPct}%` }} />
+                      </div>
+                    </div>
+                    {/* Step 2: Extract */}
+                    <div className="flex items-center gap-2 text-xs">
+                      {sourcePhase === 'processing'
+                        ? <div className="w-3.5 h-3.5 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
+                        : sourceUploadPct === 100
+                          ? <div className="w-3.5 h-3.5 rounded-full border-2 border-blue-300 border-t-transparent animate-spin" />
+                          : <div className="w-3.5 h-3.5 rounded-full border border-gray-300" />}
+                      <span className={sourcePhase === 'processing' ? 'text-blue-700 font-medium' : 'text-gray-400'}>
+                        Agent đang extract files vào webroot...
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Result */}
+                {sourceResult && (
+                  <div className={`rounded-xl border p-4 ${sourceResult.success ? 'border-emerald-200 bg-emerald-50' : 'border-red-200 bg-red-50'}`}>
+                    <div className="flex items-start gap-2.5">
+                      {sourceResult.success
+                        ? <CheckCircle size={18} className="text-emerald-500 mt-0.5 shrink-0" />
+                        : <XCircle size={18} className="text-red-500 mt-0.5 shrink-0" />}
+                      <div className="flex-1 min-w-0">
+                        <p className={`text-sm font-semibold ${sourceResult.success ? 'text-emerald-700' : 'text-red-700'}`}>
+                          {sourceResult.message}
+                        </p>
+                        {sourceResult.detail && (
+                          <p className={`text-xs mt-1 ${sourceResult.success ? 'text-emerald-600' : 'text-red-600'} break-words`}>
+                            {sourceResult.detail}
+                          </p>
+                        )}
+                      </div>
+                      <button onClick={() => { setSourceResult(null); setSourcePhase('idle') }}
+                        className="text-gray-400 hover:text-gray-600 shrink-0">
+                        <X size={14} />
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="border-t border-gray-100" />
+
+              {/* ── Import DB ── */}
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 rounded-full bg-emerald-100 flex items-center justify-center text-xs font-bold text-emerald-600">2</div>
+                  <span className="text-sm font-semibold text-gray-800">Database (.sql / .gz / .zip)</span>
+                </div>
+
+                {dbPhase === 'idle' || dbPhase === 'done' || dbPhase === 'error' ? (
+                  <div className="space-y-2">
+                    <div className="flex gap-2">
+                      <input type="file" accept=".sql,.gz,.sql.gz,.zip"
+                        onChange={(e) => { setImportDBFile(e.target.files?.[0] || null); setDbResult(null); setDbPhase('idle') }}
+                        className="flex-1 text-sm border border-gray-200 rounded-lg px-3 py-1.5 file:mr-3 file:text-xs file:bg-emerald-50 file:border-0 file:rounded file:px-2 file:py-1 file:text-emerald-700" />
+                      <button onClick={handleImportDB}
+                        disabled={!importDBFile}
+                        className="px-4 py-1.5 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 disabled:opacity-40 whitespace-nowrap flex items-center gap-1.5">
+                        <Database size={14} /> Import
+                      </button>
+                    </div>
+                    {/* Old domain */}
+                    <div className="flex gap-2 items-center">
+                      <input type="text" value={importDBOldDomain}
+                        onChange={(e) => setImportDBOldDomain(e.target.value)}
+                        placeholder="Old domain (vd: old-site.com) — để trống nếu không cần đổi URL"
+                        className="flex-1 text-sm border border-gray-200 rounded-lg px-3 py-1.5 bg-gray-50 focus:bg-white focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 focus:outline-none" />
+                    </div>
+                    <p className="text-xs text-gray-400">
+                      Import vào <code className="bg-gray-100 px-1 rounded">{site.db_name}</code>
+                      {importDBOldDomain.trim() && <> · Sẽ chạy <code className="bg-gray-100 px-1 rounded">wp search-replace</code> {importDBOldDomain.trim()} → {site.domain}</>}
+                    </p>
+                  </div>
+                ) : null}
+
+                {/* Progress panel */}
+                {(dbPhase === 'uploading' || dbPhase === 'processing') && (
+                  <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-4 space-y-3">
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between text-xs">
+                        <div className="flex items-center gap-2 font-medium text-emerald-700">
+                          {dbPhase === 'uploading'
+                            ? <div className="w-3.5 h-3.5 rounded-full border-2 border-emerald-500 border-t-transparent animate-spin" />
+                            : <CheckCircle size={14} className="text-emerald-500" />}
+                          Uploading file lên server
+                        </div>
+                        <span className="text-emerald-600 font-semibold">{dbUploadPct}%</span>
+                      </div>
+                      <div className="h-1.5 bg-emerald-200 rounded-full overflow-hidden">
+                        <div className="h-full bg-emerald-500 rounded-full transition-all duration-300"
+                          style={{ width: `${dbUploadPct}%` }} />
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 text-xs">
+                      {dbPhase === 'processing'
+                        ? <div className="w-3.5 h-3.5 rounded-full border-2 border-emerald-500 border-t-transparent animate-spin" />
+                        : dbUploadPct === 100
+                          ? <div className="w-3.5 h-3.5 rounded-full border-2 border-emerald-300 border-t-transparent animate-spin" />
+                          : <div className="w-3.5 h-3.5 rounded-full border border-gray-300" />}
+                      <span className={dbPhase === 'processing' ? 'text-emerald-700 font-medium' : 'text-gray-400'}>
+                        Agent đang import SQL vào database...
+                      </span>
+                    </div>
+                    {importDBOldDomain.trim() && (
+                      <div className="flex items-center gap-2 text-xs text-gray-400">
+                        <div className="w-3.5 h-3.5 rounded-full border border-gray-300" />
+                        Chạy wp search-replace: {importDBOldDomain} → {site.domain}
+                      </div>
+                    )}
+                    <p className="text-xs text-amber-600 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+                      ⏳ File lớn có thể mất 1–3 phút. Vui lòng giữ nguyên tab này.
+                    </p>
+                  </div>
+                )}
+
+                {/* Result */}
+                {dbResult && (
+                  <div className={`rounded-xl border p-4 ${dbResult.success ? 'border-emerald-200 bg-emerald-50' : 'border-red-200 bg-red-50'}`}>
+                    <div className="flex items-start gap-2.5">
+                      {dbResult.success
+                        ? <CheckCircle size={18} className="text-emerald-500 mt-0.5 shrink-0" />
+                        : <XCircle size={18} className="text-red-500 mt-0.5 shrink-0" />}
+                      <div className="flex-1 min-w-0">
+                        <p className={`text-sm font-semibold ${dbResult.success ? 'text-emerald-700' : 'text-red-700'}`}>
+                          {dbResult.message}
+                        </p>
+                        {dbResult.detail && (
+                          <p className={`text-xs mt-1 ${dbResult.success ? 'text-emerald-600' : 'text-red-600'} break-words whitespace-pre-wrap`}>
+                            {dbResult.detail}
+                          </p>
+                        )}
+                        {dbResult.success && (
+                          <a href={siteBaseUrl} target="_blank" rel="noopener"
+                            className="inline-flex items-center gap-1 mt-2 text-xs text-emerald-600 hover:text-emerald-700 font-medium">
+                            <ExternalLink size={12} /> Kiểm tra site →
+                          </a>
+                        )}
+                      </div>
+                      <button onClick={() => { setDbResult(null); setDbPhase('idle') }}
+                        className="text-gray-400 hover:text-gray-600 shrink-0">
+                        <X size={14} />
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -1248,15 +1454,18 @@ function ImagesPanel({ siteId, canManage }: { siteId: number; canManage: boolean
   const toggleOpt = useToggleImageOpt(siteId)
   const updateConfig = useUpdateImageOptConfig(siteId)
   const runOpt = useRunImageOpt(siteId)
+  const cancelOpt = useCancelImageOpt(siteId)
+  const toggleNginxWebP = useToggleNginxWebP(siteId)
   const { data: resultsData } = useImageOptResults(siteId)
+  const runningResult = useRunningImageOpt(siteId)
   const [quality, setQuality] = useState<number | null>(null)
 
   const results = ((resultsData?.data as unknown) ?? []) as ImageOptResult[]
 
   // Compute cumulative stats from all completed runs
-  const totalImages   = results.reduce((s, r) => s + r.total_images, 0)
-  const totalOptimized = results.reduce((s, r) => s + r.optimized_count, 0)
-  const totalSaved    = results.reduce((s, r) => s + r.bytes_saved, 0)
+  const totalImages   = results.filter(r => r.status === 'completed').reduce((s, r) => s + r.total_images, 0)
+  const totalOptimized = results.filter(r => r.status === 'completed').reduce((s, r) => s + r.optimized_count, 0)
+  const totalSaved    = results.filter(r => r.status === 'completed').reduce((s, r) => s + r.bytes_saved, 0)
   const hasRunning    = results.some(r => r.status === 'running')
 
   const formatBytes = (bytes: number) => {
@@ -1326,12 +1535,37 @@ function ImagesPanel({ siteId, canManage }: { siteId: number; canManage: boolean
             <div className="flex items-center justify-between py-3 border-b border-gray-100">
               <div>
                 <p className="text-sm font-medium text-gray-800">Tạo file WebP</p>
-                <p className="text-xs text-gray-500 mt-0.5">Tự động tạo phiên bản .webp bên cạnh ảnh gốc</p>
+                <p className="text-xs text-gray-500 mt-0.5">Tự động tạo phiên bản .webp bên cạnh ảnh gốc khi optimize</p>
               </div>
               <button onClick={() => updateConfig.mutate({ webp_enabled: !config.webp_enabled })}
                 disabled={updateConfig.isPending}
                 className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${config.webp_enabled ? 'bg-blue-600' : 'bg-gray-300'}`}>
                 <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${config.webp_enabled ? 'translate-x-6' : 'translate-x-1'}`} />
+              </button>
+            </div>
+
+            {/* Nginx WebP serving toggle */}
+            <div className="flex items-center justify-between py-3 border-b border-gray-100">
+              <div>
+                <p className="text-sm font-medium text-gray-800">Nginx tự serve WebP</p>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  Browser hỗ trợ WebP → tự nhận <code className="bg-gray-100 px-1 rounded text-xs">.webp</code> thay vì <code className="bg-gray-100 px-1 rounded text-xs">.jpg/.png</code> — giảm ~40% dung lượng
+                </p>
+                {config.nginx_webp && (
+                  <span className="inline-flex items-center gap-1 mt-1 text-xs text-emerald-600 font-medium">
+                    <CheckCircle2 size={11} /> Đang hoạt động
+                  </span>
+                )}
+              </div>
+              <button
+                onClick={() => toggleNginxWebP.mutate(!config.nginx_webp)}
+                disabled={toggleNginxWebP.isPending}
+                className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${config.nginx_webp ? 'bg-emerald-500' : 'bg-gray-300'}`}
+              >
+                {toggleNginxWebP.isPending
+                  ? <Loader2 size={10} className="animate-spin absolute inset-0 m-auto text-white" />
+                  : <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${config.nginx_webp ? 'translate-x-6' : 'translate-x-1'}`} />
+                }
               </button>
             </div>
 
@@ -1389,9 +1623,44 @@ function ImagesPanel({ siteId, canManage }: { siteId: number; canManage: boolean
           )}
         </div>
 
-        {runOpt.isSuccess && !hasRunning && (
-          <div className="mx-5 mt-3 px-3 py-2 bg-emerald-50 text-emerald-700 text-xs rounded-lg border border-emerald-200">
-            ✓ Đã bắt đầu — kết quả sẽ hiển thị khi hoàn tất
+        {/* Live progress banner */}
+        {runningResult && (
+          <div className="mx-5 mt-3 px-4 py-3 bg-blue-50 border border-blue-200 rounded-xl">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2 text-blue-700 text-sm font-semibold">
+                <Loader2 size={14} className="animate-spin" />
+                Đang tối ưu ảnh...
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-blue-500">
+                  {runningResult.optimized_count + runningResult.skipped_count} / {runningResult.total_images > 0 ? runningResult.total_images : '?'}
+                </span>
+                {canManage && (
+                  <button
+                    onClick={() => cancelOpt.mutate()}
+                    disabled={cancelOpt.isPending}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-red-600 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 disabled:opacity-50 transition-colors"
+                  >
+                    {cancelOpt.isPending ? <Loader2 size={10} className="animate-spin" /> : <X size={10} />}
+                    Hủy
+                  </button>
+                )}
+              </div>
+            </div>
+            {/* Progress bar */}
+            {runningResult.total_images > 0 && (
+              <div className="w-full bg-blue-100 rounded-full h-1.5 mb-2">
+                <div
+                  className="bg-blue-500 h-1.5 rounded-full transition-all duration-500"
+                  style={{ width: `${Math.min(100, Math.round(((runningResult.optimized_count + runningResult.skipped_count) / runningResult.total_images) * 100))}%` }}
+                />
+              </div>
+            )}
+            <div className="flex gap-4 text-xs text-blue-600">
+              <span>✓ Tối ưu: <strong>{runningResult.optimized_count}</strong></span>
+              <span>⏭ Bỏ qua: <strong>{runningResult.skipped_count}</strong></span>
+              <span>💾 Tiết kiệm: <strong>{formatBytes(runningResult.bytes_saved)}</strong></span>
+            </div>
           </div>
         )}
 
@@ -1426,12 +1695,13 @@ function ImagesPanel({ siteId, canManage }: { siteId: number; canManage: boolean
                       <td className="px-4 py-3 text-right font-semibold text-blue-600">{formatBytes(r.bytes_saved)}</td>
                       <td className="px-4 py-3 text-center">
                         <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full ${
-                          r.status === 'completed' ? 'bg-emerald-100 text-emerald-700' :
-                          r.status === 'running'   ? 'bg-blue-100 text-blue-700' :
+                          r.status === 'completed'  ? 'bg-emerald-100 text-emerald-700' :
+                          r.status === 'running'    ? 'bg-blue-100 text-blue-700' :
+                          r.status === 'cancelled'  ? 'bg-amber-100 text-amber-700' :
                           'bg-red-100 text-red-700'
                         }`}>
                           {r.status === 'running' && <Loader2 size={10} className="animate-spin" />}
-                          {r.status === 'completed' ? 'Hoàn tất' : r.status === 'running' ? 'Đang chạy' : 'Lỗi'}
+                          {r.status === 'completed' ? 'Hoàn tất' : r.status === 'running' ? 'Đang chạy' : r.status === 'cancelled' ? 'Đã hủy' : 'Lỗi'}
                         </span>
                       </td>
                     </tr>
@@ -1447,12 +1717,13 @@ function ImagesPanel({ siteId, canManage }: { siteId: number; canManage: boolean
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-xs text-gray-500">{formatDate(r.started_at)}</span>
                     <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full ${
-                      r.status === 'completed' ? 'bg-emerald-100 text-emerald-700' :
-                      r.status === 'running'   ? 'bg-blue-100 text-blue-700' :
+                      r.status === 'completed'  ? 'bg-emerald-100 text-emerald-700' :
+                      r.status === 'running'    ? 'bg-blue-100 text-blue-700' :
+                      r.status === 'cancelled'  ? 'bg-amber-100 text-amber-700' :
                       'bg-red-100 text-red-700'
                     }`}>
                       {r.status === 'running' && <Loader2 size={10} className="animate-spin" />}
-                      {r.status === 'completed' ? 'Hoàn tất' : r.status === 'running' ? 'Đang chạy' : 'Lỗi'}
+                      {r.status === 'completed' ? 'Hoàn tất' : r.status === 'running' ? 'Đang chạy' : r.status === 'cancelled' ? 'Đã hủy' : 'Lỗi'}
                     </span>
                   </div>
                   <div className="flex gap-4 text-xs text-gray-600">

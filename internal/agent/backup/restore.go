@@ -344,12 +344,12 @@ func restoreDatabase(extractRoot string, m *Manifest) error {
 	exec.Command("mysql", "-u", "root", "-e", dropRecreateSQL).Run()
 
 	// Import SQL dump
-	cmd := fmt.Sprintf("mysql --user=%s --password=%s %s < %s",
+	cmd := fmt.Sprintf("mysql --binary-mode=1 --user=%s --password=%s %s < %s",
 		m.DBUser, m.DBPass, m.DBName, sqlFile)
 	shellCmd := exec.Command("bash", "-c", cmd)
 	if out, err := shellCmd.CombinedOutput(); err != nil {
 		// Fallback: try as root
-		cmd2 := fmt.Sprintf("mysql %s < %s", m.DBName, sqlFile)
+		cmd2 := fmt.Sprintf("mysql --binary-mode=1 %s < %s", m.DBName, sqlFile)
 		if out2, err2 := exec.Command("bash", "-c", cmd2).CombinedOutput(); err2 != nil {
 			return fmt.Errorf("database import failed: %s / %s", string(out), string(out2))
 		}

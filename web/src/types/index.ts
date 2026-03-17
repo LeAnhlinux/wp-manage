@@ -491,6 +491,7 @@ export interface ImageOptConfig {
   enabled: boolean
   quality: number
   webp_enabled: boolean
+  nginx_webp: boolean
   max_width: number
   max_height: number
 }
@@ -772,6 +773,15 @@ export interface InstalledPHPVersion {
   installed: boolean
   fpm_active: boolean
   opcache_enabled: boolean
+}
+
+// ==================== ionCube ====================
+
+export interface IonCubeVersionStatus {
+  version: string
+  installed: boolean // .so file present in PHP extension_dir
+  enabled: boolean   // 00-ioncube.ini exists in fpm conf.d
+  supported: boolean // ionCube officially supports this PHP version
 }
 
 export interface InstallPHPVersionRequest {

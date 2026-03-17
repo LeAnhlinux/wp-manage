@@ -76,14 +76,30 @@ func NewManager(onProgress ProgressFunc) *Manager {
 	return &Manager{onProgress: onProgress}
 }
 
-// GetWPVersion returns the WordPress version installed at the given webroot.
+// GetWPVersion reads the WordPress version directly from wp-includes/version.php.
+// This avoids WP-CLI/PHP entirely — works with any PHP version, ionCube themes, etc.
 func GetWPVersion(domain string) string {
-	webRoot := fmt.Sprintf("/var/www/%s/public", domain)
-	out, err := exec.Command("wp", "core", "version", "--path="+webRoot, "--allow-root").Output()
+	versionFile := fmt.Sprintf("/var/www/%s/public/wp-includes/version.php", domain)
+	data, err := os.ReadFile(versionFile)
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "$wp_version") && strings.Contains(line, "=") {
+			if s := strings.Index(line, "'"); s >= 0 {
+				if e := strings.LastIndex(line, "'"); e > s {
+					return line[s+1 : e]
+				}
+			}
+			if s := strings.Index(line, `"`); s >= 0 {
+				if e := strings.LastIndex(line, `"`); e > s {
+					return line[s+1 : e]
+				}
+			}
+		}
+	}
+	return ""
 }
 
 func (m *Manager) CreateSite(params CreateParams) error {
@@ -174,6 +190,9 @@ func (m *Manager) DeleteSite(domain, dbName, dbUser string) error {
 	// Revoke & delete SSL certificate (certbot)
 	exec.Command("certbot", "delete", "--cert-name", domain, "--non-interactive").Run()
 
+	// Kill any active connections to the DB before dropping (prevents metadata lock hang)
+	killDBConnections(dbName)
+
 	// Drop database and user
 	runSQL(fmt.Sprintf("DROP DATABASE IF EXISTS `%s`", dbName))
 	runSQL(fmt.Sprintf("DROP USER IF EXISTS '%s'@'localhost'", dbUser))
@@ -214,7 +233,18 @@ func (m *Manager) CreateSiteManual(params CreateParams) error {
 		{"configure_nginx", 60, func() error { return m.configureNginx(params, webRoot, phpVer) }},
 		{"configure_php_fpm", 75, func() error { return m.configurePHPPool(params, phpVer) }},
 		{"set_permissions", 90, func() error { return m.setPermissions(siteRoot, params.Domain) }},
-		{"finalize", 100, func() error { return m.reload() }},
+		{"finalize", 95, func() error { return m.reload() }},
+		{"issue_ssl", 100, func() error {
+			if !params.SSLEnabled {
+				return nil
+			}
+			if err := m.issueSSL(params.Domain, params.WPAdminEmail); err != nil {
+				// SSL failure is non-fatal — site still works over HTTP.
+				// Log and continue; user can issue SSL later via the panel.
+				slog.Warn("SSL issue failed during manual site create (non-fatal)", "domain", params.Domain, "error", err)
+			}
+			return nil
+		}},
 	}
 
 	for _, step := range steps {
@@ -312,7 +342,11 @@ func replaceWPDefine(content, key, value string) string {
 	// Escape single quotes in value to avoid breaking the PHP string
 	safeVal := strings.ReplaceAll(value, "'", "\\'")
 	re := regexp.MustCompile(`(?i)define\s*\(\s*['"]` + regexp.QuoteMeta(key) + `['"]\s*,\s*['"][^'"]*['"]\s*\)`)
-	return re.ReplaceAllString(content, fmt.Sprintf("define( '%s', '%s' )", key, safeVal))
+	// Use ReplaceAllLiteralString (NOT ReplaceAllString) so that $ in the replacement
+	// value is treated literally, not as a capture-group reference ($1, $j, etc.).
+	// Example: password "abc$j" would have "$j" silently dropped by ReplaceAllString.
+	replacement := fmt.Sprintf("define( '%s', '%s' )", key, safeVal)
+	return re.ReplaceAllLiteralString(content, replacement)
 }
 
 // extractZipNative extracts a zip file to destDir using Go's archive/zip (no external tools needed).
@@ -356,7 +390,9 @@ func extractZipNative(zipPath, destDir string) error {
 // ImportDatabase imports a SQL file into the site's database.
 // After import, wp-cli is used to set the correct siteurl/home for `domain`.
 // If oldDomain is non-empty, a full wp search-replace is run first to rewrite all URLs.
-func (m *Manager) ImportDatabase(dbName, sqlPath, domain, oldDomain string) error {
+// phpVersion (e.g. "8.1") selects the correct PHP binary for WP-CLI — critical for sites
+// using ionCube-encoded themes/plugins where the default system PHP may lack the loader.
+func (m *Manager) ImportDatabase(dbName, sqlPath, domain, oldDomain, phpVersion string) error {
 	defer os.Remove(sqlPath)
 
 	// Support .sql, .gz, .sql.gz, and .zip — all decompressed using Go builtins (no external binaries)
@@ -382,7 +418,10 @@ func (m *Manager) ImportDatabase(dbName, sqlPath, domain, oldDomain string) erro
 		return fmt.Errorf("SQL file is empty (0 bytes) — the zip may not contain a valid database dump")
 	}
 
-	cmd := exec.Command("sh", "-c", fmt.Sprintf("mariadb '%s' < '%s'", dbName, sqlPath))
+	// Kill existing connections before importing to prevent metadata lock issues
+	killDBConnections(dbName)
+
+	cmd := exec.Command("sh", "-c", fmt.Sprintf("mariadb --binary-mode=1 '%s' < '%s'", dbName, sqlPath))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("import failed: %s", string(out))
 	}
@@ -408,33 +447,78 @@ func (m *Manager) ImportDatabase(dbName, sqlPath, domain, oldDomain string) erro
 	}
 	siteURL := fmt.Sprintf("%s://%s", scheme, domain)
 
-	// If old domain is provided, rewrite all occurrences (posts, meta, options, etc.)
+	// Build WP-CLI invocation using the correct PHP binary for this site.
+	// This is critical for sites using ionCube-encoded themes/plugins: the
+	// system default PHP (e.g. 8.3) may not have the ionCube loader for the
+	// version the theme was encoded with (e.g. 8.1).
+	phpBin := phpBinaryForVersion(phpVersion)
+	wpBin := wpcliBinary()
+	// wp <cmd> --path=<webRoot> --allow-root
+	wpRun := func(args ...string) *exec.Cmd {
+		cmdArgs := append([]string{phpBin, wpBin, "--path=" + webRoot, "--allow-root"}, args...)
+		return exec.Command(cmdArgs[0], cmdArgs[1:]...)
+	}
+
+	// ── Step 1: search-replace old domain across all tables ─────────────────────
+	// Use --skip-themes --skip-plugins to avoid fatal errors from incompatible
+	// themes/plugins (e.g. create_function() removed in PHP 8.0, ionCube files).
 	if oldDomain != "" && oldDomain != domain {
-		slog.Info("Running wp search-replace for domain change", "old", oldDomain, "new", domain)
-		// Replace plain domain references
-		exec.Command("bash", "-c", fmt.Sprintf(
-			`cd %s && wp search-replace "%s" "%s" --all-tables --allow-root 2>/dev/null`,
-			webRoot, oldDomain, domain)).Run()
-		// Normalise http→https if SSL is enabled
+		slog.Info("Running wp search-replace for domain change", "old", oldDomain, "new", domain, "php", phpBin)
+		wpRun("search-replace", oldDomain, domain, "--all-tables", "--skip-themes", "--skip-plugins").Run()
 		if scheme == "https" {
-			exec.Command("bash", "-c", fmt.Sprintf(
-				`cd %s && wp search-replace "http://%s" "https://%s" --all-tables --allow-root 2>/dev/null`,
-				webRoot, domain, domain)).Run()
+			wpRun("search-replace", "http://"+domain, "https://"+domain, "--all-tables", "--skip-themes", "--skip-plugins").Run()
 		}
 	}
 
-	// Always force siteurl and home to the correct value (handles cases where
-	// old_domain was not supplied but the DB had a different URL).
-	out2, err2 := exec.Command("bash", "-c", fmt.Sprintf(
-		`cd %s && wp option update siteurl "%s" --allow-root 2>&1 && wp option update home "%s" --allow-root 2>&1`,
-		webRoot, siteURL, siteURL)).CombinedOutput()
-	if err2 != nil {
-		slog.Warn("wp option update failed (wp-cli not available or not a WP site)", "output", string(out2))
+	// ── Step 2: Force siteurl + home via direct SQL (100% reliable) ───────────
+	// WP-CLI requires loading WordPress (theme + plugins) which can fatal-error
+	// on PHP version mismatches. Direct SQL bypasses PHP entirely and always works.
+	// Detect the options table dynamically — handles any table prefix (wp_, motphim_, etc.)
+	tableOut, tableErr := exec.Command("mariadb", "-sN", dbName, "-e",
+		"SELECT table_name FROM information_schema.columns WHERE table_schema = DATABASE() "+
+			"AND column_name = 'option_name' AND table_name LIKE '%options' LIMIT 1;",
+	).Output()
+	if tableErr == nil && len(strings.TrimSpace(string(tableOut))) > 0 {
+		optTable := strings.TrimSpace(string(tableOut))
+		sqlUpdate := fmt.Sprintf(
+			"UPDATE `%s` SET option_value = '%s' WHERE option_name IN ('siteurl', 'home');",
+			optTable, siteURL,
+		)
+		if err := exec.Command("mariadb", dbName, "-e", sqlUpdate).Run(); err != nil {
+			slog.Warn("SQL siteurl/home update failed", "table", optTable, "error", err)
+		} else {
+			slog.Info("WordPress siteurl/home updated via SQL", "domain", domain, "url", siteURL, "table", optTable)
+		}
 	} else {
-		slog.Info("WordPress site URL updated", "domain", domain, "url", siteURL)
+		// Fallback: WP-CLI with skip flags
+		slog.Warn("Could not detect options table via SQL, falling back to wp-cli", "db", dbName)
+		wpRun("option", "update", "siteurl", siteURL, "--skip-themes", "--skip-plugins").Run()
+		wpRun("option", "update", "home", siteURL, "--skip-themes", "--skip-plugins").Run()
 	}
 
 	return nil
+}
+
+// phpBinaryForVersion returns /usr/bin/phpX.Y if it exists, else falls back to "php".
+func phpBinaryForVersion(phpVersion string) string {
+	if phpVersion == "" {
+		return "php"
+	}
+	bin := fmt.Sprintf("/usr/bin/php%s", phpVersion)
+	if _, err := os.Stat(bin); err == nil {
+		return bin
+	}
+	return "php"
+}
+
+// wpcliBinary returns the path to the wp-cli binary.
+func wpcliBinary() string {
+	for _, p := range []string{"/usr/local/bin/wp", "/usr/bin/wp"} {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return "wp"
 }
 
 // extractSQLFromZip opens a zip archive using Go's built-in archive/zip,
@@ -482,14 +566,20 @@ func extractSQLFromZip(zipPath string) (string, error) {
 		if f.FileInfo().IsDir() {
 			continue
 		}
+		// Skip macOS metadata files (__MACOSX/ and ._* resource forks)
+		base := filepath.Base(f.Name)
+		if strings.HasPrefix(f.Name, "__MACOSX/") || strings.HasPrefix(base, "._") {
+			continue
+		}
 		allNames = append(allNames, f.Name)
 		lower := strings.ToLower(f.Name)
 		if strings.HasSuffix(lower, ".sql") {
-			if sqlFile == nil || f.Name < sqlFile.Name {
+			if sqlFile == nil || f.UncompressedSize64 > sqlFile.UncompressedSize64 {
+				// prefer the largest .sql file (most likely the real dump, not a stub)
 				sqlFile = f
 			}
 		} else if strings.HasSuffix(lower, ".sql.gz") || strings.HasSuffix(lower, "-db.gz") || strings.HasSuffix(lower, "_db.gz") {
-			if sqlGzFile == nil || f.Name < sqlGzFile.Name {
+			if sqlGzFile == nil || f.UncompressedSize64 > sqlGzFile.UncompressedSize64 {
 				sqlGzFile = f
 			}
 		}
@@ -645,7 +735,26 @@ func (m *Manager) configureNginx(p CreateParams, webRoot, phpVer string) error {
         fastcgi_read_timeout 300;
     }
 
-    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
+    # Serve WebP: rewrite URI when browser supports it and .webp file exists
+    # Requires: map $http_accept $webp_accept in /etc/nginx/conf.d/webp.conf
+    location ~* \.(jpe?g|png)$ {
+        expires 30d;
+        add_header Cache-Control "public, immutable";
+        add_header Vary Accept;
+        set $do_webp "";
+        if ($webp_accept) { set $do_webp "A"; }
+        if (-f $request_filename.webp) { set $do_webp "${do_webp}B"; }
+        if ($do_webp = "AB") { rewrite ^(.+)$ $1.webp last; }
+    }
+    # Serve *.jpg.webp / *.png.webp with correct content-type
+    location ~* \.(jpg|jpeg|png)\.webp$ {
+        expires 30d;
+        add_header Cache-Control "public, immutable";
+        add_header Vary Accept;
+        default_type image/webp;
+    }
+
+    location ~* \.(js|css|gif|ico|svg|woff|woff2|ttf|eot)$ {
         expires 30d;
         add_header Cache-Control "public, immutable";
     }
@@ -688,8 +797,142 @@ func (m *Manager) configureNginx(p CreateParams, webRoot, phpVer string) error {
 	enabledPath := fmt.Sprintf("/etc/nginx/sites-enabled/%s.conf", p.Domain)
 	os.Symlink(confPath, enabledPath)
 
-	// Test config
-	return exec.Command("nginx", "-t").Run()
+	// Test config — roll back if broken so nginx stays healthy
+	if out, err := exec.Command("nginx", "-t").CombinedOutput(); err != nil {
+		os.Remove(enabledPath)
+		os.Remove(confPath)
+		return fmt.Errorf("nginx -t failed: %s", string(out))
+	}
+	return nil
+}
+
+// ensureWebPConfd creates /etc/nginx/conf.d/webp.conf with the http-level map directive.
+// This must exist for the per-site WebP location blocks to work.
+func ensureWebPConfd() {
+	confPath := "/etc/nginx/conf.d/webp.conf"
+	if _, err := os.Stat(confPath); err == nil {
+		return // already exists
+	}
+	content := "# WebP auto-serving: detect browser support via Accept header\n" +
+		"map $http_accept $webp_accept {\n" +
+		"    default   0;\n" +
+		"    \"~*webp\" 1;\n" +
+		"}\n"
+	os.WriteFile(confPath, []byte(content), 0644)
+}
+
+const webpLocationBlock = `    # Serve WebP: rewrite URI when browser supports it and .webp file exists
+    # Requires: map $http_accept $webp_accept in /etc/nginx/conf.d/webp.conf
+    location ~* \.(jpe?g|png)$ {
+        expires 30d;
+        add_header Cache-Control "public, immutable";
+        add_header Vary Accept;
+        set $do_webp "";
+        if ($webp_accept) { set $do_webp "A"; }
+        if (-f $request_filename.webp) { set $do_webp "${do_webp}B"; }
+        if ($do_webp = "AB") { rewrite ^(.+)$ $1.webp last; }
+    }
+    # Serve *.jpg.webp / *.png.webp with correct content-type
+    location ~* \.(jpg|jpeg|png)\.webp$ {
+        expires 30d;
+        add_header Cache-Control "public, immutable";
+        add_header Vary Accept;
+        default_type image/webp;
+    }
+`
+
+// EnsureWebPNginx patches an existing site's nginx config to serve WebP automatically.
+// Also creates /etc/nginx/conf.d/webp.conf with the http-level map if missing.
+// Safe to call multiple times (idempotent).
+func EnsureWebPNginx(domain string) error {
+	ensureWebPConfd()
+
+	confPath := fmt.Sprintf("/etc/nginx/sites-available/%s.conf", domain)
+	data, err := os.ReadFile(confPath)
+	if err != nil {
+		return fmt.Errorf("nginx config not found: %w", err)
+	}
+	content := string(data)
+
+	// Already patched?
+	if strings.Contains(content, "do_webp") {
+		return nil
+	}
+
+	// Replace old static assets block with new WebP-aware blocks
+	oldBlock := "    location ~* \\.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {\n        expires 30d;\n        add_header Cache-Control \"public, immutable\";\n    }"
+	newBlock := webpLocationBlock + "\n    location ~* \\.(js|css|gif|ico|svg|woff|woff2|ttf|eot)$ {\n        expires 30d;\n        add_header Cache-Control \"public, immutable\";\n    }"
+
+	if strings.Contains(content, oldBlock) {
+		content = strings.Replace(content, oldBlock, newBlock, 1)
+	} else if !strings.Contains(content, "do_webp") {
+		// Fallback: inject before last closing brace
+		idx := strings.LastIndex(content, "\n}")
+		if idx < 0 {
+			return fmt.Errorf("cannot locate end of server block")
+		}
+		content = content[:idx] + "\n" + webpLocationBlock + content[idx:]
+	}
+
+	if err := os.WriteFile(confPath, []byte(content), 0644); err != nil {
+		return err
+	}
+	if out, err := exec.Command("nginx", "-t").CombinedOutput(); err != nil {
+		os.WriteFile(confPath, data, 0644) // revert
+		return fmt.Errorf("nginx -t failed after webp patch: %s", out)
+	}
+	exec.Command("systemctl", "reload", "nginx").Run()
+	return nil
+}
+
+// RevertWebPNginx removes WebP location blocks from a site's nginx config.
+func RevertWebPNginx(domain string) error {
+	confPath := fmt.Sprintf("/etc/nginx/sites-available/%s.conf", domain)
+	data, err := os.ReadFile(confPath)
+	if err != nil {
+		return fmt.Errorf("nginx config not found: %w", err)
+	}
+	content := string(data)
+
+	if !strings.Contains(content, "do_webp") {
+		return nil // already clean
+	}
+
+	// Remove WebP location blocks and the js/css block, replace with original combined block
+	// Find start of WebP comment block
+	webpMarker := "    # Serve WebP: rewrite URI"
+	jsMarker := "    location ~* \\.(js|css|gif|ico|svg"
+	closingJs := "    }"
+
+	start := strings.Index(content, webpMarker)
+	if start < 0 {
+		return nil
+	}
+	// Find the end of the js/css block (after webp blocks)
+	jsStart := strings.Index(content[start:], jsMarker)
+	if jsStart < 0 {
+		return nil
+	}
+	jsStart += start
+	jsEnd := strings.Index(content[jsStart:], closingJs)
+	if jsEnd < 0 {
+		return nil
+	}
+	jsEnd += jsStart + len(closingJs)
+
+	// Replace everything from webp marker to end of js block with combined original block
+	originalBlock := "    location ~* \\.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {\n        expires 30d;\n        add_header Cache-Control \"public, immutable\";\n    }"
+	content = content[:start] + originalBlock + content[jsEnd:]
+
+	if err := os.WriteFile(confPath, []byte(content), 0644); err != nil {
+		return err
+	}
+	if out, err := exec.Command("nginx", "-t").CombinedOutput(); err != nil {
+		os.WriteFile(confPath, data, 0644) // revert
+		return fmt.Errorf("nginx -t failed after webp revert: %s", out)
+	}
+	exec.Command("systemctl", "reload", "nginx").Run()
+	return nil
 }
 
 func (m *Manager) configurePHPPool(p CreateParams, phpVer string) error {
@@ -914,4 +1157,26 @@ func (m *Manager) reload() error {
 
 func runSQL(query string) error {
 	return exec.Command("mariadb", "-e", query).Run()
+}
+
+// killDBConnections kills all active MariaDB connections to the given database.
+// This prevents "Waiting for metadata lock" when dropping a busy database.
+func killDBConnections(dbName string) {
+	if dbName == "" {
+		return
+	}
+	// Get all connection IDs using this DB
+	out, err := exec.Command("mariadb", "-sN", "-e",
+		fmt.Sprintf("SELECT id FROM information_schema.processlist WHERE db='%s' AND id != CONNECTION_ID();", dbName),
+	).Output()
+	if err != nil || len(out) == 0 {
+		return
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		id := strings.TrimSpace(line)
+		if id != "" {
+			exec.Command("mariadb", "-e", fmt.Sprintf("KILL %s;", id)).Run()
+		}
+	}
+	slog.Info("Killed DB connections before drop", "db", dbName)
 }

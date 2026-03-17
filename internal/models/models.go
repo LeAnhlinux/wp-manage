@@ -329,11 +329,12 @@ type PerformanceMetric struct {
 type ImageOptConfig struct {
 	ID          uint64    `json:"id" gorm:"primaryKey;autoIncrement"`
 	SiteID      uint64    `json:"site_id" gorm:"uniqueIndex;not null"`
-	Enabled     bool      `json:"enabled" gorm:"default:false"`
-	Quality     int       `json:"quality" gorm:"default:80"`
-	WebPEnabled bool      `json:"webp_enabled" gorm:"default:true"`
-	MaxWidth    int       `json:"max_width" gorm:"default:2560"`
-	MaxHeight   int       `json:"max_height" gorm:"default:2560"`
+	Enabled        bool      `json:"enabled" gorm:"default:false"`
+	Quality        int       `json:"quality" gorm:"default:80"`
+	WebPEnabled    bool      `json:"webp_enabled" gorm:"default:true"`
+	NginxWebP      bool      `json:"nginx_webp" gorm:"default:false"`
+	MaxWidth       int       `json:"max_width" gorm:"default:2560"`
+	MaxHeight      int       `json:"max_height" gorm:"default:2560"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 	Site        *Site     `json:"site,omitempty" gorm:"foreignKey:SiteID"`

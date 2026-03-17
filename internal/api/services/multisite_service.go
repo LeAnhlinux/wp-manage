@@ -50,9 +50,14 @@ func (s *MultisiteService) EnableMultisite(siteID uint64, msType string) error {
 // EnableMultisiteComplete handles agent callback after multisite is enabled
 func (s *MultisiteService) EnableMultisiteComplete(result models.AgentEnableMultisiteResult) error {
 	if result.Status == "completed" {
-		return s.db.Model(&models.Site{}).Where("id = ?", result.SiteID).Updates(map[string]interface{}{
+		updates := map[string]interface{}{
 			"is_multisite": true,
-		}).Error
+		}
+		// Bug 3 fix: save multisite_type from echoed result
+		if result.Type != "" {
+			updates["multisite_type"] = result.Type
+		}
+		return s.db.Model(&models.Site{}).Where("id = ?", result.SiteID).Updates(updates).Error
 	}
 	return nil
 }
@@ -68,7 +73,7 @@ func (s *MultisiteService) GetSubsites(siteID uint64) ([]models.Subsite, error) 
 	}
 
 	var subsites []models.Subsite
-	if err := s.db.Where("site_id = ?", siteID).Order("wp_blog_id ASC").Find(&subsites).Error; err != nil {
+	if err := s.db.Where("site_id = ? AND status != ?", siteID, "deleted").Order("wp_blog_id ASC").Find(&subsites).Error; err != nil {
 		return nil, err
 	}
 	return subsites, nil
@@ -110,7 +115,7 @@ func (s *MultisiteService) CreateSubsiteComplete(result models.AgentCreateSubsit
 			WPBlogID: result.WPBlogID,
 			Domain:   result.Domain,
 			Path:     result.Path,
-			Title:    "",
+			Title:    result.Title, // Bug 2 fix: use title from agent
 			Status:   "active",
 		}
 		return s.db.Create(&subsite).Error
@@ -119,6 +124,7 @@ func (s *MultisiteService) CreateSubsiteComplete(result models.AgentCreateSubsit
 }
 
 // DeleteSubsite creates a task to delete a subsite
+// Bug 1 fix: do NOT mark as deleted here — wait for agent callback to confirm
 func (s *MultisiteService) DeleteSubsite(siteID, subsiteID uint64) error {
 	var subsite models.Subsite
 	if err := s.db.First(&subsite, subsiteID).Error; err != nil {
@@ -147,12 +153,25 @@ func (s *MultisiteService) DeleteSubsite(siteID, subsiteID uint64) error {
 		Data:     string(data),
 		Status:   "pending",
 	}
+	// Mark as "deleting" (pending) — actual deletion confirmed via callback
 	if err := s.db.Create(&task).Error; err != nil {
 		return err
 	}
+	return s.db.Model(&subsite).Update("status", "deleting").Error
+}
 
-	// Mark as deleted
-	return s.db.Model(&subsite).Update("status", "deleted").Error
+// DeleteSubsiteComplete handles agent callback after subsite is deleted
+// Bug 1 fix: only mark deleted after agent confirms, rollback on failure
+func (s *MultisiteService) DeleteSubsiteComplete(result models.AgentDeleteSubsiteResult) error {
+	if result.Status == "completed" {
+		return s.db.Model(&models.Subsite{}).
+			Where("site_id = ? AND wp_blog_id = ?", result.SiteID, result.WPBlogID).
+			Update("status", "deleted").Error
+	}
+	// Agent failed — rollback to active so user can retry
+	return s.db.Model(&models.Subsite{}).
+		Where("site_id = ? AND wp_blog_id = ? AND status = ?", result.SiteID, result.WPBlogID, "deleting").
+		Update("status", "active").Error
 }
 
 // SyncSubsites creates a task to sync subsites from WP-CLI
@@ -187,22 +206,69 @@ func (s *MultisiteService) SyncSubsitesComplete(result models.AgentListSubsitesR
 		return nil
 	}
 
-	// Delete existing subsites for this site and recreate
-	s.db.Where("site_id = ?", result.SiteID).Delete(&models.Subsite{})
+	// Upsert: update existing, insert new, mark missing as deleted
+	// Bug (sync destructive) fix: use transaction + upsert instead of delete-all-recreate
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		// Build map of blog_id → subsite data from agent
+		agentMap := make(map[int]struct {
+			Domain string
+			Path   string
+			Title  string
+		})
+		for _, sub := range result.Subsites {
+			if sub.BlogID == 1 {
+				continue // skip main site
+			}
+			agentMap[sub.BlogID] = struct {
+				Domain string
+				Path   string
+				Title  string
+			}{sub.Domain, sub.Path, sub.Title}
+		}
 
-	for _, sub := range result.Subsites {
-		if sub.BlogID == 1 {
-			continue // Skip main site (blog_id=1)
+		// Fetch existing subsites from DB
+		var existing []models.Subsite
+		if err := tx.Where("site_id = ?", result.SiteID).Find(&existing).Error; err != nil {
+			return err
 		}
-		subsite := models.Subsite{
-			SiteID:   result.SiteID,
-			WPBlogID: sub.BlogID,
-			Domain:   sub.Domain,
-			Path:     sub.Path,
-			Title:    sub.Title,
-			Status:   "active",
+		existingMap := make(map[int]uint64) // blog_id → db id
+		for _, s := range existing {
+			existingMap[s.WPBlogID] = s.ID
 		}
-		s.db.Create(&subsite)
-	}
-	return nil
+
+		// Update or insert from agent data
+		for blogID, data := range agentMap {
+			if dbID, exists := existingMap[blogID]; exists {
+				// Update existing
+				tx.Model(&models.Subsite{}).Where("id = ?", dbID).Updates(map[string]interface{}{
+					"domain": data.Domain,
+					"path":   data.Path,
+					"title":  data.Title,
+					"status": "active",
+				})
+			} else {
+				// Insert new
+				tx.Create(&models.Subsite{
+					SiteID:   result.SiteID,
+					WPBlogID: blogID,
+					Domain:   data.Domain,
+					Path:     data.Path,
+					Title:    data.Title,
+					Status:   "active",
+				})
+			}
+		}
+
+		// Mark as deleted if not in agent response
+		for _, sub := range existing {
+			if sub.WPBlogID == 1 {
+				continue
+			}
+			if _, inAgent := agentMap[sub.WPBlogID]; !inAgent {
+				tx.Model(&sub).Update("status", "deleted")
+			}
+		}
+
+		return nil
+	})
 }

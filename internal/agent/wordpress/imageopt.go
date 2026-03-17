@@ -1,18 +1,28 @@
 package wordpress
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gofiber-team/wp-manage/internal/models"
 )
 
-// OptimizeImages runs image optimization on a site's uploads directory
-func OptimizeImages(task models.AgentImageOptTask) models.AgentImageOptResult {
+const (
+	imageOptTimeout       = 60 * time.Minute // hard stop after 60 min
+	imageOptProgressEvery = 50               // send progress update every N processed images
+)
+
+// OptimizeImages runs image optimization on a site's uploads directory.
+// progressFn is called every imageOptProgressEvery images; returns true to cancel.
+func OptimizeImages(task models.AgentImageOptTask, progressFn func(models.AgentImageOptResult) bool) models.AgentImageOptResult {
 	result := models.AgentImageOptResult{
 		ResultID: task.ResultID,
 		SiteID:   task.SiteID,
@@ -50,13 +60,22 @@ func OptimizeImages(task models.AgentImageOptTask) models.AgentImageOptResult {
 	result.TotalImages = len(images)
 	slog.Info("Found images to optimize", "count", len(images), "domain", task.Domain)
 
+	deadline := time.Now().Add(imageOptTimeout)
+	processedCount := 0
+
 	for _, imgPath := range images {
+		// Enforce timeout (60 min hard stop)
+		if time.Now().After(deadline) {
+			slog.Info("Image optimization timeout reached", "domain", task.Domain)
+			break
+		}
 		// Check if already optimized (marker file)
 		markerFile := imgPath + ".wpmanage-optimized"
 		if _, err := os.Stat(markerFile); err == nil {
 			result.SkippedCount++
 			continue
 		}
+		processedCount++
 
 		// Get original size
 		info, err := os.Stat(imgPath)
@@ -101,18 +120,33 @@ func OptimizeImages(task models.AgentImageOptTask) models.AgentImageOptResult {
 				}
 			}
 
+			siteUser := "wp_" + strings.ReplaceAll(task.Domain, ".", "_")
+
 			// Generate WebP version
 			if task.WebPEnabled {
 				webpPath := imgPath + ".webp"
 				if _, err := os.Stat(webpPath); os.IsNotExist(err) {
 					cmd := exec.Command("cwebp", "-q", fmt.Sprintf("%d", task.Quality), imgPath, "-o", webpPath)
-					cmd.Run() // Best-effort, don't fail on WebP conversion
+					if cmd.Run() == nil {
+						// Fix ownership — agent runs as root, webp must belong to site user
+						exec.Command("chown", siteUser+":"+siteUser, webpPath).Run()
+					}
 				}
 			}
 
-			// Create marker file
+			// Create marker file and fix ownership
 			os.WriteFile(markerFile, []byte(""), 0644)
+			exec.Command("chown", siteUser+":"+siteUser, markerFile).Run()
 			result.OptimizedCount++
+		}
+
+		// Send progress update every imageOptProgressEvery images; cancel if requested
+		if progressFn != nil && processedCount%imageOptProgressEvery == 0 {
+			if cancelled := progressFn(result); cancelled {
+				slog.Info("Image optimization cancelled by user", "domain", task.Domain)
+				result.Status = "cancelled"
+				return result
+			}
 		}
 	}
 
@@ -125,6 +159,34 @@ func OptimizeImages(task models.AgentImageOptTask) models.AgentImageOptResult {
 		"saved_bytes", result.BytesSaved)
 
 	return result
+}
+
+// SendProgressUpdate posts a progress update to the API.
+// Returns true if the API signals to cancel the run.
+func SendProgressUpdate(apiURL, apiKey string, result models.AgentImageOptResult) bool {
+	data, err := json.Marshal(result)
+	if err != nil {
+		return false
+	}
+	req, err := http.NewRequest("POST", apiURL+"/api/v1/agent/images/optimize/progress", bytes.NewReader(data))
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Agent-Key", apiKey)
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		slog.Debug("Progress update failed", "error", err)
+		return false
+	}
+	defer resp.Body.Close()
+	// API returns {cancel: true} when user requested cancellation
+	var reply struct {
+		Cancel bool `json:"cancel"`
+	}
+	json.NewDecoder(resp.Body).Decode(&reply)
+	return reply.Cancel
 }
 
 // ensureOptTools ensures optimization tools are installed

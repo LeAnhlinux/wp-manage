@@ -3,6 +3,7 @@ package wordpress
 import (
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -18,8 +19,33 @@ type WPCLIResult struct {
 	Error    string `json:"error,omitempty"`
 }
 
-// ExecuteWPCLI runs a wp-cli command for a given domain
-func ExecuteWPCLI(domain, command string) (*WPCLIResult, error) {
+// phpBinaryForVersion returns the PHP binary path for a given version string (e.g., "8.1" → "/usr/bin/php8.1").
+// Falls back to the system default "php" if version is empty or the binary doesn't exist.
+func phpBinaryForVersion(phpVersion string) string {
+	if phpVersion == "" {
+		return "php"
+	}
+	bin := fmt.Sprintf("/usr/bin/php%s", phpVersion)
+	if _, err := os.Stat(bin); err == nil {
+		return bin
+	}
+	return "php"
+}
+
+// wpcliBinary returns the path to the wp-cli phar/binary.
+func wpcliBinary() string {
+	for _, p := range []string{"/usr/local/bin/wp", "/usr/bin/wp"} {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return "wp"
+}
+
+// ExecuteWPCLI runs a wp-cli command for a given domain using the site's configured PHP version.
+// The WP-CLI process is invoked via "php<version> /usr/local/bin/wp" so that ionCube-encoded
+// theme/plugin files are loaded in the correct PHP runtime.
+func ExecuteWPCLI(domain, phpVersion, command string) (*WPCLIResult, error) {
 	wpPath := fmt.Sprintf("/var/www/%s/public", domain)
 
 	// Security: block dangerous commands
@@ -34,19 +60,24 @@ func ExecuteWPCLI(domain, command string) (*WPCLIResult, error) {
 		}
 	}
 
-	// Build wp command — run as the site's Linux user (not root)
+	phpBin := phpBinaryForVersion(phpVersion)
+	wpBin := wpcliBinary()
 	siteUser := siteUserForDomain(domain)
-	wpArgs := append([]string{"--path=" + wpPath}, strings.Fields(command)...)
-	allArgs := append([]string{"-u", siteUser, "wp"}, wpArgs...)
 
-	slog.Info("Executing WP-CLI", "domain", domain, "command", command, "user", siteUser)
+	// Invoke WP-CLI via the site's PHP binary so ionCube-encoded files run in the correct PHP version.
+	// e.g.: sudo -u wp_example_com /usr/bin/php8.1 /usr/local/bin/wp --path=... plugin list
+	wpArgs := append([]string{phpBin, wpBin, "--path=" + wpPath}, strings.Fields(command)...)
+	allArgs := append([]string{"-u", siteUser}, wpArgs...)
+
+	slog.Info("Executing WP-CLI", "domain", domain, "command", command, "user", siteUser, "php", phpBin)
 	cmd := exec.Command("sudo", allArgs...)
 	output, err := cmd.CombinedOutput()
 
-	// Fallback: if sudo fails, try as root with --allow-root
+	// Fallback: try as root with --allow-root using the same PHP binary
 	if err != nil {
-		rootArgs := append([]string{"--path=" + wpPath, "--allow-root"}, strings.Fields(command)...)
-		cmd2 := exec.Command("wp", rootArgs...)
+		rootArgs := []string{phpBin, wpBin, "--path=" + wpPath, "--allow-root"}
+		rootArgs = append(rootArgs, strings.Fields(command)...)
+		cmd2 := exec.Command("sudo", rootArgs...)
 		if out2, err2 := cmd2.CombinedOutput(); err2 == nil {
 			output = out2
 			err = nil

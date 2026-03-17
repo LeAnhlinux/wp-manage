@@ -163,6 +163,20 @@ func (h *WordPressHandler) UpdateCheckComplete(c *fiber.Ctx) error {
 	return c.JSON(models.APIResponse{Success: true})
 }
 
+// ApplyUpdatesComplete handles agent callback after applying updates
+func (h *WordPressHandler) ApplyUpdatesComplete(c *fiber.Ctx) error {
+	var result models.AgentApplyUpdatesResult
+	if err := c.BodyParser(&result); err != nil {
+		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "invalid body"})
+	}
+
+	if err := h.svc.SaveApplyUpdatesResult(result); err != nil {
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: err.Error()})
+	}
+
+	return c.JSON(models.APIResponse{Success: true})
+}
+
 // GetUpdateLogs returns update logs for a site
 func (h *WordPressHandler) GetUpdateLogs(c *fiber.Ctx) error {
 	siteID, err := strconv.ParseUint(c.Params("siteId"), 10, 64)

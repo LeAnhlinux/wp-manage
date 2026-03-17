@@ -54,7 +54,7 @@ func (r *ImportRunner) RunImport(domain, sourceIP, sshUser string, sshPort int, 
 	// Step 2: Import database
 	if dbName != "" {
 		slog.Info("Importing database", "domain", domain, "db", dbName)
-		dumpCmd := fmt.Sprintf("ssh %s %s 'mysqldump --single-transaction %s' | mysql %s",
+		dumpCmd := fmt.Sprintf("ssh %s %s 'mysqldump --single-transaction %s' | mysql --binary-mode=1 %s",
 			sshOpts, sshTarget, dbName, dbName)
 		if output, err := exec.Command("bash", "-c", dumpCmd).CombinedOutput(); err != nil {
 			return fmt.Errorf("database import failed: %s - %w", string(output), err)

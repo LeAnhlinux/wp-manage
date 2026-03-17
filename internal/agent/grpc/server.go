@@ -26,6 +26,7 @@ import (
 	"github.com/gofiber-team/wp-manage/internal/agent/filemanager"
 	agentmigration "github.com/gofiber-team/wp-manage/internal/agent/migration"
 	agentnginx "github.com/gofiber-team/wp-manage/internal/agent/nginx"
+	agentioncube "github.com/gofiber-team/wp-manage/internal/agent/ioncube"
 	agentopcache "github.com/gofiber-team/wp-manage/internal/agent/opcache"
 	agentredis "github.com/gofiber-team/wp-manage/internal/agent/redis"
 	agentphpfpm "github.com/gofiber-team/wp-manage/internal/agent/phpfpm"
@@ -270,6 +271,11 @@ func (s *AgentServer) pollTasks() {
 			json.Unmarshal(task.Data, &wpTask)
 			go s.executeCheckUpdates(task.TaskID, wpTask)
 
+		case "apply_updates":
+			var applyTask models.AgentApplyUpdatesTask
+			json.Unmarshal(task.Data, &applyTask)
+			go s.executeApplyUpdates(task.TaskID, applyTask)
+
 		case "db_optimize":
 			var dbTask models.AgentDBOptimizeTask
 			json.Unmarshal(task.Data, &dbTask)
@@ -304,6 +310,11 @@ func (s *AgentServer) pollTasks() {
 			var toggleTask models.AgentToggleImageOptTask
 			json.Unmarshal(task.Data, &toggleTask)
 			go s.executeToggleImageOpt(task.TaskID, toggleTask)
+
+		case "toggle_nginx_webp":
+			var webpTask models.AgentNginxWebPTask
+			json.Unmarshal(task.Data, &webpTask)
+			go s.executeToggleNginxWebP(task.TaskID, webpTask)
 
 		case "enable_multisite":
 			var msTask models.AgentEnableMultisiteTask
@@ -349,6 +360,11 @@ func (s *AgentServer) pollTasks() {
 			var opcTask models.AgentOPcacheTask
 			json.Unmarshal(task.Data, &opcTask)
 			go s.executeOPcacheAction(task.TaskID, opcTask)
+
+		case "manage_ioncube":
+			var icTask models.AgentIonCubeTask
+			json.Unmarshal(task.Data, &icTask)
+			go s.executeManageIonCube(task.TaskID, icTask)
 
 		case "rebuild_config":
 			var rebuildTask models.AgentRebuildConfigTask
@@ -640,6 +656,11 @@ func (s *AgentServer) executeUploadSource(taskID uint64, task models.AgentUpload
 
 	slog.Info("Source extracted successfully", "domain", task.Domain)
 	result.Output = fmt.Sprintf("Source deployed to /var/www/%s/public — wp-config.php patched with new DB credentials", task.Domain)
+	// Read WP version from version.php so UI shows correct version immediately
+	result.WPVersion = site.GetWPVersion(task.Domain)
+	if result.WPVersion != "" {
+		slog.Info("WP version detected from source", "domain", task.Domain, "version", result.WPVersion)
+	}
 	s.reportTaskResult(result)
 }
 
@@ -669,7 +690,7 @@ func (s *AgentServer) executeImportDB(taskID uint64, task models.AgentImportDBTa
 		slog.Info("Import DB progress", "domain", task.Domain, "step", step)
 	})
 
-	if err := mgr.ImportDatabase(task.DBName, tmpPath, task.Domain, task.OldDomain); err != nil {
+	if err := mgr.ImportDatabase(task.DBName, tmpPath, task.Domain, task.OldDomain, task.PHPVersion); err != nil {
 		os.Remove(tmpPath)
 		result.Error = "Failed to import database: " + err.Error()
 		s.reportTaskResult(result)
@@ -678,6 +699,11 @@ func (s *AgentServer) executeImportDB(taskID uint64, task models.AgentImportDBTa
 
 	slog.Info("Database imported successfully", "domain", task.Domain, "db_name", task.DBName, "old_domain", task.OldDomain)
 	result.Output = fmt.Sprintf("Database %s imported — site URL updated to match domain %s", task.DBName, task.Domain)
+	// Read WP version from version.php — no PHP/WP-CLI needed, always works
+	result.WPVersion = site.GetWPVersion(task.Domain)
+	if result.WPVersion != "" {
+		slog.Info("WP version detected after import", "domain", task.Domain, "version", result.WPVersion)
+	}
 	s.reportTaskResult(result)
 }
 
@@ -1223,12 +1249,26 @@ func (s *AgentServer) executeCheckUpdates(taskID uint64, task models.AgentCheckU
 	slog.Info("Checking WP updates", "domain", task.Domain, "site_id", task.SiteID)
 	result := agentwp.CheckUpdates(task)
 	s.reportUpdateCheckResult(result)
+	// Mark task complete so API side can wake up via WaitForTaskComplete
+	s.completeTask(taskID, "completed", "")
+}
+
+func (s *AgentServer) executeApplyUpdates(taskID uint64, task models.AgentApplyUpdatesTask) {
+	slog.Info("Applying WP updates", "domain", task.Domain, "core", task.CoreUpdates, "plugins", task.PluginUpdates, "themes", task.ThemeUpdates)
+	result := agentwp.ApplyUpdates(task)
+	s.reportApplyUpdatesResult(result)
+	errMsg := ""
+	if result.Status == "failed" {
+		errMsg = result.Error
+	}
+	s.completeTask(taskID, result.Status, errMsg)
 }
 
 func (s *AgentServer) executeDBOptimize(taskID uint64, task models.AgentDBOptimizeTask) {
 	slog.Info("Optimizing database", "domain", task.Domain, "db", task.DBName)
 	result := agentdb.OptimizeDatabase(task)
 	s.reportDBOptimizeResult(result)
+	s.completeTask(taskID, result.Status, result.Error)
 }
 
 func (s *AgentServer) executeStagingCreate(taskID uint64, data map[string]interface{}) {
@@ -1384,6 +1424,21 @@ func (s *AgentServer) reportUpdateCheckResult(result models.AgentCheckUpdatesRes
 	resp.Body.Close()
 }
 
+func (s *AgentServer) reportApplyUpdatesResult(result models.AgentApplyUpdatesResult) {
+	data, _ := json.Marshal(result)
+	req, _ := http.NewRequest("POST", s.apiURL+"/api/v1/agent/updates/apply-complete", bytes.NewReader(data))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Agent-Key", s.apiKey)
+
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		slog.Error("Failed to report apply updates result", "error", err)
+		return
+	}
+	resp.Body.Close()
+}
+
 func (s *AgentServer) reportDBOptimizeResult(result models.AgentDBOptimizeResult) {
 	data, _ := json.Marshal(result)
 	req, _ := http.NewRequest("POST", s.apiURL+"/api/v1/agent/db-optimize/complete", bytes.NewReader(data))
@@ -1418,8 +1473,28 @@ func (s *AgentServer) reportBackupResult(result models.AgentBackupResult) {
 
 func (s *AgentServer) executeOptimizeImages(taskID uint64, task models.AgentImageOptTask) {
 	slog.Info("Optimizing images", "domain", task.Domain, "quality", task.Quality)
-	result := agentwp.OptimizeImages(task)
+	// Progress callback: called every ~50 images; returns true to cancel
+	progressFn := func(partial models.AgentImageOptResult) bool {
+		return agentwp.SendProgressUpdate(s.apiURL, s.apiKey, partial)
+	}
+	result := agentwp.OptimizeImages(task, progressFn)
+
+	// If WebP was enabled, ensure nginx is patched to serve .webp automatically
+	if task.WebPEnabled && result.Status != "failed" {
+		if err := site.EnsureWebPNginx(task.Domain); err != nil {
+			slog.Warn("Failed to patch nginx for WebP", "domain", task.Domain, "error", err)
+		} else {
+			slog.Info("Nginx WebP serving enabled", "domain", task.Domain)
+		}
+	}
+
 	s.reportMultisiteResult("/api/v1/agent/images/optimize/complete", result)
+	// Mark task complete so it's not re-queued indefinitely
+	errMsg := ""
+	if result.Status == "failed" {
+		errMsg = result.Error
+	}
+	s.completeTask(taskID, result.Status, errMsg)
 }
 
 func (s *AgentServer) executeToggleImageOpt(taskID uint64, task models.AgentToggleImageOptTask) {
@@ -1431,6 +1506,23 @@ func (s *AgentServer) executeToggleImageOpt(taskID uint64, task models.AgentTogg
 		status = "failed"
 		errMsg = err.Error()
 		slog.Error("Toggle image opt failed", "domain", task.Domain, "error", err)
+	}
+	s.completeTask(taskID, status, errMsg)
+}
+
+func (s *AgentServer) executeToggleNginxWebP(taskID uint64, task models.AgentNginxWebPTask) {
+	slog.Info("Toggle nginx WebP", "domain", task.Domain, "enabled", task.Enabled)
+	var err error
+	if task.Enabled {
+		err = site.EnsureWebPNginx(task.Domain)
+	} else {
+		err = site.RevertWebPNginx(task.Domain)
+	}
+	status, errMsg := "completed", ""
+	if err != nil {
+		status = "failed"
+		errMsg = err.Error()
+		slog.Error("Toggle nginx WebP failed", "domain", task.Domain, "error", err)
 	}
 	s.completeTask(taskID, status, errMsg)
 }
@@ -1451,11 +1543,9 @@ func (s *AgentServer) executeCreateSubsite(taskID uint64, task models.AgentCreat
 
 func (s *AgentServer) executeDeleteSubsite(taskID uint64, task models.AgentDeleteSubsiteTask) {
 	slog.Info("Deleting subsite", "domain", task.Domain, "blog_id", task.WPBlogID)
-	err := agentwp.DeleteSubsite(task)
-	if err != nil {
-		slog.Error("Failed to delete subsite", "error", err)
-	}
-	// No callback needed — already marked deleted in DB
+	result := agentwp.DeleteSubsite(task)
+	// Bug 1 fix: report result back so API can confirm deletion or rollback on failure
+	s.reportMultisiteResult("/api/v1/agent/multisite/delete/complete", result)
 }
 
 func (s *AgentServer) executeSyncSubsites(taskID uint64, task models.AgentListSubsitesTask) {
@@ -1602,6 +1692,34 @@ func (s *AgentServer) executeOPcacheAction(taskID uint64, task models.AgentOPcac
 			slog.Info("OPcache stats", "stats", stats)
 		}
 	}
+	s.reportTaskResult(result)
+}
+
+func (s *AgentServer) executeManageIonCube(taskID uint64, task models.AgentIonCubeTask) {
+	slog.Info("ionCube action", "action", task.Action, "php_version", task.PHPVersion)
+	result := models.AgentTaskResult{TaskID: taskID}
+
+	switch task.Action {
+	case "get_status":
+		statuses, err := agentioncube.GetStatus()
+		if err != nil {
+			result.Error = err.Error()
+		} else {
+			out, _ := json.Marshal(statuses)
+			result.Output = string(out)
+		}
+	case "enable":
+		if err := agentioncube.Enable(task.PHPVersion); err != nil {
+			result.Error = err.Error()
+		}
+	case "disable":
+		if err := agentioncube.Disable(task.PHPVersion); err != nil {
+			result.Error = err.Error()
+		}
+	default:
+		result.Error = fmt.Sprintf("unknown ionCube action: %s", task.Action)
+	}
+
 	s.reportTaskResult(result)
 }
 
@@ -2516,8 +2634,8 @@ func (s *AgentServer) completeTask(taskID uint64, status, errMsg string) {
 }
 
 func (s *AgentServer) executeWPCLI(taskID uint64, task models.AgentWPCLITask) {
-	slog.Info("Executing WP-CLI command", "domain", task.Domain, "command", task.Command)
-	result, err := agentwp.ExecuteWPCLI(task.Domain, task.Command)
+	slog.Info("Executing WP-CLI command", "domain", task.Domain, "command", task.Command, "php", task.PHPVersion)
+	result, err := agentwp.ExecuteWPCLI(task.Domain, task.PHPVersion, task.Command)
 
 	wpcliResult := models.AgentWPCLIResult{
 		HistoryID: task.HistoryID,

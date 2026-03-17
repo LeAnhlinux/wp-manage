@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gofiber-team/wp-manage/internal/models"
@@ -25,6 +26,11 @@ func OptimizeDatabase(task models.AgentDBOptimizeTask) models.AgentDBOptimizeRes
 	}
 	defer db.Close()
 
+	// Detect WordPress table prefix from the actual DB
+	// (sites can use non-default prefix like motphim_, my_, etc.)
+	prefix := detectTablePrefix(db, task.DBName)
+	slog.Info("Detected WP table prefix", "db", task.DBName, "prefix", prefix)
+
 	// 1. Optimize all tables
 	result.TablesOptimized = optimizeTables(db, task.DBName)
 
@@ -32,13 +38,14 @@ func OptimizeDatabase(task models.AgentDBOptimizeTask) models.AgentDBOptimizeRes
 	result.SpaceSaved = getFragmentedSpace(db, task.DBName)
 
 	// 3. Clean post revisions (keep last 5 per post)
-	result.RevisionsClean = cleanRevisions(db)
+	result.RevisionsClean = cleanRevisions(db, prefix)
 
 	// 4. Clear expired transients
-	result.TransientsClear = clearTransients(db)
+	result.TransientsClear = clearTransients(db, prefix)
 
 	slog.Info("DB optimization completed",
 		"db", task.DBName,
+		"prefix", prefix,
 		"tables", result.TablesOptimized,
 		"space_saved", result.SpaceSaved,
 		"revisions_cleaned", result.RevisionsClean,
@@ -46,6 +53,30 @@ func OptimizeDatabase(task models.AgentDBOptimizeTask) models.AgentDBOptimizeRes
 	)
 
 	return result
+}
+
+// detectTablePrefix finds the WordPress table prefix by looking for the options table
+// e.g. wp_options → "wp_", motphim_options → "motphim_"
+func detectTablePrefix(db *sql.DB, dbName string) string {
+	rows, err := db.Query(
+		"SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME LIKE '%options' ORDER BY TABLE_NAME LIMIT 5",
+		dbName,
+	)
+	if err != nil {
+		return "wp_"
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var tableName string
+		rows.Scan(&tableName)
+		// Verify it actually has siteurl (confirms it's the WP options table)
+		var cnt int
+		db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM `%s` WHERE option_name='siteurl' LIMIT 1", tableName)).Scan(&cnt)
+		if cnt > 0 {
+			return strings.TrimSuffix(tableName, "options")
+		}
+	}
+	return "wp_"
 }
 
 func optimizeTables(db *sql.DB, dbName string) int {
@@ -83,36 +114,29 @@ func getFragmentedSpace(db *sql.DB, dbName string) int64 {
 	return total.Int64
 }
 
-func cleanRevisions(db *sql.DB) int {
-	// Delete all revisions except the last 5 per post
-	// Uses wp_ prefix by default (most common)
-	res, err := db.Exec(`
-		DELETE FROM wp_posts WHERE post_type = 'revision'
+func cleanRevisions(db *sql.DB, prefix string) int {
+	postsTable := fmt.Sprintf("`%sposts`", prefix)
+
+	// Delete all revisions except the last 5 per parent post
+	res, err := db.Exec(fmt.Sprintf(`
+		DELETE FROM %s WHERE post_type = 'revision'
 		AND ID NOT IN (
-			SELECT ID FROM (
-				SELECT p.ID FROM wp_posts p
-				WHERE p.post_type = 'revision'
-				ORDER BY p.post_date DESC
-				LIMIT 999999999
-			) AS keep_revisions
-			WHERE ID IN (
-				SELECT sub.ID FROM (
-					SELECT r.ID,
-						ROW_NUMBER() OVER (PARTITION BY r.post_parent ORDER BY r.post_date DESC) as rn
-					FROM wp_posts r WHERE r.post_type = 'revision'
-				) sub WHERE sub.rn <= 5
-			)
+			SELECT sub.ID FROM (
+				SELECT r.ID,
+					ROW_NUMBER() OVER (PARTITION BY r.post_parent ORDER BY r.post_date DESC) as rn
+				FROM %s r WHERE r.post_type = 'revision'
+			) sub WHERE sub.rn <= 5
 		)
-	`)
+	`, postsTable, postsTable))
 	if err != nil {
-		// Try simpler approach: delete revisions older than 30 days
-		res, err = db.Exec(`
-			DELETE FROM wp_posts
+		// Fallback: delete revisions older than 30 days
+		res, err = db.Exec(fmt.Sprintf(`
+			DELETE FROM %s
 			WHERE post_type = 'revision'
 			AND post_date < DATE_SUB(NOW(), INTERVAL 30 DAY)
-		`)
+		`, postsTable))
 		if err != nil {
-			slog.Warn("Failed to clean revisions", "error", err)
+			slog.Warn("Failed to clean revisions", "table", postsTable, "error", err)
 			return 0
 		}
 	}
@@ -121,24 +145,26 @@ func cleanRevisions(db *sql.DB) int {
 	return int(affected)
 }
 
-func clearTransients(db *sql.DB) int {
-	// Delete expired transients from wp_options
-	res, err := db.Exec(`
-		DELETE a, b FROM wp_options a
-		INNER JOIN wp_options b ON b.option_name = CONCAT('_transient_timeout_', SUBSTRING(a.option_name, 12))
-		WHERE a.option_name LIKE '_transient_%'
-		AND a.option_name NOT LIKE '_transient_timeout_%'
+func clearTransients(db *sql.DB, prefix string) int {
+	optionsTable := fmt.Sprintf("`%soptions`", prefix)
+
+	// Delete expired transients and their timeout counterparts
+	res, err := db.Exec(fmt.Sprintf(`
+		DELETE a, b FROM %s a
+		INNER JOIN %s b ON b.option_name = CONCAT('_transient_timeout_', SUBSTRING(a.option_name, 12))
+		WHERE a.option_name LIKE '_transient_%%'
+		AND a.option_name NOT LIKE '_transient_timeout_%%'
 		AND b.option_value < UNIX_TIMESTAMP()
-	`)
+	`, optionsTable, optionsTable))
 	if err != nil {
-		// Simpler approach: just delete expired timeout entries
-		res, err = db.Exec(`
-			DELETE FROM wp_options
-			WHERE option_name LIKE '_transient_timeout_%'
+		// Fallback: delete just the expired timeout markers
+		res, err = db.Exec(fmt.Sprintf(`
+			DELETE FROM %s
+			WHERE option_name LIKE '_transient_timeout_%%'
 			AND option_value < UNIX_TIMESTAMP()
-		`)
+		`, optionsTable))
 		if err != nil {
-			slog.Warn("Failed to clear transients", "error", err)
+			slog.Warn("Failed to clear transients", "table", optionsTable, "error", err)
 			return 0
 		}
 	}

@@ -75,6 +75,29 @@ func (h *ImageOptHandler) Toggle(c *fiber.Ctx) error {
 	return c.JSON(models.APIResponse{Success: true, Message: msg, Data: config})
 }
 
+// ToggleNginxWebP enables/disables WebP auto-serving in nginx for the site
+func (h *ImageOptHandler) ToggleNginxWebP(c *fiber.Ctx) error {
+	siteID, err := strconv.ParseUint(c.Params("siteId"), 10, 64)
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "Invalid site ID")
+	}
+	var body struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := c.BodyParser(&body); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "Invalid request body")
+	}
+	config, err := h.svc.ToggleNginxWebP(siteID, body.Enabled)
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: err.Error(), Data: config})
+	}
+	msg := "WebP nginx serving disabled"
+	if body.Enabled {
+		msg = "WebP nginx serving enabled — browser tự nhận .webp thay vì .jpg/.png"
+	}
+	return c.JSON(models.APIResponse{Success: true, Message: msg, Data: config})
+}
+
 // RunOptimization starts an image optimization run
 func (h *ImageOptHandler) RunOptimization(c *fiber.Ctx) error {
 	siteID, err := strconv.ParseUint(c.Params("siteId"), 10, 64)
@@ -91,6 +114,32 @@ func (h *ImageOptHandler) RunOptimization(c *fiber.Ctx) error {
 		Success: true,
 		Data:    result,
 	})
+}
+
+// ProgressUpdate handles intermediate progress updates from agent (every ~50 images).
+// Returns {cancel: true} if user has cancelled, so agent can stop early.
+func (h *ImageOptHandler) ProgressUpdate(c *fiber.Ctx) error {
+	var result models.AgentImageOptResult
+	if err := c.BodyParser(&result); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "Invalid request body")
+	}
+	cancelled, err := h.svc.ProgressUpdate(result)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+	}
+	return c.JSON(fiber.Map{"success": true, "cancel": cancelled})
+}
+
+// CancelOptimization cancels a running image optimization
+func (h *ImageOptHandler) CancelOptimization(c *fiber.Ctx) error {
+	siteID, err := strconv.ParseUint(c.Params("siteId"), 10, 64)
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "Invalid site ID")
+	}
+	if err := h.svc.CancelOptimization(siteID); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, err.Error())
+	}
+	return c.JSON(models.APIResponse{Success: true, Message: "Optimization cancelled"})
 }
 
 // OptimizeComplete handles agent callback with results

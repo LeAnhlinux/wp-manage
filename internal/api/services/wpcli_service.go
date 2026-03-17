@@ -39,10 +39,11 @@ func (s *WPCLIService) Execute(siteID uint64, command string) (*models.WPCLIHist
 		Status:   "pending",
 	}
 	taskData := models.AgentWPCLITask{
-		HistoryID: history.ID,
-		SiteID:    siteID,
-		Domain:    site.Domain,
-		Command:   command,
+		HistoryID:  history.ID,
+		SiteID:     siteID,
+		Domain:     site.Domain,
+		PHPVersion: site.PHPVersion,
+		Command:    command,
 	}
 	data, _ := json.Marshal(taskData)
 	task.Data = string(data)

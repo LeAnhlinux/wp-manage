@@ -158,6 +158,7 @@ func Setup(
 	storageHandler *handlers.StorageHandler,
 	fail2banHandler *handlers.Fail2BanHandler,
 	panelUpdateHandler *handlers.PanelUpdateHandler,
+	ionCubeHandler *handlers.IonCubeHandler,
 	updateCheckHandler *handlers.UpdateCheckHandler,
 	userSvc *services.UserService,
 	apiKeySvc *services.APIKeyService,
@@ -184,11 +185,14 @@ func Setup(
 	agent.Post("/scans/complete", securityHandler.ScanComplete)
 	agent.Post("/staging/complete", wordpressHandler.StagingComplete)
 	agent.Post("/updates/complete", wordpressHandler.UpdateCheckComplete)
+	agent.Post("/updates/apply-complete", wordpressHandler.ApplyUpdatesComplete)
 	agent.Post("/db-optimize/complete", wordpressHandler.DBOptimizeComplete)
 	agent.Post("/rollouts/complete", rolloutHandler.UpdateComplete)
 	agent.Post("/images/optimize/complete", imageOptHandler.OptimizeComplete)
+	agent.Post("/images/optimize/progress", imageOptHandler.ProgressUpdate)
 	agent.Post("/multisite/enable/complete", multisiteHandler.EnableComplete)
 	agent.Post("/multisite/subsite/complete", multisiteHandler.CreateSubsiteComplete)
+	agent.Post("/multisite/delete/complete", multisiteHandler.DeleteSubsiteComplete)
 	agent.Post("/multisite/sync/complete", multisiteHandler.SyncSubsitesComplete)
 	agent.Post("/wpcli/complete", wpcliHandler.Complete)
 	agent.Post("/import/complete", importHandler.Complete)
@@ -345,7 +349,9 @@ func Setup(
 	siteImages.Get("/", imageOptHandler.GetConfig)
 	siteImages.Put("/", middleware.PermissionRequired("sites", "manage"), imageOptHandler.UpdateConfig)
 	siteImages.Post("/toggle", middleware.PermissionRequired("sites", "manage"), imageOptHandler.Toggle)
+	siteImages.Post("/nginx-webp", middleware.PermissionRequired("sites", "manage"), imageOptHandler.ToggleNginxWebP)
 	siteImages.Post("/run", middleware.PermissionRequired("sites", "manage"), imageOptHandler.RunOptimization)
+	siteImages.Post("/cancel", middleware.PermissionRequired("sites", "manage"), imageOptHandler.CancelOptimization)
 	siteImages.Get("/results", imageOptHandler.GetResults)
 
 	// Multisite routes
@@ -391,6 +397,12 @@ func Setup(
 	serverNginx.Delete("/:configId", middleware.PermissionRequired("sites", "manage"), infraHandler.DeleteNginxConfig)
 
 	servers.Post("/:id/opcache", serverAccess, middleware.PermissionRequired("sites", "manage"), infraHandler.OPcacheAction)
+
+	// ionCube routes
+	serverIonCube := servers.Group("/:id/ioncube", serverAccess)
+	serverIonCube.Get("/", middleware.PermissionRequired("infrastructure", "read"), ionCubeHandler.GetStatus)
+	serverIonCube.Post("/:phpVersion/enable", middleware.PermissionRequired("infrastructure", "manage"), ionCubeHandler.Enable)
+	serverIonCube.Post("/:phpVersion/disable", middleware.PermissionRequired("infrastructure", "manage"), ionCubeHandler.Disable)
 	servers.Post("/:id/rebuild-config", serverAccess, middleware.PermissionRequired("sites", "manage"), infraHandler.RebuildConfig)
 	servers.Post("/:id/health-check", serverAccess, infraHandler.RunHealthCheck)
 	servers.Get("/:id/services", serverAccess, infraHandler.CheckServices)
