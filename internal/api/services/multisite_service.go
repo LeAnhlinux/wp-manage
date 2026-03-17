@@ -3,6 +3,7 @@ package services
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 
 	"github.com/gofiber-team/wp-manage/internal/models"
 	"gorm.io/gorm"
@@ -59,6 +60,10 @@ func (s *MultisiteService) EnableMultisiteComplete(result models.AgentEnableMult
 		}
 		return s.db.Model(&models.Site{}).Where("id = ?", result.SiteID).Updates(updates).Error
 	}
+	// Fix #9: on failure, log the error but don't change site record
+	if result.Error != "" {
+		slog.Error("Enable multisite failed on agent", "site_id", result.SiteID, "error", result.Error)
+	}
 	return nil
 }
 
@@ -90,10 +95,11 @@ func (s *MultisiteService) CreateSubsite(siteID uint64, slug, title string) erro
 	}
 
 	taskData := models.AgentCreateSubsiteTask{
-		SiteID: siteID,
-		Domain: site.Domain,
-		Slug:   slug,
-		Title:  title,
+		SiteID:        siteID,
+		Domain:        site.Domain,
+		Slug:          slug,
+		Title:         title,
+		MultisiteType: site.MultisiteType, // Fix #10: pass multisite type for correct --url construction
 	}
 	data, _ := json.Marshal(taskData)
 

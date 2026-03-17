@@ -20,26 +20,29 @@ func EnableMultisite(task models.AgentEnableMultisiteTask) models.AgentEnableMul
 	}
 
 	wpPath := fmt.Sprintf("/var/www/%s/public", task.Domain)
-	wpUser := "wp_" + strings.ReplaceAll(strings.ReplaceAll(task.Domain, ".", "_"), "-", "_")
 
+	// Fix #6: use --allow-root instead of sudo -u wpUser
 	// Check if multisite is already installed
-	checkCmd := exec.Command("sudo", "-u", wpUser, "wp", "core", "is-installed", "--network", "--path="+wpPath)
+	checkCmd := exec.Command("wp", "core", "is-installed", "--network", "--path="+wpPath, "--allow-root")
 	if checkCmd.Run() == nil {
 		slog.Info("Multisite already enabled", "domain", task.Domain)
 		return result
 	}
 
-	// Enable multisite via WP-CLI
-	args := []string{"-u", wpUser, "wp", "core", "multisite-install",
+	// Fix #2: remove --url=https://domain (let WP use what's already in DB)
+	// Fix #6: use --allow-root instead of sudo -u wpUser
+	// Also add --skip-email to avoid sending admin email during conversion
+	args := []string{"core", "multisite-install",
 		"--path=" + wpPath,
 		"--title=" + task.Domain,
-		"--url=https://" + task.Domain,
+		"--skip-email",
+		"--allow-root",
 	}
 	if task.Type == "subdomain" {
 		args = append(args, "--subdomains")
 	}
 
-	cmd := exec.Command("sudo", args...)
+	cmd := exec.Command("wp", args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		result.Status = "failed"
@@ -49,12 +52,16 @@ func EnableMultisite(task models.AgentEnableMultisiteTask) models.AgentEnableMul
 	}
 	slog.Info("Multisite enabled via WP-CLI", "domain", task.Domain, "output", string(out))
 
-	// For subdomain mode, update Nginx config with wildcard server_name
+	// Fix #8: handle both subdomain and subfolder nginx updates
 	if task.Type == "subdomain" {
 		if err := updateNginxForSubdomains(task.Domain); err != nil {
-			// Nginx update failed — report as warning, not fatal (site still works as subfolder)
 			slog.Error("Failed to update Nginx for subdomain multisite", "domain", task.Domain, "error", err)
 			result.Error = fmt.Sprintf("Multisite enabled but Nginx wildcard update failed: %s", err)
+		}
+	} else {
+		// subfolder mode: ensure nginx has WP subfolder rewrite rules
+		if err := updateNginxForSubfolder(task.Domain); err != nil {
+			slog.Warn("Failed to update Nginx for subfolder multisite (non-fatal)", "domain", task.Domain, "error", err)
 		}
 	}
 
@@ -99,6 +106,19 @@ func updateNginxForSubdomains(domain string) error {
 	}
 
 	slog.Info("Nginx updated for subdomain multisite", "domain", domain)
+	// Fix #7: warn about DNS wildcard requirement
+	slog.Warn("Subdomain multisite enabled: remember to add wildcard DNS record", "record", "*."+domain, "points_to", "this server IP")
+	return nil
+}
+
+// updateNginxForSubfolder handles nginx for subfolder multisite mode.
+// Fix #8: our standard nginx vhost (try_files $uri $uri/ /index.php?$args)
+// already handles subfolder routing correctly. Just reload nginx.
+func updateNginxForSubfolder(domain string) error {
+	slog.Info("Subfolder multisite: nginx vhost already supports subfolder routing", "domain", domain)
+	if err := exec.Command("systemctl", "reload", "nginx").Run(); err != nil {
+		return fmt.Errorf("nginx reload failed: %w", err)
+	}
 	return nil
 }
 
@@ -111,13 +131,22 @@ func CreateSubsite(task models.AgentCreateSubsiteTask) models.AgentCreateSubsite
 	}
 
 	wpPath := fmt.Sprintf("/var/www/%s/public", task.Domain)
-	wpUser := "wp_" + strings.ReplaceAll(strings.ReplaceAll(task.Domain, ".", "_"), "-", "_")
 
-	// Create subsite via WP-CLI
-	cmd := exec.Command("sudo", "-u", wpUser, "wp", "site", "create",
+	// Fix #6: use --allow-root instead of sudo -u wpUser
+	// Fix #10: pass --url based on multisite type (subdomain vs subfolder)
+	var subsiteURL string
+	if task.MultisiteType == "subdomain" {
+		subsiteURL = "https://" + task.Slug + "." + task.Domain
+	} else {
+		subsiteURL = "https://" + task.Domain + "/" + task.Slug
+	}
+
+	cmd := exec.Command("wp", "site", "create",
 		"--slug="+task.Slug,
 		"--title="+task.Title,
+		"--url="+subsiteURL,
 		"--path="+wpPath,
+		"--allow-root",
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -129,11 +158,13 @@ func CreateSubsite(task models.AgentCreateSubsiteTask) models.AgentCreateSubsite
 
 	slog.Info("Subsite created", "domain", task.Domain, "slug", task.Slug, "output", string(out))
 
+	// Fix #6: use --allow-root instead of sudo -u wpUser
 	// Bug 2 & 4 fix: query with blogname + exact path/domain match
-	listCmd := exec.Command("sudo", "-u", wpUser, "wp", "site", "list",
+	listCmd := exec.Command("wp", "site", "list",
 		"--path="+wpPath,
 		"--format=json",
 		"--fields=blog_id,domain,path,blogname",
+		"--allow-root",
 	)
 	listOut, err := listCmd.Output()
 	if err == nil {
@@ -182,12 +213,13 @@ func DeleteSubsite(task models.AgentDeleteSubsiteTask) models.AgentDeleteSubsite
 	}
 
 	wpPath := fmt.Sprintf("/var/www/%s/public", task.Domain)
-	wpUser := "wp_" + strings.ReplaceAll(strings.ReplaceAll(task.Domain, ".", "_"), "-", "_")
 
-	cmd := exec.Command("sudo", "-u", wpUser, "wp", "site", "delete",
+	// Fix #6: use --allow-root instead of sudo -u wpUser
+	cmd := exec.Command("wp", "site", "delete",
 		fmt.Sprintf("%d", task.WPBlogID),
 		"--yes",
 		"--path="+wpPath,
+		"--allow-root",
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -209,12 +241,13 @@ func ListSubsites(task models.AgentListSubsitesTask) models.AgentListSubsitesRes
 	}
 
 	wpPath := fmt.Sprintf("/var/www/%s/public", task.Domain)
-	wpUser := "wp_" + strings.ReplaceAll(strings.ReplaceAll(task.Domain, ".", "_"), "-", "_")
 
-	cmd := exec.Command("sudo", "-u", wpUser, "wp", "site", "list",
+	// Fix #6: use --allow-root instead of sudo -u wpUser
+	cmd := exec.Command("wp", "site", "list",
 		"--path="+wpPath,
 		"--format=json",
 		"--fields=blog_id,domain,path,blogname",
+		"--allow-root",
 	)
 	out, err := cmd.Output()
 	if err != nil {

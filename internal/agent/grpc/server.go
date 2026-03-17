@@ -1635,12 +1635,24 @@ func (s *AgentServer) executeEnableMultisite(taskID uint64, task models.AgentEna
 	slog.Info("Enabling multisite", "domain", task.Domain, "type", task.Type)
 	result := agentwp.EnableMultisite(task)
 	s.reportMultisiteResult("/api/v1/agent/multisite/enable/complete", result)
+	// Fix #1: call completeTask so task is marked done and not stuck "processing"
+	errMsg := ""
+	if result.Error != "" {
+		errMsg = result.Error
+	}
+	s.completeTask(taskID, result.Status, errMsg)
 }
 
 func (s *AgentServer) executeCreateSubsite(taskID uint64, task models.AgentCreateSubsiteTask) {
 	slog.Info("Creating subsite", "domain", task.Domain, "slug", task.Slug)
 	result := agentwp.CreateSubsite(task)
 	s.reportMultisiteResult("/api/v1/agent/multisite/subsite/complete", result)
+	// Fix #3: call completeTask so task is marked done and not stuck "processing"
+	errMsg := ""
+	if result.Error != "" {
+		errMsg = result.Error
+	}
+	s.completeTask(taskID, result.Status, errMsg)
 }
 
 func (s *AgentServer) executeDeleteSubsite(taskID uint64, task models.AgentDeleteSubsiteTask) {
@@ -1648,12 +1660,24 @@ func (s *AgentServer) executeDeleteSubsite(taskID uint64, task models.AgentDelet
 	result := agentwp.DeleteSubsite(task)
 	// Bug 1 fix: report result back so API can confirm deletion or rollback on failure
 	s.reportMultisiteResult("/api/v1/agent/multisite/delete/complete", result)
+	// Fix #4: call completeTask so task is marked done and not stuck "processing"
+	errMsg := ""
+	if result.Error != "" {
+		errMsg = result.Error
+	}
+	s.completeTask(taskID, result.Status, errMsg)
 }
 
 func (s *AgentServer) executeSyncSubsites(taskID uint64, task models.AgentListSubsitesTask) {
 	slog.Info("Syncing subsites", "domain", task.Domain)
 	result := agentwp.ListSubsites(task)
 	s.reportMultisiteResult("/api/v1/agent/multisite/sync/complete", result)
+	// Fix #5: call completeTask so task is marked done and not stuck "processing"
+	errMsg := ""
+	if result.Error != "" {
+		errMsg = result.Error
+	}
+	s.completeTask(taskID, result.Status, errMsg)
 }
 
 // ==================== Infrastructure Task Executors ====================

@@ -524,10 +524,11 @@ type AgentEnableMultisiteResult struct {
 }
 
 type AgentCreateSubsiteTask struct {
-	SiteID uint64 `json:"site_id"`
-	Domain string `json:"domain"`
-	Slug   string `json:"slug"`
-	Title  string `json:"title"`
+	SiteID        uint64 `json:"site_id"`
+	Domain        string `json:"domain"`
+	Slug          string `json:"slug"`
+	Title         string `json:"title"`
+	MultisiteType string `json:"multisite_type"` // Fix #10: "subdomain" or "subfolder"
 }
 
 type AgentCreateSubsiteResult struct {
