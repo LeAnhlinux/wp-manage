@@ -1,13 +1,15 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import {
   ArrowRightLeft, Play, RotateCcw, XCircle, ChevronLeft, ChevronRight,
   Eye, Loader2, CheckCircle2, CheckCircle, AlertCircle, Clock, Globe, RefreshCw,
-  Server, AlertTriangle, Info, Trash2,
+  Server, AlertTriangle, Info, Trash2, Wifi, WifiOff, Zap,
 } from 'lucide-react'
 import { useMigrations, useMigration, useMigrationLogs, useStartMigration, useRollbackMigration, useCancelMigration, useCleanupMigrationSource } from '@/hooks/useMigrations'
 import { useServers } from '@/hooks/useServers'
 import { useSites } from '@/hooks/useSites'
 import { usePermissions } from '@/hooks/usePermissions'
+import { useAutoCreateDNSRecord } from '@/hooks/useDNS'
+import api from '@/lib/api'
 import type { Migration, MigrationLog } from '@/types'
 
 const phaseLabels: Record<string, string> = {
@@ -181,6 +183,9 @@ function MigrationDetailModal({ migrationId, onClose }: { migrationId: number; o
 
 type MigrationMode = 'keep_domain' | 'change_domain'
 
+type DnsStatus = 'idle' | 'checking' | 'pointing' | 'not_pointing' | 'no_provider' | 'error'
+interface DnsCheckResult { pointing: boolean; resolved_ips?: string[]; server_ip?: string; message?: string }
+
 function StartMigrationModal({ onClose }: { onClose: () => void }) {
   const [mode, setMode] = useState<MigrationMode>('keep_domain')
   const [siteId, setSiteId] = useState<number>(0)
@@ -189,6 +194,14 @@ function StartMigrationModal({ onClose }: { onClose: () => void }) {
   const [updateDNS, setUpdateDNS] = useState(false)
   const [cleanupSource, setCleanupSource] = useState(false)
 
+  // DNS check state (change_domain only)
+  const [dnsStatus, setDnsStatus] = useState<DnsStatus>('idle')
+  const [dnsResult, setDnsResult] = useState<DnsCheckResult | null>(null)
+  const [autoPointing, setAutoPointing] = useState(false)
+  const [autoPointResult, setAutoPointResult] = useState<string | null>(null)
+  const dnsDebounce = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const autoCreateDNS = useAutoCreateDNSRecord()
+
   const { data: sitesData } = useSites()
   const { data: serversData } = useServers()
   const startMigration = useStartMigration()
@@ -196,6 +209,54 @@ function StartMigrationModal({ onClose }: { onClose: () => void }) {
   const sites = sitesData?.data || []
   const servers = serversData?.data || []
   const selectedSite = sites.find(s => s.id === siteId)
+  const targetServer = servers.find(s => s.id === targetServerId)
+
+  // DNS check: debounce 800ms when newDomain or targetServerId changes (change_domain mode only)
+  useEffect(() => {
+    if (mode !== 'change_domain') return
+    setAutoPointResult(null)
+    const domain = newDomain.trim()
+    const isValid = domain.length > 3 && domain.includes('.') && !domain.startsWith('.')
+    if (!isValid || targetServerId === 0) { setDnsStatus('idle'); setDnsResult(null); return }
+
+    setDnsStatus('checking')
+    if (dnsDebounce.current) clearTimeout(dnsDebounce.current)
+    dnsDebounce.current = setTimeout(async () => {
+      try {
+        const { data } = await api.get<{ data: DnsCheckResult }>(`/servers/${targetServerId}/check-dns`, { params: { domain } })
+        const res = data.data
+        setDnsResult(res)
+        setDnsStatus(res.pointing ? 'pointing' : 'not_pointing')
+      } catch {
+        setDnsStatus('error')
+        setDnsResult(null)
+      }
+    }, 800)
+    return () => { if (dnsDebounce.current) clearTimeout(dnsDebounce.current) }
+  }, [newDomain, targetServerId, mode])
+
+  const handleAutoPointDNS = async () => {
+    if (!targetServer || !newDomain.trim()) return
+    setAutoPointing(true)
+    setAutoPointResult(null)
+    try {
+      const result = await autoCreateDNS.mutateAsync({ domain: newDomain.trim(), server_ip: targetServer.ip_address })
+      setAutoPointResult(`✓ Đã ${result.action === 'created' ? 'tạo' : 'cập nhật'} A record: ${result.domain} → ${result.ip} (zone: ${result.zone_name})`)
+      // Re-check DNS after auto-point
+      setTimeout(async () => {
+        try {
+          const { data } = await api.get<{ data: DnsCheckResult }>(`/servers/${targetServerId}/check-dns`, { params: { domain: newDomain.trim() } })
+          setDnsResult(data.data)
+          setDnsStatus(data.data.pointing ? 'pointing' : 'not_pointing')
+        } catch { /* ignore */ }
+      }, 2000)
+    } catch (e: unknown) {
+      const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Không tìm thấy DNS provider quản lý domain này'
+      setAutoPointResult(`✗ ${msg}`)
+    } finally {
+      setAutoPointing(false)
+    }
+  }
 
   const canSubmit = siteId > 0 && targetServerId > 0 && (mode === 'keep_domain' || newDomain.trim() !== '')
 
@@ -299,14 +360,78 @@ function StartMigrationModal({ onClose }: { onClose: () => void }) {
           {mode === 'change_domain' && (
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1.5">Domain mới <span className="text-red-500">*</span></label>
-              <input
-                type="text"
-                value={newDomain}
-                onChange={e => setNewDomain(e.target.value)}
-                placeholder="newdomain.com"
-                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-gray-50 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none"
-              />
-              <p className="text-xs text-gray-400 mt-1">wp-cli sẽ search-replace toàn bộ database sang domain mới</p>
+              <div className="relative">
+                <input
+                  type="text"
+                  value={newDomain}
+                  onChange={e => { setNewDomain(e.target.value); setDnsStatus('idle') }}
+                  placeholder="newdomain.com"
+                  className={`w-full border rounded-xl px-3 py-2.5 text-sm bg-gray-50 focus:bg-white focus:ring-2 outline-none pr-9 transition-colors ${
+                    dnsStatus === 'pointing' ? 'border-emerald-400 focus:border-emerald-500 focus:ring-emerald-500/20'
+                    : dnsStatus === 'not_pointing' ? 'border-amber-400 focus:border-amber-500 focus:ring-amber-500/20'
+                    : dnsStatus === 'error' ? 'border-red-400 focus:border-red-500 focus:ring-red-500/20'
+                    : 'border-gray-200 focus:border-blue-500 focus:ring-blue-500/20'
+                  }`}
+                />
+                <span className="absolute right-3 top-1/2 -translate-y-1/2">
+                  {dnsStatus === 'checking' && <Loader2 size={14} className="animate-spin text-gray-400" />}
+                  {dnsStatus === 'pointing' && <Wifi size={14} className="text-emerald-500" />}
+                  {dnsStatus === 'not_pointing' && <WifiOff size={14} className="text-amber-500" />}
+                  {dnsStatus === 'error' && <AlertCircle size={14} className="text-red-500" />}
+                </span>
+              </div>
+
+              {/* DNS status row */}
+              {dnsStatus === 'checking' && (
+                <p className="text-xs text-gray-400 mt-1.5 flex items-center gap-1"><Loader2 size={11} className="animate-spin" /> Đang kiểm tra DNS...</p>
+              )}
+              {dnsStatus === 'pointing' && dnsResult && (
+                <p className="text-xs text-emerald-600 mt-1.5 flex items-center gap-1">
+                  <CheckCircle size={11} /> DNS đang trỏ đúng về {dnsResult.server_ip} — sẵn sàng migrate
+                </p>
+              )}
+              {dnsStatus === 'not_pointing' && dnsResult && (
+                <div className="mt-2 p-2.5 bg-amber-50 border border-amber-200 rounded-xl space-y-2">
+                  <p className="text-xs text-amber-800 flex items-center gap-1.5">
+                    <WifiOff size={11} className="flex-shrink-0" />
+                    DNS chưa trỏ về {dnsResult.server_ip}.
+                    {dnsResult.resolved_ips && dnsResult.resolved_ips.length > 0 && (
+                      <span className="text-amber-600"> Hiện trỏ về: {dnsResult.resolved_ips.join(', ')}</span>
+                    )}
+                    {(!dnsResult.resolved_ips || dnsResult.resolved_ips.length === 0) && (
+                      <span className="text-amber-600"> (domain chưa có A record)</span>
+                    )}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleAutoPointDNS}
+                    disabled={autoPointing}
+                    className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold rounded-lg transition-colors disabled:opacity-60"
+                  >
+                    {autoPointing ? <><Loader2 size={12} className="animate-spin" /> Đang trỏ DNS...</> : <><Zap size={12} /> Tự động trỏ DNS về {dnsResult.server_ip}</>}
+                  </button>
+                  <p className="text-xs text-amber-600">Yêu cầu domain đang dùng DNS provider đã cấu hình (Cloudflare...)</p>
+                </div>
+              )}
+              {dnsStatus === 'error' && (
+                <p className="text-xs text-red-500 mt-1.5 flex items-center gap-1">
+                  <AlertCircle size={11} /> Không thể tra cứu DNS — kiểm tra lại tên domain
+                </p>
+              )}
+              {dnsStatus === 'idle' && targetServerId === 0 && newDomain.trim().includes('.') && (
+                <p className="text-xs text-gray-400 mt-1">Chọn server đích để kiểm tra DNS tự động</p>
+              )}
+
+              {/* Auto-point result */}
+              {autoPointResult && (
+                <p className={`text-xs mt-1.5 flex items-center gap-1 ${autoPointResult.startsWith('✓') ? 'text-emerald-600' : 'text-red-500'}`}>
+                  {autoPointResult}
+                </p>
+              )}
+
+              {dnsStatus === 'idle' && !autoPointResult && (
+                <p className="text-xs text-gray-400 mt-1">Nhập domain để tự động kiểm tra DNS</p>
+              )}
             </div>
           )}
 
