@@ -485,15 +485,25 @@ export default function MigrationsPage() {
                           </button>
                         )}
                         {m.status === 'failed' && can('sites', 'manage') && (
-                          <button
-                            onClick={() => { if (confirm('Khôi phục site về server nguồn?')) rollback.mutate(m.id) }}
-                            className="p-1.5 text-gray-300 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors"
-                            title="Khôi phục site về server nguồn"
-                          >
-                            <RotateCcw size={15} />
-                          </button>
+                          m.mode === 'change_domain' ? (
+                            <button
+                              onClick={() => { if (confirm(`Hủy đổi domain và dọn dẹp domain mới "${m.new_domain}"?`)) rollback.mutate(m.id) }}
+                              className="p-1.5 text-gray-300 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors"
+                              title="Hủy đổi domain / dọn dẹp domain mới"
+                            >
+                              <RotateCcw size={15} />
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => { if (confirm('Khôi phục site về server nguồn?')) rollback.mutate(m.id) }}
+                              className="p-1.5 text-gray-300 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors"
+                              title="Khôi phục site về server nguồn"
+                            >
+                              <RotateCcw size={15} />
+                            </button>
+                          )
                         )}
-                        {m.status === 'completed' && !m.source_cleaned_up && can('sites', 'manage') && (
+                        {m.status === 'completed' && !m.source_cleaned_up && m.mode !== 'change_domain' && can('sites', 'manage') && (
                           <button
                             onClick={() => { if (confirm('Xóa toàn bộ files, DB, configs của site khỏi server nguồn? Không thể hoàn tác!')) cleanupSource.mutate(m.id) }}
                             className="p-1.5 text-gray-300 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
@@ -502,7 +512,7 @@ export default function MigrationsPage() {
                             <Trash2 size={15} />
                           </button>
                         )}
-                        {m.status === 'completed' && m.source_cleaned_up && (
+                        {m.status === 'completed' && m.source_cleaned_up && m.mode !== 'change_domain' && (
                           <span className="p-1.5 text-emerald-400" title="Server nguồn đã được dọn dẹp">
                             <CheckCircle size={15} />
                           </span>
@@ -544,11 +554,17 @@ export default function MigrationsPage() {
                       </button>
                     )}
                     {m.status === 'failed' && can('sites', 'manage') && (
-                      <button onClick={() => { if (confirm('Khôi phục site về server nguồn?')) rollback.mutate(m.id) }} className="p-1 text-amber-400 hover:text-amber-600" title="Khôi phục">
-                        <RotateCcw size={14} />
-                      </button>
+                      m.mode === 'change_domain' ? (
+                        <button onClick={() => { if (confirm(`Hủy đổi domain và dọn dẹp domain mới "${m.new_domain}"?`)) rollback.mutate(m.id) }} className="p-1 text-amber-400 hover:text-amber-600" title="Hủy đổi domain">
+                          <RotateCcw size={14} />
+                        </button>
+                      ) : (
+                        <button onClick={() => { if (confirm('Khôi phục site về server nguồn?')) rollback.mutate(m.id) }} className="p-1 text-amber-400 hover:text-amber-600" title="Khôi phục">
+                          <RotateCcw size={14} />
+                        </button>
+                      )
                     )}
-                    {m.status === 'completed' && !m.source_cleaned_up && can('sites', 'manage') && (
+                    {m.status === 'completed' && !m.source_cleaned_up && m.mode !== 'change_domain' && can('sites', 'manage') && (
                       <button onClick={() => { if (confirm('Xóa site khỏi server nguồn? Không thể hoàn tác!')) cleanupSource.mutate(m.id) }} className="p-1 text-red-400 hover:text-red-600" title="Dọn dẹp server nguồn">
                         <Trash2 size={14} />
                       </button>

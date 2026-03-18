@@ -241,21 +241,24 @@ func (s *MigrationService) Rollback(id uint64) error {
 		targetDomain = migration.NewDomain
 	}
 
-	// Task 1: restore source site (re-enable nginx for keep_domain)
-	sourceData, _ := json.Marshal(map[string]interface{}{
-		"migration_id": migration.ID,
-		"domain":       domain,
-		"mode":         migration.Mode,
-	})
-	s.db.Create(&models.TaskQueue{
-		ServerID: migration.SourceServerID,
-		SiteID:   migration.SiteID,
-		TaskType: "rollback_migration",
-		Data:     string(sourceData),
-		Status:   "pending",
-	})
+	if migration.Mode == "keep_domain" {
+		// Task 1 (keep_domain only): re-enable nginx on source server
+		// change_domain never suspends source — no need to restore
+		sourceData, _ := json.Marshal(map[string]interface{}{
+			"migration_id": migration.ID,
+			"domain":       domain,
+			"mode":         migration.Mode,
+		})
+		s.db.Create(&models.TaskQueue{
+			ServerID: migration.SourceServerID,
+			SiteID:   migration.SiteID,
+			TaskType: "rollback_migration",
+			Data:     string(sourceData),
+			Status:   "pending",
+		})
+	}
 
-	// Task 2: clean up target server (remove partially migrated data)
+	// Task 2: clean up target artifacts (new domain for change_domain, target server for keep_domain)
 	targetData, _ := json.Marshal(models.AgentMigrateTask{
 		MigrationID:   migration.ID,
 		SiteID:        migration.SiteID,
@@ -265,16 +268,24 @@ func (s *MigrationService) Rollback(id uint64) error {
 		DBPass:        dbPass,
 		CleanupSource: true, // reuse cleanupSourceSite logic
 	})
+	targetServerID := migration.TargetServerID
+	if migration.Mode == "change_domain" {
+		// change_domain: source and target are the same server
+		targetServerID = migration.SourceServerID
+	}
 	s.db.Create(&models.TaskQueue{
-		ServerID: migration.TargetServerID,
+		ServerID: targetServerID,
 		SiteID:   migration.SiteID,
 		TaskType: "cleanup_target_migration",
 		Data:     string(targetData),
 		Status:   "pending",
 	})
 
-	s.AddLog(id, migration.Phase, "warn",
-		fmt.Sprintf("Rollback được yêu cầu [mode: %s] — đang khôi phục nguồn và dọn dẹp server đích (%s)", migration.Mode, targetDomain))
+	logMsg := fmt.Sprintf("Rollback được yêu cầu [mode: %s] — dọn dẹp domain mới (%s)", migration.Mode, targetDomain)
+	if migration.Mode == "keep_domain" {
+		logMsg = fmt.Sprintf("Rollback được yêu cầu [mode: %s] — đang khôi phục nguồn và dọn dẹp server đích (%s)", migration.Mode, targetDomain)
+	}
+	s.AddLog(id, migration.Phase, "warn", logMsg)
 	return nil
 }
 
