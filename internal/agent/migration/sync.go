@@ -352,19 +352,46 @@ func (r *MigrationRunner) RunMigration(task models.AgentMigrateTask) {
 
 	// 4e: wp search-replace (change_domain mode)
 	// FIX #2: Use --path=.../public — wp-config.php is in /public, not /var/www/domain root
+	// FIX #15: Add --skip-themes --skip-plugins to avoid fatal errors from incompatible themes (e.g. create_function() PHP 8.0 removed)
+	// FIX #16: Fallback to direct SQL if WP-CLI fails (serialization-safe for options/posts/postmeta)
 	if task.Mode == "change_domain" && task.NewDomain != "" {
 		r.reportProgress(task.MigrationID, "switchover", 85, "running",
 			fmt.Sprintf("Thay thế domain %s → %s...", task.Domain, task.NewDomain))
+
+		// Try WP-CLI first (handles serialized data correctly)
 		srCmd := fmt.Sprintf(
-			`ssh -o StrictHostKeyChecking=no -i %s root@%s 'wp --path=%s/public search-replace "%s" "%s" --all-tables --allow-root 2>&1'`,
+			`ssh -o StrictHostKeyChecking=no -i %s root@%s 'wp --path=%s/public search-replace "%s" "%s" --all-tables --skip-themes --skip-plugins --allow-root 2>&1'`,
 			keyFile, task.TargetServerIP, targetSiteRoot, task.Domain, task.NewDomain)
 		if out, err := exec.Command("bash", "-c", srCmd).CombinedOutput(); err != nil {
-			r.reportFailed(task.MigrationID, "switchover",
-				fmt.Sprintf("wp search-replace thất bại: %s", string(out)))
-			return
+			// WP-CLI failed (e.g. incompatible theme/plugin) → fallback to direct SQL
+			slog.Warn("wp search-replace failed, falling back to direct SQL", "migration", task.MigrationID, "error", string(out))
+			r.reportProgress(task.MigrationID, "switchover", 86, "running",
+				fmt.Sprintf("⚠️ WP-CLI search-replace thất bại, dùng SQL trực tiếp: %s", truncateStr(string(out), 200)))
+
+			dbName := dbNameForDomain(task.NewDomain)
+			sqlFallback := fmt.Sprintf(
+				`ssh -o StrictHostKeyChecking=no -i %s root@%s 'mysql %s -e "
+UPDATE wp_options SET option_value = REPLACE(option_value, \"%s\", \"%s\") WHERE option_name IN (\"siteurl\",\"home\");
+UPDATE wp_posts SET post_content = REPLACE(post_content, \"%s\", \"%s\");
+UPDATE wp_posts SET guid = REPLACE(guid, \"%s\", \"%s\");
+UPDATE wp_postmeta SET meta_value = REPLACE(CAST(meta_value AS CHAR), \"%s\", \"%s\");
+" 2>&1'`,
+				keyFile, task.TargetServerIP, dbName,
+				task.Domain, task.NewDomain,
+				task.Domain, task.NewDomain,
+				task.Domain, task.NewDomain,
+				task.Domain, task.NewDomain)
+			if sqlOut, sqlErr := exec.Command("bash", "-c", sqlFallback).CombinedOutput(); sqlErr != nil {
+				r.reportFailed(task.MigrationID, "switchover",
+					fmt.Sprintf("search-replace thất bại (WP-CLI + SQL): %s", string(sqlOut)))
+				return
+			}
+			r.reportProgress(task.MigrationID, "switchover", 88, "running",
+				fmt.Sprintf("✓ Thay thế domain bằng SQL (wp_options/posts/postmeta): %s → %s", task.Domain, task.NewDomain))
+		} else {
+			r.reportProgress(task.MigrationID, "switchover", 88, "running",
+				fmt.Sprintf("✓ Thay thế domain %s → %s hoàn tất", task.Domain, task.NewDomain))
 		}
-		r.reportProgress(task.MigrationID, "switchover", 88, "running",
-			fmt.Sprintf("Thay thế domain %s → %s hoàn tất", task.Domain, task.NewDomain))
 	}
 
 	// 4f: Fix ownership on target (per-site linux user)
@@ -751,14 +778,29 @@ func (r *MigrationRunner) setupTargetConfigs(task models.AgentMigrateTask, keyFi
 				sshBase, nginxDstConf, targetDomain)).Run()
 
 			// FIX #2 (https variant): wp search-replace http→https with correct --path
+			// FIX #15: Add --skip-themes --skip-plugins to avoid fatal errors from incompatible themes
+			// FIX #16: SQL fallback if WP-CLI fails
 			r.reportProgress(task.MigrationID, "switchover", 97, "running",
 				"Cập nhật URL https trong WordPress database...")
 			srHTTPS := fmt.Sprintf(
-				`%s 'wp --path=/var/www/%s/public search-replace "http://%s" "https://%s" --all-tables --allow-root 2>&1 | tail -5'`,
+				`%s 'wp --path=/var/www/%s/public search-replace "http://%s" "https://%s" --all-tables --skip-themes --skip-plugins --allow-root 2>&1 | tail -5'`,
 				sshBase, targetDomain, targetDomain, targetDomain)
 			if srOut, srErr := exec.Command("bash", "-c", srHTTPS).CombinedOutput(); srErr != nil {
-				r.reportProgress(task.MigrationID, "switchover", 97, "running",
-					fmt.Sprintf("⚠️  wp search-replace https thất bại: %s", truncateStr(string(srOut), 200)))
+				slog.Warn("wp search-replace https failed, falling back to SQL", "domain", targetDomain, "error", string(srOut))
+				dbName := dbNameForDomain(targetDomain)
+				sqlHTTPS := fmt.Sprintf(
+					`%s 'mysql %s -e "UPDATE wp_options SET option_value = REPLACE(option_value, \"http://%s\", \"https://%s\") WHERE option_name IN (\"siteurl\",\"home\"); UPDATE wp_posts SET post_content = REPLACE(post_content, \"http://%s\", \"https://%s\"); UPDATE wp_posts SET guid = REPLACE(guid, \"http://%s\", \"https://%s\");" 2>&1'`,
+					sshBase, dbName,
+					targetDomain, targetDomain,
+					targetDomain, targetDomain,
+					targetDomain, targetDomain)
+				if sqlOut, sqlErr := exec.Command("bash", "-c", sqlHTTPS).CombinedOutput(); sqlErr != nil {
+					r.reportProgress(task.MigrationID, "switchover", 97, "running",
+						fmt.Sprintf("⚠️  Cập nhật https thất bại (WP-CLI + SQL): %s", truncateStr(string(sqlOut), 200)))
+				} else {
+					r.reportProgress(task.MigrationID, "switchover", 97, "running",
+						fmt.Sprintf("✓ Đã cập nhật URL https bằng SQL: %s", truncateStr(string(sqlOut), 100)))
+				}
 			} else {
 				r.reportProgress(task.MigrationID, "switchover", 97, "running",
 					fmt.Sprintf("✓ Đã cập nhật URL https: %s", truncateStr(string(srOut), 200)))
@@ -775,6 +817,13 @@ func (r *MigrationRunner) setupTargetConfigs(task models.AgentMigrateTask, keyFi
 	exec.Command("bash", "-c", fmt.Sprintf(
 		"%s 'ln -sf %s /etc/nginx/sites-enabled/%s.conf 2>/dev/null; nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null || true'",
 		sshBase, nginxDstConf, targetDomain)).Run()
+}
+
+// dbNameForDomain computes the WordPress DB name for a given domain.
+// Must match the formula used during site creation: wp_{sanitized_domain}
+func dbNameForDomain(domain string) string {
+	sanitized := strings.NewReplacer(".", "_", "-", "_").Replace(domain)
+	return "wp_" + sanitized
 }
 
 // downgradeToHTTP rewrites the nginx config on target to HTTP-only (no SSL).
