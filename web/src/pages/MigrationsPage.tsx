@@ -241,7 +241,9 @@ function StartMigrationModal({ onClose }: { onClose: () => void }) {
     setAutoPointResult(null)
     try {
       const result = await autoCreateDNS.mutateAsync({ domain: newDomain.trim(), server_ip: targetServer.ip_address })
-      setAutoPointResult(`✓ Đã ${result.action === 'created' ? 'tạo' : 'cập nhật'} A record: ${result.domain} → ${result.ip} (zone: ${result.zone_name})`)
+      const baseMsg = `✓ Đã ${result.action === 'created' ? 'tạo' : 'cập nhật'} A record: ${result.domain} → ${result.ip} (zone: ${result.zone_name})`
+      const proxyWarn = result.proxied ? '\n⚠️ Cloudflare Proxy đang BẬT — DNS check sẽ thấy IP Cloudflare thay vì IP server. Vào Cloudflare tắt proxy (biểu tượng đám mây cam) để kiểm tra trực tiếp.' : ''
+      setAutoPointResult(baseMsg + proxyWarn)
       // Re-check DNS after auto-point
       setTimeout(async () => {
         try {
@@ -424,9 +426,13 @@ function StartMigrationModal({ onClose }: { onClose: () => void }) {
 
               {/* Auto-point result */}
               {autoPointResult && (
-                <p className={`text-xs mt-1.5 flex items-center gap-1 ${autoPointResult.startsWith('✓') ? 'text-emerald-600' : 'text-red-500'}`}>
-                  {autoPointResult}
-                </p>
+                <div className={`text-xs mt-1.5 space-y-1 ${autoPointResult.startsWith('✓') ? 'text-emerald-600' : 'text-red-500'}`}>
+                  {autoPointResult.split('\n').map((line, i) => (
+                    <p key={i} className={i > 0 ? 'text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5 leading-relaxed' : ''}>
+                      {line}
+                    </p>
+                  ))}
+                </div>
               )}
 
               {dnsStatus === 'idle' && !autoPointResult && (

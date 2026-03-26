@@ -171,7 +171,7 @@ func (h *DNSHandler) UpdateRecord(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(400).JSON(models.APIResponse{Error: "Invalid request"})
 	}
-	if err := h.svc.UpdateDNSRecord(providerID, req.Domain, req.IP); err != nil {
+	if err := h.svc.UpdateDNSRecord(providerID, req.Domain, req.IP, req.Proxied); err != nil {
 		return c.Status(500).JSON(models.APIResponse{Error: err.Error()})
 	}
 	return c.JSON(models.APIResponse{Success: true, Message: "DNS record updated"})

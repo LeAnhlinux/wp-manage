@@ -40,6 +40,7 @@ export interface AutoCreateDNSRecordResult {
   ip: string
   action: 'created' | 'updated'
   zone_name: string
+  proxied: boolean // true = Cloudflare proxy still on → DNS check will show CF IPs, not server IP
 }
 
 export function useAutoCreateDNSRecord() {

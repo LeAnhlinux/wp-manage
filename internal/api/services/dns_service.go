@@ -171,17 +171,18 @@ func (s *DNSService) cfAutoCreateRecord(provider models.DNSProvider, domain, ser
 	}
 	var listResp struct {
 		Result []struct {
-			ID string `json:"id"`
+			ID      string `json:"id"`
+			Proxied bool   `json:"proxied"`
 		} `json:"result"`
 	}
 	json.Unmarshal(body, &listResp)
 
-	rec := CFDNSRecord{Type: "A", Name: domain, Content: serverIP, TTL: 1, Proxied: false}
-	payload, _ := json.Marshal(rec)
-
+	// Preserve existing proxied status when updating; default false when creating new
+	proxied := false
 	action := "created"
 	var reqURL, method string
 	if len(listResp.Result) > 0 {
+		proxied = listResp.Result[0].Proxied // keep existing proxy setting
 		action = "updated"
 		method = "PUT"
 		reqURL = fmt.Sprintf("https://api.cloudflare.com/client/v4/zones/%s/dns_records/%s", provider.ZoneID, listResp.Result[0].ID)
@@ -189,6 +190,9 @@ func (s *DNSService) cfAutoCreateRecord(provider models.DNSProvider, domain, ser
 		method = "POST"
 		reqURL = fmt.Sprintf("https://api.cloudflare.com/client/v4/zones/%s/dns_records", provider.ZoneID)
 	}
+
+	rec := CFDNSRecord{Type: "A", Name: domain, Content: serverIP, TTL: 1, Proxied: proxied}
+	payload, _ := json.Marshal(rec)
 
 	respBody, status, err := cfHTTP(method, reqURL, provider.APIKey, payload)
 	if err != nil {
@@ -212,6 +216,7 @@ func (s *DNSService) cfAutoCreateRecord(provider models.DNSProvider, domain, ser
 		IP:         serverIP,
 		Action:     action,
 		ZoneName:   provider.Domain,
+		Proxied:    proxied,
 	}, nil
 }
 
@@ -350,14 +355,15 @@ func (s *DNSService) DeleteDNSRecord(providerID uint64, recordID string) error {
 }
 
 // UpdateDNSRecord is a quick-update shortcut that upserts an A record for a domain.
-func (s *DNSService) UpdateDNSRecord(providerID uint64, domain, ip string) error {
+// proxied=nil means preserve existing proxied status; true/false means explicit override.
+func (s *DNSService) UpdateDNSRecord(providerID uint64, domain, ip string, proxied *bool) error {
 	var provider models.DNSProvider
 	if err := s.db.First(&provider, providerID).Error; err != nil {
 		return err
 	}
 	switch provider.ProviderType {
 	case "cloudflare":
-		return s.updateCloudflare(provider, domain, ip)
+		return s.updateCloudflare(provider, domain, ip, proxied)
 	default:
 		return fmt.Errorf("unsupported DNS provider: %s", provider.ProviderType)
 	}
@@ -455,19 +461,31 @@ func (s *DNSService) cfDeleteRecord(provider models.DNSProvider, recordID string
 	return nil
 }
 
-func (s *DNSService) updateCloudflare(provider models.DNSProvider, domain, ip string) error {
+func (s *DNSService) updateCloudflare(provider models.DNSProvider, domain, ip string, proxied *bool) error {
 	listURL := fmt.Sprintf("https://api.cloudflare.com/client/v4/zones/%s/dns_records?type=A&name=%s", provider.ZoneID, domain)
 	body, _, err := cfHTTP("GET", listURL, provider.APIKey, nil)
 	if err != nil {
 		return fmt.Errorf("cloudflare API error: %w", err)
 	}
 	var listResp struct {
-		Result []struct{ ID string `json:"id"` } `json:"result"`
+		Result []struct {
+			ID      string `json:"id"`
+			Proxied bool   `json:"proxied"`
+		} `json:"result"`
 	}
 	json.Unmarshal(body, &listResp)
 
+	// Determine proxied value: explicit override → use it; nil → preserve existing (false for new)
+	useProxied := false
+	if len(listResp.Result) > 0 {
+		useProxied = listResp.Result[0].Proxied // preserve existing by default
+	}
+	if proxied != nil {
+		useProxied = *proxied // explicit override
+	}
+
 	recordData, _ := json.Marshal(map[string]interface{}{
-		"type": "A", "name": domain, "content": ip, "ttl": 300, "proxied": false,
+		"type": "A", "name": domain, "content": ip, "ttl": 300, "proxied": useProxied,
 	})
 
 	var method, reqURL string
