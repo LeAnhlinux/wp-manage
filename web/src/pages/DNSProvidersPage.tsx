@@ -24,21 +24,23 @@ const TYPE_COLORS: Record<string, string> = {
 
 const RECORD_TYPES = ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'SRV']
 
-function RecordRow({ record, canManage, providerId }: {
+function RecordRow({ record, canManage, providerId, providerType }: {
   record: import('@/types').DNSRecord
   canManage: boolean
   providerId: number
+  providerType: string
 }) {
+  const isCloudflare = providerType === 'cloudflare'
   const deleteRecord = useDeleteGlobalDNSRecord(providerId)
   const updateRecord = useUpdateGlobalDNSRecord(providerId)
   const [editing, setEditing] = useState(false)
-  const [edit, setEdit] = useState({ type: record.type, name: record.name, content: record.content, proxied: record.proxied ?? false })
+  const [edit, setEdit] = useState({ type: record.type, name: record.name, content: record.content, proxied: record.proxied ?? false, ttl: record.ttl || 300 })
   const [err, setErr] = useState('')
 
   const handleSave = async () => {
     setErr('')
     try {
-      await updateRecord.mutateAsync({ recordId: record.id, ...edit, ttl: 1 })
+      await updateRecord.mutateAsync({ recordId: record.id, ...edit, ttl: isCloudflare ? 1 : edit.ttl })
       setEditing(false)
     } catch (e: any) {
       setErr(e?.response?.data?.error || 'Update failed')
@@ -46,7 +48,7 @@ function RecordRow({ record, canManage, providerId }: {
   }
 
   const handleCancel = () => {
-    setEdit({ type: record.type, name: record.name, content: record.content, proxied: record.proxied ?? false })
+    setEdit({ type: record.type, name: record.name, content: record.content, proxied: record.proxied ?? false, ttl: record.ttl || 300 })
     setErr('')
     setEditing(false)
   }
@@ -68,17 +70,28 @@ function RecordRow({ record, canManage, providerId }: {
             <input type="text" value={edit.name} onChange={e => setEdit({ ...edit, name: e.target.value })}
               className="w-full px-2 py-1.5 border border-gray-200 rounded-lg text-xs" />
           </div>
-          <div className="col-span-2">
+          <div className={isCloudflare ? 'col-span-2' : ''}>
             <label className="block text-xs text-gray-500 mb-1">Content / Value</label>
             <input type="text" value={edit.content} onChange={e => setEdit({ ...edit, content: e.target.value })}
               className="w-full px-2 py-1.5 border border-gray-200 rounded-lg text-xs" />
           </div>
+          {!isCloudflare && (
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">TTL (s)</label>
+              <input type="number" value={edit.ttl} min={60} onChange={e => setEdit({ ...edit, ttl: parseInt(e.target.value) || 300 })}
+                className="w-full px-2 py-1.5 border border-gray-200 rounded-lg text-xs" />
+            </div>
+          )}
         </div>
         <div className="flex items-center justify-between">
-          <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
-            <input type="checkbox" checked={edit.proxied} onChange={e => setEdit({ ...edit, proxied: e.target.checked })} />
-            Proxied (Cloudflare CDN)
-          </label>
+          {isCloudflare ? (
+            <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
+              <input type="checkbox" checked={edit.proxied} onChange={e => setEdit({ ...edit, proxied: e.target.checked })} />
+              Proxied (Cloudflare CDN)
+            </label>
+          ) : (
+            <span />
+          )}
           <div className="flex gap-1.5">
             <button onClick={handleCancel}
               className="flex items-center gap-1 px-2 py-1 text-xs text-gray-600 hover:bg-gray-200 rounded-lg">
@@ -104,7 +117,8 @@ function RecordRow({ record, canManage, providerId }: {
         <span className="text-xs font-medium text-gray-800 truncate">{record.name}</span>
         <span className="text-gray-300">→</span>
         <span className="text-xs text-gray-500 truncate">{record.content}</span>
-        {record.proxied && <span className="text-xs bg-orange-100 text-orange-600 px-1 rounded">Proxied</span>}
+        {record.proxied && isCloudflare && <span className="text-xs bg-orange-100 text-orange-600 px-1 rounded">Proxied</span>}
+        {record.ttl > 0 && !isCloudflare && <span className="text-xs text-gray-400">TTL {record.ttl}s</span>}
       </div>
       {canManage && (
         <div className="flex items-center gap-1 flex-shrink-0 opacity-0 group-hover:opacity-100 ml-2">
@@ -122,15 +136,17 @@ function RecordRow({ record, canManage, providerId }: {
   )
 }
 
-function DNSRecordsPanel({ providerId, providerDomain, canManage }: {
+function DNSRecordsPanel({ providerId, providerDomain, providerType, canManage }: {
   providerId: number
   providerDomain: string
+  providerType: string
   canManage: boolean
 }) {
+  const isCloudflare = providerType === 'cloudflare'
   const { data: records = [], isLoading, refetch } = useGlobalDNSRecords(providerId)
   const createRecord = useCreateGlobalDNSRecord(providerId)
   const [showForm, setShowForm] = useState(false)
-  const [form, setForm] = useState<CreateDNSRecordRequest>({ type: 'A', name: '', content: '', ttl: 1, proxied: false })
+  const [form, setForm] = useState<CreateDNSRecordRequest>({ type: 'A', name: '', content: '', ttl: isCloudflare ? 1 : 300, proxied: false })
   const [err, setErr] = useState('')
 
   const handleCreate = async (e: React.FormEvent) => {
@@ -138,7 +154,7 @@ function DNSRecordsPanel({ providerId, providerDomain, canManage }: {
     setErr('')
     try {
       await createRecord.mutateAsync(form)
-      setForm({ type: 'A', name: '', content: '', ttl: 1, proxied: false })
+      setForm({ type: 'A', name: '', content: '', ttl: isCloudflare ? 1 : 300, proxied: false })
       setShowForm(false)
     } catch (e: any) {
       setErr(e?.response?.data?.error || 'Failed to create record')
@@ -177,22 +193,34 @@ function DNSRecordsPanel({ providerId, providerDomain, canManage }: {
             </div>
             <div>
               <label className="block text-xs text-gray-500 mb-1">Name</label>
-              <input type="text" placeholder="@ or sub" value={form.name}
+              <input type="text" placeholder="@ or subdomain" value={form.name}
                 onChange={e => setForm({ ...form, name: e.target.value })}
                 className="w-full px-2 py-1.5 border border-gray-200 rounded-lg text-xs" required />
             </div>
-            <div className="col-span-2">
+            <div className={isCloudflare ? 'col-span-2' : ''}>
               <label className="block text-xs text-gray-500 mb-1">Content / Value</label>
               <input type="text" placeholder="IP address or target" value={form.content}
                 onChange={e => setForm({ ...form, content: e.target.value })}
                 className="w-full px-2 py-1.5 border border-gray-200 rounded-lg text-xs" required />
             </div>
+            {!isCloudflare && (
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">TTL (s)</label>
+                <input type="number" value={form.ttl} min={60}
+                  onChange={e => setForm({ ...form, ttl: parseInt(e.target.value) || 300 })}
+                  className="w-full px-2 py-1.5 border border-gray-200 rounded-lg text-xs" />
+              </div>
+            )}
           </div>
           <div className="flex items-center justify-between">
-            <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
-              <input type="checkbox" checked={form.proxied} onChange={e => setForm({ ...form, proxied: e.target.checked })} />
-              Proxied (Cloudflare CDN)
-            </label>
+            {isCloudflare ? (
+              <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
+                <input type="checkbox" checked={form.proxied} onChange={e => setForm({ ...form, proxied: e.target.checked })} />
+                Proxied (Cloudflare CDN)
+              </label>
+            ) : (
+              <span />
+            )}
             <div className="flex gap-2">
               <button type="button" onClick={() => setShowForm(false)}
                 className="px-2 py-1 text-xs text-gray-600 hover:bg-gray-200 rounded-lg">Cancel</button>
@@ -214,7 +242,7 @@ function DNSRecordsPanel({ providerId, providerDomain, canManage }: {
       ) : (
         <div className="space-y-1">
           {records.map(r => (
-            <RecordRow key={r.id} record={r} canManage={canManage} providerId={providerId} />
+            <RecordRow key={r.id} record={r} canManage={canManage} providerId={providerId} providerType={providerType} />
           ))}
         </div>
       )}
@@ -242,6 +270,10 @@ function AddProviderModal({ onClose }: { onClose: () => void }) {
   const updateForm = (patch: Partial<typeof form>) => {
     setForm(f => ({ ...f, ...patch }))
     setTestResult(null)
+    if (patch.provider_type) {
+      // Reset credentials when switching provider type to avoid confusion
+      setForm(f => ({ ...f, ...patch, api_key: '', api_email: '', zone_id: '' }))
+    }
   }
 
   // Auto-lookup Zone ID from domain
@@ -252,6 +284,7 @@ function AddProviderModal({ onClose }: { onClose: () => void }) {
       const result = await lookupZone.mutateAsync({
         provider_type: form.provider_type,
         api_key: form.api_key,
+        api_email: form.api_email || undefined,
         domain: form.domain,
       })
       updateForm({ zone_id: result.zone_id })
@@ -306,27 +339,47 @@ function AddProviderModal({ onClose }: { onClose: () => void }) {
             </select>
           </div>
 
-          {/* API Key */}
-          <div>
-            <label className="block text-xs font-medium text-gray-700 mb-1.5">API Key / Token</label>
-            <input type="password" placeholder="Cloudflare API Token hoặc Global API Key" value={form.api_key}
-              onChange={e => updateForm({ api_key: e.target.value })}
-              className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm bg-gray-50 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none" required />
-          </div>
-
-          {/* API Email (optional for CF tokens) */}
+          {/* API Key — label differs by provider */}
           <div>
             <label className="block text-xs font-medium text-gray-700 mb-1.5">
-              API Email <span className="text-gray-400 font-normal">(chỉ cần khi dùng Global API Key)</span>
+              {form.provider_type === 'route53' ? 'AWS Access Key ID' : 'API Token / Key'}
             </label>
-            <input type="email" placeholder="email@example.com" value={form.api_email}
+            <input
+              type="password"
+              placeholder={form.provider_type === 'route53' ? 'AKIAIOSFODNN7EXAMPLE' : 'Cloudflare API Token hoặc Global API Key'}
+              value={form.api_key}
+              onChange={e => updateForm({ api_key: e.target.value })}
+              className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm bg-gray-50 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none"
+              required
+            />
+          </div>
+
+          {/* API Email / Secret Key — label and requirement differ by provider */}
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1.5">
+              {form.provider_type === 'route53'
+                ? 'AWS Secret Access Key'
+                : <>API Email <span className="text-gray-400 font-normal">(chỉ cần khi dùng Global API Key)</span></>
+              }
+            </label>
+            <input
+              type={form.provider_type === 'route53' ? 'password' : 'email'}
+              placeholder={form.provider_type === 'route53' ? 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY' : 'email@example.com'}
+              value={form.api_email}
               onChange={e => updateForm({ api_email: e.target.value })}
-              className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm bg-gray-50 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none" />
+              className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm bg-gray-50 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none"
+              required={form.provider_type === 'route53'}
+            />
+            {form.provider_type === 'route53' && (
+              <p className="text-xs text-gray-400 mt-1">
+                Tạo IAM user với quyền <code className="bg-gray-100 px-1 rounded">AmazonRoute53FullAccess</code>
+              </p>
+            )}
           </div>
 
           {/* Domain + Auto-lookup Zone ID */}
           <div>
-            <label className="block text-xs font-medium text-gray-700 mb-1.5">Domain</label>
+            <label className="block text-xs font-medium text-gray-700 mb-1.5">Domain (root zone)</label>
             <div className="flex gap-2">
               <input type="text" placeholder="example.com" value={form.domain}
                 onChange={e => updateForm({ domain: e.target.value })}
@@ -334,7 +387,7 @@ function AddProviderModal({ onClose }: { onClose: () => void }) {
               <button
                 type="button"
                 onClick={handleLookupZone}
-                disabled={!form.api_key || !form.domain || lookupZone.isPending}
+                disabled={!form.api_key || !form.domain || lookupZone.isPending || (form.provider_type === 'route53' && !form.api_email)}
                 title="Tự động tìm Zone ID từ domain"
                 className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-gray-200 rounded-xl bg-gray-50 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed text-gray-700 transition-colors whitespace-nowrap"
               >
@@ -350,18 +403,27 @@ function AddProviderModal({ onClose }: { onClose: () => void }) {
           {/* Zone ID + Test */}
           <div>
             <label className="block text-xs font-medium text-gray-700 mb-1.5">
-              Zone ID
-              <span className="ml-1.5 text-gray-400 font-normal">(tìm trong Cloudflare dashboard → Overview)</span>
+              {form.provider_type === 'route53' ? 'Hosted Zone ID' : 'Zone ID'}
+              <span className="ml-1.5 text-gray-400 font-normal">
+                {form.provider_type === 'route53'
+                  ? '(AWS Console → Route53 → Hosted Zones)'
+                  : '(Cloudflare Dashboard → Overview)'}
+              </span>
             </label>
             <div className="flex gap-2">
-              <input type="text" placeholder="32-ký-tự hex từ Cloudflare" value={form.zone_id}
+              <input
+                type="text"
+                placeholder={form.provider_type === 'route53' ? 'Z1D633PJN98FT9' : '32-ký-tự hex từ Cloudflare'}
+                value={form.zone_id}
                 onChange={e => updateForm({ zone_id: e.target.value })}
-                className="flex-1 px-3 py-2 border border-gray-200 rounded-xl text-sm bg-gray-50 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none font-mono" required />
+                className="flex-1 px-3 py-2 border border-gray-200 rounded-xl text-sm bg-gray-50 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none font-mono"
+                required
+              />
               <button
                 type="button"
                 onClick={handleTest}
-                disabled={!form.api_key || !form.zone_id || testProvider.isPending}
-                title="Kiểm tra kết nối với Cloudflare"
+                disabled={!form.api_key || !form.zone_id || testProvider.isPending || (form.provider_type === 'route53' && !form.api_email)}
+                title="Kiểm tra kết nối"
                 className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-gray-200 rounded-xl bg-gray-50 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed text-gray-700 transition-colors whitespace-nowrap"
               >
                 {testProvider.isPending
@@ -448,6 +510,7 @@ function ProviderCard({ provider, expanded, onToggle, canManage }: {
           <DNSRecordsPanel
             providerId={provider.id}
             providerDomain={provider.domain}
+            providerType={provider.provider_type}
             canManage={canManage}
           />
         </div>

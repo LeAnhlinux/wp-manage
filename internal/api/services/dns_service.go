@@ -52,6 +52,8 @@ func (s *DNSService) LookupZone(req models.LookupZoneRequest) (*models.LookupZon
 	switch req.ProviderType {
 	case "cloudflare":
 		return s.cfLookupZone(req.APIKey, req.Domain)
+	case "route53":
+		return s.r53LookupZone(req.APIKey, req.APIEmail, req.Domain)
 	default:
 		return nil, fmt.Errorf("unsupported provider: %s", req.ProviderType)
 	}
@@ -130,6 +132,8 @@ func (s *DNSService) AutoCreateRecord(domain, serverIP string) (*models.AutoCrea
 	switch matched.ProviderType {
 	case "cloudflare":
 		return s.cfAutoCreateRecord(*matched, domain, serverIP)
+	case "route53":
+		return s.r53AutoCreateRecord(*matched, domain, serverIP)
 	default:
 		return nil, fmt.Errorf("unsupported provider: %s", matched.ProviderType)
 	}
@@ -209,6 +213,8 @@ func (s *DNSService) UpdateRecordByProvider(providerID uint64, recordID string, 
 	switch provider.ProviderType {
 	case "cloudflare":
 		return s.cfUpdateRecord(provider, recordID, rec)
+	case "route53":
+		return s.r53UpdateRecord(provider, recordID, rec)
 	default:
 		return nil, fmt.Errorf("unsupported provider: %s", provider.ProviderType)
 	}
@@ -242,6 +248,8 @@ func (s *DNSService) TestProvider(req models.TestDNSProviderRequest) (*models.Te
 	switch req.ProviderType {
 	case "cloudflare":
 		return s.testCloudflare(req)
+	case "route53":
+		return s.testRoute53(req)
 	default:
 		return &models.TestDNSProviderResult{Success: false, Message: "Unsupported provider: " + req.ProviderType}, nil
 	}
@@ -292,7 +300,7 @@ type CFDNSRecord struct {
 	Comment string `json:"comment,omitempty"`
 }
 
-// ListDNSRecords returns all DNS records for a provider's zone from Cloudflare.
+// ListDNSRecords returns all DNS records for a provider's zone.
 func (s *DNSService) ListDNSRecords(providerID uint64) ([]CFDNSRecord, error) {
 	var provider models.DNSProvider
 	if err := s.db.First(&provider, providerID).Error; err != nil {
@@ -301,6 +309,8 @@ func (s *DNSService) ListDNSRecords(providerID uint64) ([]CFDNSRecord, error) {
 	switch provider.ProviderType {
 	case "cloudflare":
 		return s.cfListRecords(provider)
+	case "route53":
+		return s.r53ListRecords(provider)
 	default:
 		return nil, fmt.Errorf("unsupported provider: %s", provider.ProviderType)
 	}
@@ -315,6 +325,8 @@ func (s *DNSService) CreateDNSRecord(providerID uint64, rec CFDNSRecord) (*CFDNS
 	switch provider.ProviderType {
 	case "cloudflare":
 		return s.cfCreateRecord(provider, rec)
+	case "route53":
+		return s.r53CreateRecord(provider, rec)
 	default:
 		return nil, fmt.Errorf("unsupported provider: %s", provider.ProviderType)
 	}
@@ -329,6 +341,8 @@ func (s *DNSService) DeleteDNSRecord(providerID uint64, recordID string) error {
 	switch provider.ProviderType {
 	case "cloudflare":
 		return s.cfDeleteRecord(provider, recordID)
+	case "route53":
+		return s.r53DeleteRecord(provider, recordID)
 	default:
 		return fmt.Errorf("unsupported provider: %s", provider.ProviderType)
 	}

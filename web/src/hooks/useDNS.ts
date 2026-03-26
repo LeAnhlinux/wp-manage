@@ -26,7 +26,7 @@ export interface LookupZoneResult {
 
 export function useLookupZone() {
   return useMutation({
-    mutationFn: async (req: { provider_type: string; api_key: string; domain: string }) => {
+    mutationFn: async (req: { provider_type: string; api_key: string; api_email?: string; domain: string }) => {
       const { data } = await api.post<APIResponse<LookupZoneResult>>('/dns-providers/lookup-zone', req)
       return data.data!
     },

@@ -1037,6 +1037,7 @@ type CreateGlobalDNSProviderRequest struct {
 type LookupZoneRequest struct {
 	ProviderType string `json:"provider_type" validate:"required"`
 	APIKey       string `json:"api_key" validate:"required"`
+	APIEmail     string `json:"api_email"` // Cloudflare: email for Global API Key; Route53: AWS Secret Access Key
 	Domain       string `json:"domain" validate:"required"`
 }
 
