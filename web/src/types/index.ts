@@ -1038,12 +1038,6 @@ export interface CreateDNSProviderRequest {
   domain: string
 }
 
-export interface UpdateDNSRecordRequest {
-  record_type: string
-  name: string
-  content: string
-  proxied?: boolean
-}
 
 export interface DNSRecord {
   id: string

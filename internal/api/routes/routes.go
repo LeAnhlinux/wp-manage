@@ -556,15 +556,6 @@ func Setup(
 	siteImport.Get("/", importHandler.List)
 	siteImport.Get("/:importId", importHandler.GetStatus)
 
-	// DNS Provider routes (server-scoped)
-	serverDNS := servers.Group("/:id/dns-providers", serverAccess)
-	serverDNS.Get("/", dnsHandler.List)
-	serverDNS.Post("/", middleware.PermissionRequired("infrastructure", "manage"), dnsHandler.Create)
-	serverDNS.Delete("/:providerId", middleware.PermissionRequired("infrastructure", "manage"), dnsHandler.Delete)
-	serverDNS.Post("/:providerId/update-record", middleware.PermissionRequired("infrastructure", "manage"), dnsHandler.UpdateRecord)
-	serverDNS.Get("/:providerId/records", middleware.PermissionRequired("infrastructure", "read"), dnsHandler.ListRecords)
-	serverDNS.Post("/:providerId/records", middleware.PermissionRequired("infrastructure", "manage"), dnsHandler.CreateRecord)
-	serverDNS.Delete("/:providerId/records/:recordId", middleware.PermissionRequired("infrastructure", "manage"), dnsHandler.DeleteRecord)
 
 	// SSL Management routes (site-scoped)
 	siteSSL := sites.Group("/:siteId/ssl")

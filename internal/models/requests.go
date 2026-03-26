@@ -1074,11 +1074,6 @@ type AutoCreateDNSRecordResult struct {
 	Proxied    bool   `json:"proxied"` // true = Cloudflare proxy still on (DNS check will see CF IPs)
 }
 
-type UpdateDNSRecordRequest struct {
-	Domain  string `json:"domain" validate:"required"`
-	IP      string `json:"ip" validate:"required"`
-	Proxied *bool  `json:"proxied"` // nil = preserve existing; true/false = explicit set
-}
 
 // Agent task types for Batch 6
 type AgentWPCLITask struct {
