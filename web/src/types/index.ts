@@ -1021,7 +1021,7 @@ export interface ImportExternalRequest {
 export interface DNSProvider {
   id: number
   server_id: number
-  provider_type: 'cloudflare' | 'route53'
+  provider_type: 'cloudflare' | 'route53' | 'godaddy'
   api_key: string
   api_email: string
   zone_id: string
@@ -1031,7 +1031,7 @@ export interface DNSProvider {
 }
 
 export interface CreateDNSProviderRequest {
-  provider_type: 'cloudflare' | 'route53'
+  provider_type: 'cloudflare' | 'route53' | 'godaddy'
   api_key: string
   api_email?: string
   zone_id: string

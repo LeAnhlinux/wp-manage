@@ -295,10 +295,14 @@ function AddProviderModal({ onClose }: { onClose: () => void }) {
 
   // Test connection
   const handleTest = async () => {
-    if (!form.api_key || !form.zone_id) return
+    // GoDaddy: zone_id = domain; others need explicit zone_id
+    if (!form.api_key || (!form.zone_id && form.provider_type !== 'godaddy')) return
     setTestResult(null)
+    const testPayload = form.provider_type === 'godaddy'
+      ? { ...form, zone_id: form.domain }
+      : form
     try {
-      const result = await testProvider.mutateAsync(form as any)
+      const result = await testProvider.mutateAsync(testPayload as any)
       setTestResult({ success: result.success, message: result.message })
     } catch (e: any) {
       setTestResult({ success: false, message: e?.response?.data?.error || 'Connection test failed' })
@@ -336,39 +340,55 @@ function AddProviderModal({ onClose }: { onClose: () => void }) {
               className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm bg-gray-50 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none">
               <option value="cloudflare">Cloudflare</option>
               <option value="route53">AWS Route53</option>
+              <option value="godaddy">GoDaddy</option>
             </select>
           </div>
 
           {/* API Key — label differs by provider */}
           <div>
             <label className="block text-xs font-medium text-gray-700 mb-1.5">
-              {form.provider_type === 'route53' ? 'AWS Access Key ID' : 'API Token / Key'}
+              {form.provider_type === 'route53' ? 'AWS Access Key ID'
+                : form.provider_type === 'godaddy' ? 'GoDaddy API Key'
+                : 'API Token / Key'}
             </label>
             <input
               type="password"
-              placeholder={form.provider_type === 'route53' ? 'AKIAIOSFODNN7EXAMPLE' : 'Cloudflare API Token hoặc Global API Key'}
+              placeholder={
+                form.provider_type === 'route53' ? 'AKIAIOSFODNN7EXAMPLE'
+                : form.provider_type === 'godaddy' ? '3mM44UoYLJmGaD7_xxxxxxxx'
+                : 'Cloudflare API Token hoặc Global API Key'
+              }
               value={form.api_key}
               onChange={e => updateForm({ api_key: e.target.value })}
               className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm bg-gray-50 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none"
               required
             />
+            {form.provider_type === 'godaddy' && (
+              <p className="text-xs text-gray-400 mt-1">
+                Lấy tại <a href="https://developer.godaddy.com/keys" target="_blank" rel="noreferrer"
+                  className="text-blue-500 hover:underline">developer.godaddy.com/keys</a> → Production
+              </p>
+            )}
           </div>
 
           {/* API Email / Secret Key — label and requirement differ by provider */}
           <div>
             <label className="block text-xs font-medium text-gray-700 mb-1.5">
-              {form.provider_type === 'route53'
-                ? 'AWS Secret Access Key'
-                : <>API Email <span className="text-gray-400 font-normal">(chỉ cần khi dùng Global API Key)</span></>
-              }
+              {form.provider_type === 'route53' ? 'AWS Secret Access Key'
+                : form.provider_type === 'godaddy' ? 'GoDaddy API Secret'
+                : <>API Email <span className="text-gray-400 font-normal">(chỉ cần khi dùng Global API Key)</span></>}
             </label>
             <input
-              type={form.provider_type === 'route53' ? 'password' : 'email'}
-              placeholder={form.provider_type === 'route53' ? 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY' : 'email@example.com'}
+              type="password"
+              placeholder={
+                form.provider_type === 'route53' ? 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'
+                : form.provider_type === 'godaddy' ? 'WKc9GBqDL1aAzEF_xxxxxxxx'
+                : 'email@example.com'
+              }
               value={form.api_email}
               onChange={e => updateForm({ api_email: e.target.value })}
               className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm bg-gray-50 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none"
-              required={form.provider_type === 'route53'}
+              required={form.provider_type === 'route53' || form.provider_type === 'godaddy'}
             />
             {form.provider_type === 'route53' && (
               <p className="text-xs text-gray-400 mt-1">
@@ -377,62 +397,109 @@ function AddProviderModal({ onClose }: { onClose: () => void }) {
             )}
           </div>
 
-          {/* Domain + Auto-lookup Zone ID */}
+          {/* Domain */}
           <div>
             <label className="block text-xs font-medium text-gray-700 mb-1.5">Domain (root zone)</label>
             <div className="flex gap-2">
-              <input type="text" placeholder="example.com" value={form.domain}
-                onChange={e => updateForm({ domain: e.target.value })}
-                className="flex-1 px-3 py-2 border border-gray-200 rounded-xl text-sm bg-gray-50 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none" required />
-              <button
-                type="button"
-                onClick={handleLookupZone}
-                disabled={!form.api_key || !form.domain || lookupZone.isPending || (form.provider_type === 'route53' && !form.api_email)}
-                title="Tự động tìm Zone ID từ domain"
-                className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-gray-200 rounded-xl bg-gray-50 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed text-gray-700 transition-colors whitespace-nowrap"
-              >
-                {lookupZone.isPending
-                  ? <><Loader2 size={13} className="animate-spin" /> Finding...</>
-                  : <><Search size={13} /> Find Zone ID</>
-                }
-              </button>
-            </div>
-            {lookupErr && <p className="text-xs text-red-500 mt-1">{lookupErr}</p>}
-          </div>
-
-          {/* Zone ID + Test */}
-          <div>
-            <label className="block text-xs font-medium text-gray-700 mb-1.5">
-              {form.provider_type === 'route53' ? 'Hosted Zone ID' : 'Zone ID'}
-              <span className="ml-1.5 text-gray-400 font-normal">
-                {form.provider_type === 'route53'
-                  ? '(AWS Console → Route53 → Hosted Zones)'
-                  : '(Cloudflare Dashboard → Overview)'}
-              </span>
-            </label>
-            <div className="flex gap-2">
               <input
                 type="text"
-                placeholder={form.provider_type === 'route53' ? 'Z1D633PJN98FT9' : '32-ký-tự hex từ Cloudflare'}
-                value={form.zone_id}
-                onChange={e => updateForm({ zone_id: e.target.value })}
-                className="flex-1 px-3 py-2 border border-gray-200 rounded-xl text-sm bg-gray-50 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none font-mono"
+                placeholder="example.com"
+                value={form.domain}
+                onChange={e => {
+                  const d = e.target.value
+                  // GoDaddy: zone_id = domain (no separate zone concept)
+                  updateForm(form.provider_type === 'godaddy' ? { domain: d, zone_id: d } : { domain: d })
+                }}
+                className="flex-1 px-3 py-2 border border-gray-200 rounded-xl text-sm bg-gray-50 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none"
                 required
               />
-              <button
-                type="button"
-                onClick={handleTest}
-                disabled={!form.api_key || !form.zone_id || testProvider.isPending || (form.provider_type === 'route53' && !form.api_email)}
-                title="Kiểm tra kết nối"
-                className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-gray-200 rounded-xl bg-gray-50 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed text-gray-700 transition-colors whitespace-nowrap"
-              >
-                {testProvider.isPending
-                  ? <><Loader2 size={13} className="animate-spin" /> Testing...</>
-                  : <><Wifi size={13} /> Test</>
-                }
-              </button>
+              {/* "Find Zone ID" only for Cloudflare and Route53 */}
+              {form.provider_type !== 'godaddy' && (
+                <button
+                  type="button"
+                  onClick={handleLookupZone}
+                  disabled={!form.api_key || !form.domain || lookupZone.isPending || (form.provider_type === 'route53' && !form.api_email)}
+                  title="Tự động tìm Zone ID từ domain"
+                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-gray-200 rounded-xl bg-gray-50 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed text-gray-700 transition-colors whitespace-nowrap"
+                >
+                  {lookupZone.isPending
+                    ? <><Loader2 size={13} className="animate-spin" /> Finding...</>
+                    : <><Search size={13} /> Find Zone ID</>
+                  }
+                </button>
+              )}
+              {/* GoDaddy: "Verify" button confirms domain is in account */}
+              {form.provider_type === 'godaddy' && (
+                <button
+                  type="button"
+                  onClick={handleLookupZone}
+                  disabled={!form.api_key || !form.api_email || !form.domain || lookupZone.isPending}
+                  title="Xác minh domain trong tài khoản GoDaddy"
+                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-gray-200 rounded-xl bg-gray-50 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed text-gray-700 transition-colors whitespace-nowrap"
+                >
+                  {lookupZone.isPending
+                    ? <><Loader2 size={13} className="animate-spin" /> Verifying...</>
+                    : <><Search size={13} /> Verify</>
+                  }
+                </button>
+              )}
             </div>
+            {lookupErr && <p className="text-xs text-red-500 mt-1">{lookupErr}</p>}
+            {form.provider_type === 'godaddy' && form.domain && (
+              <p className="text-xs text-gray-400 mt-1">GoDaddy dùng domain làm Zone ID — không cần nhập riêng.</p>
+            )}
           </div>
+
+          {/* Zone ID + Test — hidden for GoDaddy (zone_id = domain, handled above) */}
+          {form.provider_type !== 'godaddy' && (
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1.5">
+                {form.provider_type === 'route53' ? 'Hosted Zone ID' : 'Zone ID'}
+                <span className="ml-1.5 text-gray-400 font-normal">
+                  {form.provider_type === 'route53'
+                    ? '(AWS Console → Route53 → Hosted Zones)'
+                    : '(Cloudflare Dashboard → Overview)'}
+                </span>
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  placeholder={form.provider_type === 'route53' ? 'Z1D633PJN98FT9' : '32-ký-tự hex từ Cloudflare'}
+                  value={form.zone_id}
+                  onChange={e => updateForm({ zone_id: e.target.value })}
+                  className="flex-1 px-3 py-2 border border-gray-200 rounded-xl text-sm bg-gray-50 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none font-mono"
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={handleTest}
+                  disabled={!form.api_key || !form.zone_id || testProvider.isPending || (form.provider_type === 'route53' && !form.api_email)}
+                  title="Kiểm tra kết nối"
+                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-gray-200 rounded-xl bg-gray-50 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed text-gray-700 transition-colors whitespace-nowrap"
+                >
+                  {testProvider.isPending
+                    ? <><Loader2 size={13} className="animate-spin" /> Testing...</>
+                    : <><Wifi size={13} /> Test</>
+                  }
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* GoDaddy: Test button inline (zone_id field hidden) */}
+          {form.provider_type === 'godaddy' && (
+            <button
+              type="button"
+              onClick={handleTest}
+              disabled={!form.api_key || !form.api_email || !form.domain || testProvider.isPending}
+              className="w-full flex items-center justify-center gap-1.5 px-3 py-2 text-sm font-medium border border-gray-200 rounded-xl bg-gray-50 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed text-gray-700 transition-colors"
+            >
+              {testProvider.isPending
+                ? <><Loader2 size={13} className="animate-spin" /> Testing...</>
+                : <><Wifi size={13} /> Test Connection</>
+              }
+            </button>
+          )}
 
           {/* Test result */}
           {testResult && (
@@ -473,10 +540,14 @@ function ProviderCard({ provider, expanded, onToggle, canManage }: {
 }) {
   const deleteProvider = useDeleteGlobalDNSProvider()
 
-  const providerLabel = provider.provider_type === 'cloudflare' ? 'Cloudflare' : 'AWS Route53'
+  const providerLabel = provider.provider_type === 'cloudflare' ? 'Cloudflare'
+    : provider.provider_type === 'route53' ? 'AWS Route53'
+    : 'GoDaddy'
   const providerColor = provider.provider_type === 'cloudflare'
     ? 'bg-orange-100 text-orange-600'
-    : 'bg-yellow-100 text-yellow-600'
+    : provider.provider_type === 'route53'
+    ? 'bg-yellow-100 text-yellow-600'
+    : 'bg-green-100 text-green-700'
 
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
@@ -557,11 +628,13 @@ export default function DNSProvidersPage() {
             <p className="text-2xl font-bold text-gray-900">{providers.length}</p>
           </div>
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
-            <p className="text-xs text-gray-500 mb-1">Cloudflare / Route53</p>
+            <p className="text-xs text-gray-500 mb-1">CF / R53 / GoDaddy</p>
             <p className="text-2xl font-bold text-gray-900">
               {providers.filter(p => p.provider_type === 'cloudflare').length}
               <span className="text-gray-400 text-base font-normal"> / </span>
               {providers.filter(p => p.provider_type === 'route53').length}
+              <span className="text-gray-400 text-base font-normal"> / </span>
+              {providers.filter(p => p.provider_type === 'godaddy').length}
             </p>
           </div>
         </div>
@@ -577,7 +650,7 @@ export default function DNSProvidersPage() {
           <Globe size={40} className="text-gray-300 mx-auto mb-3" />
           <p className="text-gray-600 font-semibold mb-1">Chưa có DNS provider nào</p>
           <p className="text-gray-400 text-sm mb-5">
-            Thêm Cloudflare hoặc AWS Route53 để quản lý DNS records trực tiếp từ đây.
+            Thêm Cloudflare, AWS Route53 hoặc GoDaddy để quản lý DNS records trực tiếp từ đây.
           </p>
           {canWrite && (
             <button onClick={() => setShowAddModal(true)}

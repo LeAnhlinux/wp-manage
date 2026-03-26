@@ -54,6 +54,8 @@ func (s *DNSService) LookupZone(req models.LookupZoneRequest) (*models.LookupZon
 		return s.cfLookupZone(req.APIKey, req.Domain)
 	case "route53":
 		return s.r53LookupZone(req.APIKey, req.APIEmail, req.Domain)
+	case "godaddy":
+		return s.gdLookupZone(req.APIKey, req.APIEmail, req.Domain)
 	default:
 		return nil, fmt.Errorf("unsupported provider: %s", req.ProviderType)
 	}
@@ -134,6 +136,8 @@ func (s *DNSService) AutoCreateRecord(domain, serverIP string) (*models.AutoCrea
 		return s.cfAutoCreateRecord(*matched, domain, serverIP)
 	case "route53":
 		return s.r53AutoCreateRecord(*matched, domain, serverIP)
+	case "godaddy":
+		return s.gdAutoCreateRecord(*matched, domain, serverIP)
 	default:
 		return nil, fmt.Errorf("unsupported provider: %s", matched.ProviderType)
 	}
@@ -215,6 +219,8 @@ func (s *DNSService) UpdateRecordByProvider(providerID uint64, recordID string, 
 		return s.cfUpdateRecord(provider, recordID, rec)
 	case "route53":
 		return s.r53UpdateRecord(provider, recordID, rec)
+	case "godaddy":
+		return s.gdUpdateRecord(provider, recordID, rec)
 	default:
 		return nil, fmt.Errorf("unsupported provider: %s", provider.ProviderType)
 	}
@@ -250,6 +256,8 @@ func (s *DNSService) TestProvider(req models.TestDNSProviderRequest) (*models.Te
 		return s.testCloudflare(req)
 	case "route53":
 		return s.testRoute53(req)
+	case "godaddy":
+		return s.testGoDaddy(req)
 	default:
 		return &models.TestDNSProviderResult{Success: false, Message: "Unsupported provider: " + req.ProviderType}, nil
 	}
@@ -311,6 +319,8 @@ func (s *DNSService) ListDNSRecords(providerID uint64) ([]CFDNSRecord, error) {
 		return s.cfListRecords(provider)
 	case "route53":
 		return s.r53ListRecords(provider)
+	case "godaddy":
+		return s.gdListRecords(provider)
 	default:
 		return nil, fmt.Errorf("unsupported provider: %s", provider.ProviderType)
 	}
@@ -327,6 +337,8 @@ func (s *DNSService) CreateDNSRecord(providerID uint64, rec CFDNSRecord) (*CFDNS
 		return s.cfCreateRecord(provider, rec)
 	case "route53":
 		return s.r53CreateRecord(provider, rec)
+	case "godaddy":
+		return s.gdCreateRecord(provider, rec)
 	default:
 		return nil, fmt.Errorf("unsupported provider: %s", provider.ProviderType)
 	}
@@ -343,6 +355,8 @@ func (s *DNSService) DeleteDNSRecord(providerID uint64, recordID string) error {
 		return s.cfDeleteRecord(provider, recordID)
 	case "route53":
 		return s.r53DeleteRecord(provider, recordID)
+	case "godaddy":
+		return s.gdDeleteRecord(provider, recordID)
 	default:
 		return fmt.Errorf("unsupported provider: %s", provider.ProviderType)
 	}
