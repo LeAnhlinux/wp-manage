@@ -209,6 +209,39 @@ func (s *MigrationService) UpdateMigration(update models.AgentMigrationUpdate) e
 				s.AddLog(migration.ID, "cleanup", "info",
 					fmt.Sprintf("Vui lòng cập nhật DNS thủ công: trỏ %s → %s", newDomain, migration.TargetServer.IPAddress))
 			}
+
+			// ── Re-issue SSL on target after keep_domain migration ───────────
+			// During migration, certbot runs via SSH but fails because DNS still
+			// points to the source server (HTTP-01 challenge can't be verified).
+			// After migration completes, DNS should be (or soon will be) updated,
+			// so we queue issue_ssl on the target. The task will succeed once DNS
+			// propagates. If DNS hasn't propagated yet, the user can retry from panel.
+			if migration.Mode == "keep_domain" && migration.Site != nil && migration.Site.SSLEnabled {
+				// Mark ssl_enabled=false on the site so the panel shows correct state
+				s.db.Model(&models.Site{}).Where("id = ?", migration.SiteID).Update("ssl_enabled", false)
+
+				certEmail := migration.Site.WPAdminEmail
+				if certEmail == "" {
+					certEmail = "admin@" + newDomain
+				}
+				issueData, _ := json.Marshal(map[string]interface{}{
+					"domain": newDomain,
+					"email":  certEmail,
+				})
+				issueTask := models.TaskQueue{
+					ServerID: migration.TargetServerID,
+					SiteID:   migration.SiteID,
+					TaskType: "issue_ssl",
+					Data:     string(issueData),
+					Status:   "pending",
+				}
+				if err := s.db.Create(&issueTask).Error; err == nil {
+					s.AddLog(migration.ID, "cleanup", "info",
+						fmt.Sprintf("Đã queue tác vụ cấp SSL cho %s trên server đích (task #%d). "+
+							"SSL sẽ được cấp khi DNS đã trỏ về %s.",
+							newDomain, issueTask.ID, migration.TargetServer.IPAddress))
+				}
+			}
 		}
 	}
 

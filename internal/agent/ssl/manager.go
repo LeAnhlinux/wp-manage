@@ -79,7 +79,19 @@ func RenewCertificate(domain string) error {
 	// Step 1: Force-renew the certificate
 	out, err := exec.Command("certbot", "renew", "--cert-name", domain, "--force-renewal").CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("renewal failed: %s", string(out))
+		outStr := string(out)
+		// FIX: cert may not exist on this server (e.g. after keep_domain migration where
+		// certbot could not run during migration because DNS pointed to source).
+		// Fall back to issuing a fresh certificate instead of failing.
+		if strings.Contains(outStr, "No certificate found") ||
+			strings.Contains(outStr, "no certificate with name") ||
+			strings.Contains(outStr, "expected /etc/letsencrypt/renewal/") {
+			slog.Info("Certificate not found on renewal — falling back to fresh issue", "domain", domain)
+			// Try to recover admin email from nginx vhost or wp-config; default to admin@domain
+			email := certEmailForDomain(domain)
+			return IssueCertificate(domain, email)
+		}
+		return fmt.Errorf("renewal failed: %s", outStr)
 	}
 
 	// Step 2: Redeploy the renewed cert to nginx (--reinstall deploys without issuing new cert)
@@ -292,4 +304,18 @@ func GetCertExpiry(domain string) (*time.Time, error) {
 		}
 	}
 	return nil, fmt.Errorf("could not parse expiry for %s", domain)
+}
+
+// certEmailForDomain tries to recover an admin email for the domain by looking
+// at the nginx vhost or WP-CLI. Falls back to "admin@{domain}" if nothing found.
+func certEmailForDomain(domain string) string {
+	// Try wp-cli to get admin email
+	out, err := exec.Command("bash", "-c",
+		fmt.Sprintf("wp --path=/var/www/%s/public --allow-root option get admin_email 2>/dev/null | tr -d '\n'", domain),
+	).Output()
+	if err == nil && len(out) > 0 && strings.Contains(string(out), "@") {
+		return strings.TrimSpace(string(out))
+	}
+	// Fallback
+	return "admin@" + domain
 }
