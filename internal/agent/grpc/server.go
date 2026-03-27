@@ -2524,7 +2524,7 @@ func (s *AgentServer) executeListInstalledPHP(taskID uint64) {
 		OPcacheEnabled bool   `json:"opcache_enabled"`
 	}
 
-	versions := []string{"7.4", "8.0", "8.1", "8.2", "8.3"}
+	versions := []string{"7.4", "8.0", "8.1", "8.2", "8.3", "8.4"}
 	var installed []PHPVersion
 
 	for _, v := range versions {

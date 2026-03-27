@@ -882,7 +882,7 @@ function IonCubeTab({ serverId }: { serverId: number }) {
 
 // ==================== Config Tab ====================
 
-const PHP_VERSIONS = ['7.4', '8.0', '8.1', '8.2', '8.3']
+const PHP_VERSIONS = ['7.4', '8.0', '8.1', '8.2', '8.3', '8.4']
 
 // ==================== PHP-FPM Tab ====================
 

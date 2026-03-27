@@ -227,7 +227,7 @@ func (m *Manager) DeleteSite(domain, dbName, dbUser string) error {
 	os.Remove(fmt.Sprintf("/etc/nginx/sites-available/%s.conf", domain))
 
 	// Remove PHP-FPM pool for all versions
-	phpVersions := []string{"7.4", "8.0", "8.1", "8.2", "8.3"}
+	phpVersions := []string{"7.4", "8.0", "8.1", "8.2", "8.3", "8.4"}
 	for _, v := range phpVersions {
 		poolFile := fmt.Sprintf("/etc/php/%s/fpm/pool.d/%s.conf", v, domain)
 		os.Remove(poolFile)

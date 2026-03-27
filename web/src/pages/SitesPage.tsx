@@ -435,7 +435,7 @@ export default function SitesPage() {
                     <select value={form.php_version}
                       onChange={(e) => setForm({ ...form, php_version: e.target.value })}
                       className={selectCls}>
-                      {['7.4', '8.0', '8.1', '8.2', '8.3'].map(v => (
+                      {['7.4', '8.0', '8.1', '8.2', '8.3', '8.4'].map(v => (
                         <option key={v} value={v}>PHP {v}</option>
                       ))}
                     </select>

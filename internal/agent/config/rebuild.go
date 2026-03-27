@@ -169,7 +169,7 @@ func RunHealthCheck() ([]HealthStatus, error) {
 	}
 
 	// Check PHP-FPM versions
-	for _, v := range []string{"7.4", "8.0", "8.1", "8.2", "8.3"} {
+	for _, v := range []string{"7.4", "8.0", "8.1", "8.2", "8.3", "8.4"} {
 		binary := fmt.Sprintf("php-fpm%s", v)
 		if _, err := exec.LookPath(binary); err == nil {
 			if out, err := exec.Command(binary, "-t").CombinedOutput(); err != nil {

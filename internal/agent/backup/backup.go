@@ -339,7 +339,7 @@ func detectPHPVersion(domain string) string {
 		return "8.2"
 	}
 	content := string(data)
-	for _, ver := range []string{"8.3", "8.2", "8.1", "8.0", "7.4"} {
+	for _, ver := range []string{"8.4", "8.3", "8.2", "8.1", "8.0", "7.4"} {
 		if strings.Contains(content, "php"+ver+"-fpm") {
 			return ver
 		}
