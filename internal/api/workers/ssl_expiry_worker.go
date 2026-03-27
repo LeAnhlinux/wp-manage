@@ -1,6 +1,7 @@
 package workers
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -10,6 +11,10 @@ import (
 	"github.com/gofiber-team/wp-manage/pkg/notify"
 	"gorm.io/gorm"
 )
+
+// autoRenewThresholdDays: queue auto-renewal when cert has ≤ this many days left.
+// Let's Encrypt certs last 90 days; renew at 30 days = standard certbot behaviour.
+const autoRenewThresholdDays = 30
 
 type SSLExpiryWorker struct {
 	db       *gorm.DB
@@ -21,13 +26,13 @@ func NewSSLExpiryWorker(db *gorm.DB, alertSvc *services.AlertService) *SSLExpiry
 }
 
 func (w *SSLExpiryWorker) Start() {
-	// Run once at startup, then daily
+	// Run once at startup, then every 12 hours (more responsive than daily)
 	w.checkAll()
 
-	ticker := time.NewTicker(24 * time.Hour)
+	ticker := time.NewTicker(12 * time.Hour)
 	defer ticker.Stop()
 
-	slog.Info("SSL expiry worker started")
+	slog.Info("SSL expiry worker started", "auto_renew_threshold_days", autoRenewThresholdDays)
 	for range ticker.C {
 		w.checkAll()
 	}
@@ -49,6 +54,15 @@ func (w *SSLExpiryWorker) checkAll() {
 		}
 
 		daysLeft := int(site.SSLExpiresAt.Sub(now).Hours() / 24)
+
+		// ── Auto-renew when ≤ 30 days remain ────────────────────────────────
+		// Queue a renew_ssl task only if no pending/running renewal already exists
+		// for this site (avoid duplicate tasks on every 12h tick).
+		if daysLeft <= autoRenewThresholdDays {
+			w.queueAutoRenew(site, daysLeft)
+		}
+
+		// ── Warning notifications (best-effort, non-blocking) ─────────────
 		for _, warnDay := range warningDays {
 			if daysLeft == warnDay {
 				w.sendSSLWarning(site, daysLeft)
@@ -61,6 +75,46 @@ func (w *SSLExpiryWorker) checkAll() {
 			w.sendSSLExpiredNotification(site)
 		}
 	}
+}
+
+// queueAutoRenew queues a renew_ssl task for the site, deduplicating against
+// any task already pending or running for the same site.
+func (w *SSLExpiryWorker) queueAutoRenew(site models.Site, daysLeft int) {
+	// Dedup: skip if a renew_ssl task is already pending/running for this site
+	var count int64
+	w.db.Model(&models.TaskQueue{}).
+		Where("site_id = ? AND task_type = ? AND status IN ('pending','running')", site.ID, "renew_ssl").
+		Count(&count)
+	if count > 0 {
+		return
+	}
+
+	payload, _ := json.Marshal(map[string]interface{}{"domain": site.Domain})
+	task := models.TaskQueue{
+		ServerID: site.ServerID,
+		SiteID:   site.ID,
+		TaskType: "renew_ssl",
+		Data:     string(payload),
+		Status:   "pending",
+	}
+	if err := w.db.Create(&task).Error; err != nil {
+		slog.Error("SSL auto-renew: failed to queue task", "domain", site.Domain, "error", err)
+		return
+	}
+	slog.Info("SSL auto-renew queued", "domain", site.Domain, "days_left", daysLeft, "task_id", task.ID)
+
+	// Notify so user knows auto-renewal is happening
+	w.sendAutoRenewNotification(site, daysLeft, task.ID)
+}
+
+func (w *SSLExpiryWorker) sendAutoRenewNotification(site models.Site, daysLeft int, taskID uint64) {
+	var msg string
+	if daysLeft <= 0 {
+		msg = fmt.Sprintf("🔄 <b>SSL Auto-Renew</b> (hết hạn)\nDomain: <code>%s</code>\nĐã queue gia hạn SSL tự động (task #%d)", site.Domain, taskID)
+	} else {
+		msg = fmt.Sprintf("🔄 <b>SSL Auto-Renew</b>\nDomain: <code>%s</code>\nCòn %d ngày — đã queue gia hạn tự động (task #%d)", site.Domain, daysLeft, taskID)
+	}
+	w.sendNotification(msg)
 }
 
 func (w *SSLExpiryWorker) sendSSLWarning(site models.Site, daysLeft int) {
