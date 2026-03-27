@@ -150,6 +150,30 @@ func (s *DNSService) AutoUpdateRecord(domain, serverIP string) error {
 	return err
 }
 
+// FindProviderForDomain returns (providerType, providerName) for the DNS provider
+// in our DB that manages this domain, or ("", "") if none found.
+// Used by CheckDNS to inform the UI which provider will be used for auto-pointing.
+func (s *DNSService) FindProviderForDomain(domain string) (providerType, providerName string) {
+	var providers []models.DNSProvider
+	if err := s.db.Find(&providers).Error; err != nil {
+		return "", ""
+	}
+	for _, p := range providers {
+		if domain == p.Domain || strings.HasSuffix(domain, "."+p.Domain) {
+			label := map[string]string{
+				"cloudflare": "Cloudflare",
+				"route53":    "AWS Route53",
+				"godaddy":    "GoDaddy",
+			}[p.ProviderType]
+			if label == "" {
+				label = p.ProviderType
+			}
+			return p.ProviderType, label
+		}
+	}
+	return "", ""
+}
+
 func (s *DNSService) cfAutoCreateRecord(provider models.DNSProvider, domain, serverIP string) (*models.AutoCreateDNSRecordResult, error) {
 	// Check if an A record already exists
 	listURL := fmt.Sprintf("https://api.cloudflare.com/client/v4/zones/%s/dns_records?type=A&name=%s", provider.ZoneID, domain)

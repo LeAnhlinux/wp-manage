@@ -778,11 +778,15 @@ type UpdateDomainRequest struct {
 }
 
 type DNSCheckResult struct {
-	Domain      string   `json:"domain"`
-	ServerIP    string   `json:"server_ip"`
-	ResolvedIPs []string `json:"resolved_ips"`
-	Pointing    bool     `json:"pointing"`
-	Message     string   `json:"message"`
+	Domain       string   `json:"domain"`
+	ServerIP     string   `json:"server_ip"`
+	ResolvedIPs  []string `json:"resolved_ips"`
+	Pointing     bool     `json:"pointing"`
+	Message      string   `json:"message"`
+	// Provider info — set when a DNS provider in our DB manages this domain
+	ProviderType string   `json:"provider_type,omitempty"` // cloudflare | route53 | godaddy
+	ProviderName string   `json:"provider_name,omitempty"` // human-readable: "Cloudflare", "GoDaddy", etc.
+	CanAutoPoint bool     `json:"can_auto_point"`          // true if a matching provider found
 }
 
 type RedisConfigRequest struct {

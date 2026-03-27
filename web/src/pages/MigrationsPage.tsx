@@ -184,7 +184,15 @@ function MigrationDetailModal({ migrationId, onClose }: { migrationId: number; o
 type MigrationMode = 'keep_domain' | 'change_domain'
 
 type DnsStatus = 'idle' | 'checking' | 'pointing' | 'not_pointing' | 'no_provider' | 'error'
-interface DnsCheckResult { pointing: boolean; resolved_ips?: string[]; server_ip?: string; message?: string }
+interface DnsCheckResult {
+  pointing: boolean
+  resolved_ips?: string[]
+  server_ip?: string
+  message?: string
+  provider_type?: string  // cloudflare | route53 | godaddy
+  provider_name?: string  // "Cloudflare" | "AWS Route53" | "GoDaddy"
+  can_auto_point?: boolean
+}
 
 function StartMigrationModal({ onClose }: { onClose: () => void }) {
   const [mode, setMode] = useState<MigrationMode>('keep_domain')
@@ -226,7 +234,13 @@ function StartMigrationModal({ onClose }: { onClose: () => void }) {
         const { data } = await api.get<{ data: DnsCheckResult }>(`/servers/${targetServerId}/check-dns`, { params: { domain } })
         const res = data.data
         setDnsResult(res)
-        setDnsStatus(res.pointing ? 'pointing' : 'not_pointing')
+        if (res.pointing) {
+          setDnsStatus('pointing')
+        } else if (!res.can_auto_point) {
+          setDnsStatus('no_provider')
+        } else {
+          setDnsStatus('not_pointing')
+        }
       } catch {
         setDnsStatus('error')
         setDnsResult(null)
@@ -412,7 +426,11 @@ function StartMigrationModal({ onClose }: { onClose: () => void }) {
                   >
                     {autoPointing ? <><Loader2 size={12} className="animate-spin" /> Đang trỏ DNS...</> : <><Zap size={12} /> Tự động trỏ DNS về {dnsResult.server_ip}</>}
                   </button>
-                  <p className="text-xs text-amber-600">Yêu cầu domain đang dùng DNS provider đã cấu hình (Cloudflare...)</p>
+                  <p className="text-xs text-amber-600">
+                    {dnsResult?.provider_name
+                      ? <>Provider: <strong>{dnsResult.provider_name}</strong> ({dnsResult.provider_type})</>
+                      : 'Yêu cầu domain đang dùng DNS provider đã cấu hình (Cloudflare, GoDaddy, Route53...)'}
+                  </p>
                 </div>
               )}
               {dnsStatus === 'error' && (

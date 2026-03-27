@@ -11,11 +11,12 @@ import (
 )
 
 type DomainService struct {
-	db *gorm.DB
+	db         *gorm.DB
+	dnsService *DNSService // optional — used to look up which provider manages a domain
 }
 
-func NewDomainService(db *gorm.DB) *DomainService {
-	return &DomainService{db: db}
+func NewDomainService(db *gorm.DB, dnsService *DNSService) *DomainService {
+	return &DomainService{db: db, dnsService: dnsService}
 }
 
 func (s *DomainService) ListBySite(siteID uint64) ([]models.Domain, error) {
@@ -207,19 +208,28 @@ func (s *DomainService) checkDNSByIP(serverIP, domain string) *models.DNSCheckRe
 	addrs, err := net.LookupHost(domain)
 	if err != nil {
 		res.Message = fmt.Sprintf("DNS lookup failed: %s", err.Error())
-		return res
-	}
-	res.ResolvedIPs = addrs
-	for _, a := range addrs {
-		if a == serverIP {
-			res.Pointing = true
-			break
+	} else {
+		res.ResolvedIPs = addrs
+		for _, a := range addrs {
+			if a == serverIP {
+				res.Pointing = true
+				break
+			}
+		}
+		if res.Pointing {
+			res.Message = fmt.Sprintf("Domain đang trỏ đúng về %s", serverIP)
+		} else {
+			res.Message = fmt.Sprintf("Domain đang trỏ về %v, cần trỏ về %s", addrs, serverIP)
 		}
 	}
-	if res.Pointing {
-		res.Message = fmt.Sprintf("Domain đang trỏ đúng về %s", serverIP)
-	} else {
-		res.Message = fmt.Sprintf("Domain đang trỏ về %v, cần trỏ về %s", addrs, serverIP)
+
+	// Look up which DNS provider in our DB manages this domain
+	if s.dnsService != nil {
+		if pType, pName := s.dnsService.FindProviderForDomain(domain); pType != "" {
+			res.ProviderType = pType
+			res.ProviderName = pName
+			res.CanAutoPoint = true
+		}
 	}
 	return res
 }
