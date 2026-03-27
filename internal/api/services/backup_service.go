@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/gofiber-team/wp-manage/internal/cron"
 	"github.com/gofiber-team/wp-manage/internal/models"
 	"gorm.io/gorm"
 )
@@ -380,6 +381,12 @@ func (s *BackupService) CreateSchedule(siteID uint64, req models.CreateBackupSch
 		Retention: retention,
 		Enabled:   enabled,
 	}
+	// Pre-calculate next_run_at so the worker can trigger without parsing all exprs on every tick
+	if enabled {
+		if next, err := cron.Next(req.CronExpr, time.Now()); err == nil {
+			schedule.NextRunAt = &next
+		}
+	}
 	if err := s.db.Create(&schedule).Error; err != nil {
 		return nil, err
 	}
@@ -405,14 +412,35 @@ func (s *BackupService) UpdateSchedule(id uint64, req models.UpdateBackupSchedul
 	if req.Storage != nil {
 		updates["storage"] = *req.Storage
 	}
-	if req.CronExpr != nil {
+	cronChanged := req.CronExpr != nil
+	enabledChanged := req.Enabled != nil
+	if cronChanged {
 		updates["cron_expr"] = *req.CronExpr
 	}
 	if req.Retention != nil {
 		updates["retention"] = *req.Retention
 	}
-	if req.Enabled != nil {
+	if enabledChanged {
 		updates["enabled"] = *req.Enabled
+	}
+
+	// Recalculate next_run_at whenever cron_expr or enabled changes
+	if cronChanged || enabledChanged {
+		expr := schedule.CronExpr
+		if cronChanged {
+			expr = *req.CronExpr
+		}
+		enabled := schedule.Enabled
+		if enabledChanged {
+			enabled = *req.Enabled
+		}
+		if enabled {
+			if next, err := cron.Next(expr, time.Now()); err == nil {
+				updates["next_run_at"] = next
+			}
+		} else {
+			updates["next_run_at"] = nil // disabled → clear next_run_at
+		}
 	}
 
 	if len(updates) > 0 {

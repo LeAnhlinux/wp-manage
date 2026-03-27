@@ -126,16 +126,18 @@ type ActivityLog struct {
 }
 
 type BackupSchedule struct {
-	ID        uint64    `json:"id" gorm:"primaryKey;autoIncrement"`
-	SiteID    uint64    `json:"site_id" gorm:"index;not null"`
-	Type      string    `json:"type" gorm:"type:enum('full','incremental','database_only');not null"`
-	Storage   string    `json:"storage" gorm:"type:enum('local','s3','r2','gdrive','backblaze');default:'local'"`
-	CronExpr  string    `json:"cron_expr" gorm:"size:100;not null"`
-	Retention int       `json:"retention" gorm:"default:7"`
-	Enabled   bool      `json:"enabled" gorm:"default:true"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	Site      *Site     `json:"site,omitempty" gorm:"foreignKey:SiteID"`
+	ID         uint64     `json:"id" gorm:"primaryKey;autoIncrement"`
+	SiteID     uint64     `json:"site_id" gorm:"index;not null"`
+	Type       string     `json:"type" gorm:"type:enum('full','incremental','database_only');not null"`
+	Storage    string     `json:"storage" gorm:"type:enum('local','s3','r2','gdrive','backblaze');default:'local'"`
+	CronExpr   string     `json:"cron_expr" gorm:"size:100;not null"`
+	Retention  int        `json:"retention" gorm:"default:7"`
+	Enabled    bool       `json:"enabled" gorm:"default:true"`
+	LastRunAt  *time.Time `json:"last_run_at,omitempty"`
+	NextRunAt  *time.Time `json:"next_run_at,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+	Site       *Site      `json:"site,omitempty" gorm:"foreignKey:SiteID"`
 }
 
 type ServerConfig struct {

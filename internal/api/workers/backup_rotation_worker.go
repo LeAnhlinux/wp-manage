@@ -54,13 +54,9 @@ func (w *BackupRotationWorker) cleanup() {
 		// Delete backups beyond retention count
 		toDelete := backups[schedule.Retention:]
 		for _, backup := range toDelete {
-			// Queue file deletion on agent
-			var site models.Site
-			if err := w.db.First(&site, backup.SiteID).Error; err != nil {
-				continue
-			}
-
-			if backup.FilePath != "" {
+			// Use backup.ServerID directly — SiteID may be nil (orphaned backup)
+			// and looking up the site is unnecessary since we already have the server.
+			if backup.FilePath != "" && backup.ServerID > 0 {
 				payload := map[string]interface{}{
 					"file_path": backup.FilePath,
 				}
@@ -70,7 +66,7 @@ func (w *BackupRotationWorker) cleanup() {
 					taskSiteID = *backup.SiteID
 				}
 				task := models.TaskQueue{
-					ServerID: site.ServerID,
+					ServerID: backup.ServerID,
 					SiteID:   taskSiteID,
 					TaskType: "delete_backup_file",
 					Data:     string(dataJSON),
@@ -79,7 +75,7 @@ func (w *BackupRotationWorker) cleanup() {
 				w.db.Create(&task)
 			}
 
-			// Mark as deleted in DB
+			// Remove DB record
 			w.db.Delete(&backup)
 			totalDeleted++
 		}

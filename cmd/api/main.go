@@ -185,6 +185,9 @@ func main() {
 	backupRotationWorker := workers.NewBackupRotationWorker(db)
 	backupRotationWorker.Start()
 
+	backupScheduleWorker := workers.NewBackupScheduleWorker(db, backupService)
+	go backupScheduleWorker.Start()
+
 	scanScheduleWorker := workers.NewScanScheduleWorker(db, securityService)
 	go scanScheduleWorker.Start()
 

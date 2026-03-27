@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/gofiber-team/wp-manage/internal/agent/ssl"
 )
 
 // siteUser derives the Linux username for a WordPress site (matches site/manager.go).
@@ -149,23 +151,31 @@ func RunRestore(params RestoreParams) (*Manifest, error) {
 	exec.Command("nginx", "-t").Run()
 	exec.Command("systemctl", "reload", "nginx").Run()
 
-	// Always attempt to re-issue SSL after restore (for full/incremental backups).
-	// Reason: The backup may have been made before SSL was enabled, but the domain may already
-	// have HSTS cached in browsers (from a previous SSL setup). If we skip certbot, browsers
-	// with HSTS will fail to connect via HTTP. Certbot fails gracefully if the domain doesn't
-	// resolve here — in that case we fall back to HTTP-only.
+	// Attempt to re-issue SSL after restore (full/incremental only, not database_only).
+	// Reason: cert may not exist on this server (fresh restore, migration target, etc.)
+	// and browsers with HSTS cached will refuse HTTP connections.
+	//
+	// DNS check first: certbot HTTP-01 challenge requires the domain to resolve to
+	// this server's IP. If DNS is wrong we skip certbot and leave the site HTTP-only;
+	// the ssl_expiry_worker will retry every 12h once DNS propagates.
 	certPath := fmt.Sprintf("/etc/letsencrypt/live/%s/fullchain.pem", manifest.Domain)
 	if manifest.BackupType != "database_only" && !fileExists(certPath) {
-		slog.Info("Attempting SSL certificate issuance after restore", "domain", manifest.Domain)
-		if err := runCertbot(manifest.Domain); err != nil {
-			slog.Warn("Certbot failed after restore — site accessible via HTTP only", "domain", manifest.Domain, "error", err)
+		if dnsErr := ssl.CheckDNS(manifest.Domain); dnsErr != nil {
+			slog.Warn("SSL skipped after restore: DNS not pointing here yet",
+				"domain", manifest.Domain, "reason", dnsErr)
 			manifest.HasSSL = false
 		} else {
-			slog.Info("SSL certificate issued successfully after restore", "domain", manifest.Domain)
-			manifest.HasSSL = true
-			// Reload nginx to pick up the new SSL config certbot wrote
-			exec.Command("nginx", "-t").Run()
-			exec.Command("systemctl", "reload", "nginx").Run()
+			slog.Info("Attempting SSL certificate issuance after restore", "domain", manifest.Domain)
+			if err := runCertbot(manifest.Domain); err != nil {
+				slog.Warn("Certbot failed after restore — site accessible via HTTP only",
+					"domain", manifest.Domain, "error", err)
+				manifest.HasSSL = false
+			} else {
+				slog.Info("SSL certificate issued successfully after restore", "domain", manifest.Domain)
+				manifest.HasSSL = true
+				exec.Command("nginx", "-t").Run()
+				exec.Command("systemctl", "reload", "nginx").Run()
+			}
 		}
 	}
 
