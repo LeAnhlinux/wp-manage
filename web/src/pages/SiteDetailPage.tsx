@@ -897,8 +897,8 @@ export default function SiteDetailPage() {
           <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-xl" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-lg font-semibold mb-4">Change PHP Version</h3>
             <p className="text-sm text-gray-500 mb-4">Select a new PHP version for {site.domain}</p>
-            <div className="grid grid-cols-6 gap-2 mb-6">
-              {['7.4', '8.0', '8.1', '8.2', '8.3', '8.4'].map(v => (
+            <div className="grid grid-cols-7 gap-2 mb-6">
+              {['7.4', '8.0', '8.1', '8.2', '8.3', '8.4', '8.5'].map(v => (
                 <button key={v} onClick={() => setSelectedPHP(v)}
                   className={`px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
                     selectedPHP === v

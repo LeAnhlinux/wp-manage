@@ -174,7 +174,7 @@ func GetMetrics() (*Metrics, error) {
 
 func getInstalledPHPVersions() []string {
 	versions := []string{}
-	candidates := []string{"7.4", "8.0", "8.1", "8.2", "8.3", "8.4"}
+	candidates := []string{"7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5"}
 	for _, v := range candidates {
 		binary := fmt.Sprintf("php%s", v)
 		if _, err := exec.LookPath(binary); err == nil {

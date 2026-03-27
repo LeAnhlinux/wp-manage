@@ -18,8 +18,9 @@ const (
 	tarballName = "ioncube_loaders_lin_x86-64.tar.gz"
 )
 
-// SupportedVersions lists PHP versions ionCube supports (8.4+ not yet supported).
-var SupportedVersions = []string{"7.1", "7.2", "7.3", "7.4", "8.0", "8.1", "8.2", "8.3"}
+// SupportedVersions lists PHP versions ionCube supports.
+// IonCube Loader 15.5.0 (March 2026) added PHP 8.4 + 8.5 support.
+var SupportedVersions = []string{"7.1", "7.2", "7.3", "7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5"}
 
 // VersionStatus describes ionCube state for one PHP version.
 type VersionStatus struct {
@@ -144,7 +145,7 @@ func Disable(phpVersion string) error {
 
 // allKnownVersions returns all PHP versions we ever check, in order.
 func allKnownVersions() []string {
-	return []string{"7.1", "7.2", "7.3", "7.4", "8.0", "8.1", "8.2", "8.3", "8.4"}
+	return []string{"7.1", "7.2", "7.3", "7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5"}
 }
 
 func isSupportedVersion(ver string) bool {

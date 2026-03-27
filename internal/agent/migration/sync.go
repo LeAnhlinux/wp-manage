@@ -512,7 +512,7 @@ func (r *MigrationRunner) cleanupSourceSite(task models.AgentMigrateTask) {
 	exec.Command("bash", "-c", "nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null || true").Run()
 
 	// 3. Remove PHP-FPM pool and reload
-	for _, ver := range []string{"8.4", "8.3", "8.2", "8.1", "8.0", "7.4"} {
+	for _, ver := range []string{"8.5", "8.4", "8.3", "8.2", "8.1", "8.0", "7.4"} {
 		poolPath := fmt.Sprintf("/etc/php/%s/fpm/pool.d/%s.conf", ver, domain)
 		if _, err := os.Stat(poolPath); err == nil {
 			os.Remove(poolPath)
@@ -634,7 +634,7 @@ func (r *MigrationRunner) setupTargetConfigs(task models.AgentMigrateTask, keyFi
 	}
 
 	// ── PHP-FPM pool config ───────────────────────────────────────────────────
-	phpVersions := []string{"8.4", "8.3", "8.2", "8.1", "8.0", "7.4"}
+	phpVersions := []string{"8.5", "8.4", "8.3", "8.2", "8.1", "8.0", "7.4"}
 	for _, ver := range phpVersions {
 		phpSrcPool := fmt.Sprintf("/etc/php/%s/fpm/pool.d/%s.conf", ver, task.Domain)
 		if _, err := os.Stat(phpSrcPool); err != nil {
@@ -960,7 +960,7 @@ func (r *MigrationRunner) unsuspendSite(domain string) {
 		"ln -sf /etc/nginx/sites-available/%s.conf /etc/nginx/sites-enabled/%s.conf && nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null || true",
 		domain, domain)).Run()
 
-	for _, ver := range []string{"8.4", "8.3", "8.2", "8.1", "8.0", "7.4"} {
+	for _, ver := range []string{"8.5", "8.4", "8.3", "8.2", "8.1", "8.0", "7.4"} {
 		poolPath := fmt.Sprintf("/etc/php/%s/fpm/pool.d/%s.conf", ver, domain)
 		if _, err := os.Stat(poolPath); err == nil {
 			exec.Command("bash", "-c", fmt.Sprintf(
