@@ -262,6 +262,11 @@ func recreateSite(extractRoot string, m *Manifest, phpVer string) error {
 	backupPhpfpmConf := filepath.Join(extractRoot, "config", "phpfpm.conf")
 	if fileExists(backupPhpfpmConf) {
 		copyFileIfExists(backupPhpfpmConf, phpfpmConfPath)
+		// FIX: rewrite user/group to match the Linux user for THIS domain.
+		// The backup was taken on a different server (or with a different domain),
+		// so the pool may still have the old user (e.g. wp_test5_wppanel_io_vn).
+		// Running PHP-FPM as the wrong user → Permission denied on wp-config.php.
+		fixPhpfpmPoolUser(phpfpmConfPath, su)
 		slog.Info("PHP-FPM pool restored from backup", "domain", m.Domain)
 	} else {
 		slog.Warn("No phpfpm config in backup — generating minimal pool", "domain", m.Domain)
@@ -587,4 +592,26 @@ php_admin_value[open_basedir] = /var/www/%s/:/tmp/:/usr/share/php/
 php_admin_value[disable_functions] = exec,passthru,shell_exec,system,proc_open,popen,parse_ini_file,show_source
 `, domain, su, su, phpVer, domain, domain, domain)
 	os.WriteFile(path, []byte(cfg), 0644)
+}
+
+// fixPhpfpmPoolUser rewrites the user and group directives in a PHP-FPM pool
+// config to match the correct Linux user for the target domain. This is needed
+// after restoring a pool config from backup: the backup may have been taken on
+// a different server where the site user had a different name (e.g. the source
+// domain was test5 but the target domain is test6, so the user differs).
+func fixPhpfpmPoolUser(poolPath, correctUser string) {
+	raw, err := os.ReadFile(poolPath)
+	if err != nil {
+		return
+	}
+	lines := strings.Split(string(raw), "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "user") && strings.Contains(trimmed, "=") {
+			lines[i] = "user = " + correctUser
+		} else if strings.HasPrefix(trimmed, "group") && strings.Contains(trimmed, "=") {
+			lines[i] = "group = " + correctUser
+		}
+	}
+	os.WriteFile(poolPath, []byte(strings.Join(lines, "\n")), 0644)
 }
