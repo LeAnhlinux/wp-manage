@@ -24,7 +24,7 @@ type Server struct {
 	RAMMB          int       `json:"ram_mb"`
 	CPUCores       int       `json:"cpu_cores"`
 	DiskGB         int       `json:"disk_gb"`
-	AgentVersion   string    `json:"agent_version" gorm:"size:20"`
+	AgentVersion   string    `json:"agent_version" gorm:"size:64"`
 	AgentAPIKey    string    `json:"-" gorm:"uniqueIndex;size:64"`
 	Status         string    `json:"status" gorm:"type:enum('active','provisioning','offline','error');default:'provisioning';not null"`
 	LastHeartbeat  *time.Time `json:"last_heartbeat"`
