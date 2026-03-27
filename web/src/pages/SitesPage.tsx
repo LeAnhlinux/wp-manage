@@ -161,6 +161,7 @@ export default function SitesPage() {
   const [dnsChecking, setDnsChecking] = useState(false)
   const [dnsOffer, setDnsOffer] = useState<null | 'offered' | 'creating' | 'done' | 'skipped'>(null)
   const [dnsOfferMsg, setDnsOfferMsg] = useState('')
+  const [dnsProviderLabel, setDnsProviderLabel] = useState('DNS provider')
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [creatingInfo, setCreatingInfo] = useState<{ id: number; domain: string; installType: string } | null>(null)
@@ -230,8 +231,12 @@ export default function SitesPage() {
         if (matched) {
           const server = servers.find(s => s.id === serverId)
           if (server) {
+            const providerLabel = matched.provider_type === 'godaddy' ? 'GoDaddy'
+              : matched.provider_type === 'route53' ? 'AWS Route53'
+              : 'Cloudflare'
+            setDnsProviderLabel(providerLabel)
             setDnsOffer('offered')
-            setDnsOfferMsg(`Tìm thấy DNS provider cho <strong>${matched.domain}</strong>. Tạo A record <code>${domain} → ${server.ip_address}</code> qua Cloudflare ngay bây giờ?`)
+            setDnsOfferMsg(`Tìm thấy DNS provider cho <strong>${matched.domain}</strong> (${providerLabel}). Tạo A record <code>${domain} → ${server.ip_address}</code> qua ${providerLabel} ngay bây giờ?`)
           }
         }
       } else {
@@ -527,7 +532,7 @@ export default function SitesPage() {
                     {dnsOffer === 'creating' && (
                       <div className="flex items-center gap-2 mt-2 text-xs text-blue-500">
                         <Loader2 size={13} className="animate-spin" />
-                        Đang tạo A record qua Cloudflare...
+                        Đang tạo A record qua {dnsProviderLabel}...
                       </div>
                     )}
                     {dnsOffer === 'done' && (
