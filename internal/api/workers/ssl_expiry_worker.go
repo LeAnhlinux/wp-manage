@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
+	"strings"
 	"time"
 
 	"github.com/gofiber-team/wp-manage/internal/api/services"
@@ -77,8 +79,8 @@ func (w *SSLExpiryWorker) checkAll() {
 	}
 }
 
-// queueAutoRenew queues a renew_ssl task for the site, deduplicating against
-// any task already pending or running for the same site.
+// queueAutoRenew checks DNS then queues a renew_ssl task, deduplicating
+// against any task already pending or running for the same site.
 func (w *SSLExpiryWorker) queueAutoRenew(site models.Site, daysLeft int) {
 	// Dedup: skip if a renew_ssl task is already pending/running for this site
 	var count int64
@@ -86,6 +88,18 @@ func (w *SSLExpiryWorker) queueAutoRenew(site models.Site, daysLeft int) {
 		Where("site_id = ? AND task_type = ? AND status IN ('pending','running')", site.ID, "renew_ssl").
 		Count(&count)
 	if count > 0 {
+		return
+	}
+
+	// DNS check: resolve domain and compare against server IP from DB.
+	// certbot HTTP-01 challenge will fail if DNS doesn't point to the agent's server.
+	// Skip queuing if DNS is wrong — worker will retry on the next 12h tick.
+	if err := w.checkDNSForSite(site); err != nil {
+		slog.Warn("SSL auto-renew skipped: DNS not ready",
+			"domain", site.Domain, "site_id", site.ID, "reason", err)
+		w.sendNotification(fmt.Sprintf(
+			"⚠️ <b>SSL Auto-Renew bị hoãn</b>\nDomain: <code>%s</code>\nCòn %d ngày\n%s\nSẽ thử lại sau 12 giờ.",
+			site.Domain, daysLeft, err.Error()))
 		return
 	}
 
@@ -105,6 +119,39 @@ func (w *SSLExpiryWorker) queueAutoRenew(site models.Site, daysLeft int) {
 
 	// Notify so user knows auto-renewal is happening
 	w.sendAutoRenewNotification(site, daysLeft, task.ID)
+}
+
+// checkDNSForSite resolves the site's domain and checks if it points to the
+// server's IP address (looked up from the servers table in DB).
+func (w *SSLExpiryWorker) checkDNSForSite(site models.Site) error {
+	// Get the server's IP from DB
+	var server models.Server
+	if err := w.db.First(&server, site.ServerID).Error; err != nil {
+		// Can't find server — skip DNS check to not block renewal
+		return nil
+	}
+	serverIP := strings.TrimSpace(server.IPAddress)
+	if serverIP == "" {
+		return nil // no IP on record, skip check
+	}
+
+	addrs, err := net.LookupHost(site.Domain)
+	if err != nil {
+		return fmt.Errorf("DNS lookup thất bại: %v", err)
+	}
+	for _, addr := range addrs {
+		ip := net.ParseIP(addr)
+		if ip == nil {
+			continue
+		}
+		if v4 := ip.To4(); v4 != nil {
+			addr = v4.String()
+		}
+		if addr == serverIP {
+			return nil // DNS points to correct server
+		}
+	}
+	return fmt.Errorf("DNS chưa trỏ về server: %s → %v (server IP: %s)", site.Domain, addrs, serverIP)
 }
 
 func (w *SSLExpiryWorker) sendAutoRenewNotification(site models.Site, daysLeft int, taskID uint64) {

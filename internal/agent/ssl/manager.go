@@ -3,6 +3,7 @@ package ssl
 import (
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/exec"
 	"strings"
@@ -52,7 +53,82 @@ func EnsureCertbotInstalled() error {
 	return nil
 }
 
+// CheckDNS verifies that `domain` resolves to this server's IP.
+// Returns nil if DNS points here, error with details otherwise.
+// Used before running certbot to avoid wasting an ACME attempt on wrong DNS.
+func CheckDNS(domain string) error {
+	serverIPs := localIPv4s()
+	if len(serverIPs) == 0 {
+		// Cannot determine local IPs — skip check to not block cert issuance
+		slog.Warn("SSL DNS check: could not determine local IPs, skipping", "domain", domain)
+		return nil
+	}
+
+	addrs, err := net.LookupHost(domain)
+	if err != nil {
+		return fmt.Errorf("DNS lookup thất bại cho %s: %v — domain chưa có record A/AAAA", domain, err)
+	}
+
+	ipSet := make(map[string]bool)
+	for _, ip := range serverIPs {
+		ipSet[ip] = true
+	}
+	for _, addr := range addrs {
+		parsed := net.ParseIP(addr)
+		if parsed == nil {
+			continue
+		}
+		// Normalise IPv4-in-IPv6 (e.g. "::ffff:1.2.3.4")
+		if v4 := parsed.To4(); v4 != nil {
+			addr = v4.String()
+		}
+		if ipSet[addr] {
+			slog.Info("SSL DNS check passed", "domain", domain, "resolved_ip", addr)
+			return nil
+		}
+	}
+
+	return fmt.Errorf("DNS chưa trỏ về server này: %s → %v | IP server: %v",
+		domain, addrs, serverIPs)
+}
+
+// localIPv4s returns all non-loopback IPv4 addresses on this machine.
+func localIPv4s() []string {
+	var ips []string
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return ips
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+		addrs, _ := iface.Addrs()
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			if ip != nil {
+				if v4 := ip.To4(); v4 != nil {
+					ips = append(ips, v4.String())
+				}
+			}
+		}
+	}
+	return ips
+}
+
 func IssueCertificate(domain, email string) error {
+	// Step 0: verify DNS points to this server before wasting an ACME attempt
+	if err := CheckDNS(domain); err != nil {
+		slog.Warn("SSL issue aborted: DNS check failed", "domain", domain, "error", err)
+		return fmt.Errorf("DNS chưa sẵn sàng: %w", err)
+	}
+
 	// Auto-install certbot if not present before issuing
 	if err := EnsureCertbotInstalled(); err != nil {
 		return fmt.Errorf("certbot chưa được cài và không thể tự cài: %w", err)
@@ -76,6 +152,12 @@ func IssueCertificate(domain, email string) error {
 }
 
 func RenewCertificate(domain string) error {
+	// Step 0: DNS check — certbot renew also uses HTTP-01 challenge
+	if err := CheckDNS(domain); err != nil {
+		slog.Warn("SSL renew aborted: DNS check failed", "domain", domain, "error", err)
+		return fmt.Errorf("DNS chưa sẵn sàng: %w", err)
+	}
+
 	// Step 1: Force-renew the certificate
 	out, err := exec.Command("certbot", "renew", "--cert-name", domain, "--force-renewal").CombinedOutput()
 	if err != nil {
@@ -83,11 +165,11 @@ func RenewCertificate(domain string) error {
 		// FIX: cert may not exist on this server (e.g. after keep_domain migration where
 		// certbot could not run during migration because DNS pointed to source).
 		// Fall back to issuing a fresh certificate instead of failing.
+		// DNS check already passed above, so IssueCertificate will succeed.
 		if strings.Contains(outStr, "No certificate found") ||
 			strings.Contains(outStr, "no certificate with name") ||
 			strings.Contains(outStr, "expected /etc/letsencrypt/renewal/") {
 			slog.Info("Certificate not found on renewal — falling back to fresh issue", "domain", domain)
-			// Try to recover admin email from nginx vhost or wp-config; default to admin@domain
 			email := certEmailForDomain(domain)
 			return IssueCertificate(domain, email)
 		}
