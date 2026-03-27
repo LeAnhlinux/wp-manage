@@ -2564,27 +2564,54 @@ func (s *AgentServer) executeInstallPHPVersion(taskID uint64, task models.AgentP
 		return
 	}
 
-	pkgs := []string{
-		fmt.Sprintf("php%s-fpm", task.Version), fmt.Sprintf("php%s-cli", task.Version),
-		fmt.Sprintf("php%s-common", task.Version), fmt.Sprintf("php%s-mysql", task.Version),
-		fmt.Sprintf("php%s-xml", task.Version), fmt.Sprintf("php%s-curl", task.Version),
-		fmt.Sprintf("php%s-gd", task.Version), fmt.Sprintf("php%s-mbstring", task.Version),
-		fmt.Sprintf("php%s-zip", task.Version), fmt.Sprintf("php%s-bcmath", task.Version),
-		fmt.Sprintf("php%s-intl", task.Version), fmt.Sprintf("php%s-soap", task.Version),
-		fmt.Sprintf("php%s-redis", task.Version), fmt.Sprintf("php%s-imagick", task.Version),
-		fmt.Sprintf("php%s-opcache", task.Version),
+	v := task.Version
+
+	// Required packages — must all install successfully.
+	requiredPkgs := []string{
+		"php" + v + "-fpm", "php" + v + "-cli", "php" + v + "-common",
+		"php" + v + "-mysql", "php" + v + "-xml", "php" + v + "-curl",
+		"php" + v + "-gd", "php" + v + "-mbstring", "php" + v + "-zip",
+		"php" + v + "-bcmath", "php" + v + "-intl", "php" + v + "-soap",
 	}
-	args := append([]string{"install", "-y"}, pkgs...)
+	// Optional packages — silently skip if not available for this version.
+	// php{X}-opcache was merged into php{X}-common starting in PHP 8.5.
+	// php{X}-redis and php{X}-imagick depend on PECL build availability.
+	optionalPkgs := []string{
+		"php" + v + "-opcache",
+		"php" + v + "-redis",
+		"php" + v + "-imagick",
+	}
+
+	args := append([]string{"install", "-y"}, requiredPkgs...)
 	if out, err := exec.Command("apt-get", args...).CombinedOutput(); err != nil {
-		slog.Error("Failed to install PHP", "version", task.Version, "error", err, "output", string(out))
-		result.Error = fmt.Sprintf("failed to install php%s: %v", task.Version, err)
+		slog.Error("Failed to install PHP", "version", v, "error", err, "output", string(out))
+		result.Error = fmt.Sprintf("failed to install php%s: %v\n%s", v, err, string(out))
 		s.reportTaskResult(result)
 		return
 	}
-	exec.Command("systemctl", "enable", fmt.Sprintf("php%s-fpm", task.Version)).Run()
-	exec.Command("systemctl", "start", fmt.Sprintf("php%s-fpm", task.Version)).Run()
-	result.Output = fmt.Sprintf("PHP %s installed successfully", task.Version)
-	slog.Info("PHP version installed successfully", "version", task.Version)
+
+	// Install optional packages one by one — skip those not in repo
+	var skipped []string
+	for _, pkg := range optionalPkgs {
+		if chk, _ := exec.Command("apt-cache", "show", pkg).CombinedOutput(); !strings.Contains(string(chk), "Package:") {
+			skipped = append(skipped, pkg)
+			continue
+		}
+		if out, err := exec.Command("apt-get", "install", "-y", pkg).CombinedOutput(); err != nil {
+			slog.Warn("Optional PHP package skipped", "pkg", pkg, "error", string(out))
+			skipped = append(skipped, pkg)
+		}
+	}
+
+	exec.Command("systemctl", "enable", "php"+v+"-fpm").Run()
+	exec.Command("systemctl", "start", "php"+v+"-fpm").Run()
+
+	msg := fmt.Sprintf("PHP %s installed successfully", v)
+	if len(skipped) > 0 {
+		msg += fmt.Sprintf(" (skipped optional: %s)", strings.Join(skipped, ", "))
+	}
+	result.Output = msg
+	slog.Info("PHP version installed successfully", "version", v, "skipped_optional", skipped)
 	s.reportTaskResult(result)
 }
 
