@@ -2,6 +2,7 @@ package services
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +15,17 @@ import (
 )
 
 const agentPort = 8443
+
+// agentHTTPClient is a shared HTTP client that uses HTTPS with InsecureSkipVerify.
+// The agent uses a self-signed certificate; InsecureSkipVerify still encrypts traffic
+// and prevents passive eavesdropping — it only skips CA chain validation.
+// Full certificate pinning is planned for a future security hardening sprint.
+var agentHTTPClient = &http.Client{
+	Transport: &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // self-signed cert on internal network
+	},
+	Timeout: 30 * time.Second,
+}
 
 type FileService struct {
 	db *gorm.DB
@@ -37,7 +49,7 @@ func (s *FileService) ProxyToAgent(site *models.Site, method, endpoint string, q
 	}
 
 	// Build URL
-	u := fmt.Sprintf("http://%s:%d%s", site.Server.IPAddress, agentPort, endpoint)
+	u := fmt.Sprintf("https://%s:%d%s", site.Server.IPAddress, agentPort, endpoint)
 	if len(queryParams) > 0 {
 		params := url.Values{}
 		for k, v := range queryParams {
@@ -58,8 +70,7 @@ func (s *FileService) ProxyToAgent(site *models.Site, method, endpoint string, q
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Agent-Key", site.Server.AgentAPIKey)
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := agentHTTPClient.Do(req)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to reach agent: %w", err)
 	}
@@ -82,7 +93,7 @@ func (s *FileService) ProxyDownload(site *models.Site, path string) (*http.Respo
 	params := url.Values{}
 	params.Set("domain", site.Domain)
 	params.Set("path", path)
-	u := fmt.Sprintf("http://%s:%d/files/download?%s", site.Server.IPAddress, agentPort, params.Encode())
+	u := fmt.Sprintf("https://%s:%d/files/download?%s", site.Server.IPAddress, agentPort, params.Encode())
 
 	req, err := http.NewRequest("GET", u, nil)
 	if err != nil {
@@ -90,8 +101,13 @@ func (s *FileService) ProxyDownload(site *models.Site, path string) (*http.Respo
 	}
 	req.Header.Set("X-Agent-Key", site.Server.AgentAPIKey)
 
-	client := &http.Client{Timeout: 5 * time.Minute}
-	return client.Do(req)
+	downloadClient := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
+		},
+		Timeout: 5 * time.Minute,
+	}
+	return downloadClient.Do(req)
 }
 
 // ProxyUpload forwards a multipart upload to the agent
@@ -103,7 +119,7 @@ func (s *FileService) ProxyUpload(site *models.Site, destPath string, body io.Re
 	params := url.Values{}
 	params.Set("domain", site.Domain)
 	params.Set("path", destPath)
-	u := fmt.Sprintf("http://%s:%d/files/upload?%s", site.Server.IPAddress, agentPort, params.Encode())
+	u := fmt.Sprintf("https://%s:%d/files/upload?%s", site.Server.IPAddress, agentPort, params.Encode())
 
 	req, err := http.NewRequest("POST", u, body)
 	if err != nil {
@@ -112,8 +128,13 @@ func (s *FileService) ProxyUpload(site *models.Site, destPath string, body io.Re
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("X-Agent-Key", site.Server.AgentAPIKey)
 
-	client := &http.Client{Timeout: 10 * time.Minute}
-	resp, err := client.Do(req)
+	uploadClient := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
+		},
+		Timeout: 10 * time.Minute,
+	}
+	resp, err := uploadClient.Do(req)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to reach agent: %w", err)
 	}
@@ -133,7 +154,7 @@ func (s *FileService) ProxyUploadChunk(site *models.Site, uploadID, chunkIndex, 
 	params.Set("upload_id", uploadID)
 	params.Set("chunk_index", chunkIndex)
 	params.Set("filename", filename)
-	u := fmt.Sprintf("http://%s:%d/files/upload-chunk?%s", site.Server.IPAddress, agentPort, params.Encode())
+	u := fmt.Sprintf("https://%s:%d/files/upload-chunk?%s", site.Server.IPAddress, agentPort, params.Encode())
 
 	req, err := http.NewRequest("POST", u, body)
 	if err != nil {
@@ -142,8 +163,13 @@ func (s *FileService) ProxyUploadChunk(site *models.Site, uploadID, chunkIndex, 
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.Header.Set("X-Agent-Key", site.Server.AgentAPIKey)
 
-	client := &http.Client{Timeout: 5 * time.Minute}
-	resp, err := client.Do(req)
+	chunkClient := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
+		},
+		Timeout: 5 * time.Minute,
+	}
+	resp, err := chunkClient.Do(req)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to reach agent: %w", err)
 	}

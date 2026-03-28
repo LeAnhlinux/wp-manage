@@ -66,7 +66,10 @@ func (s *AgentServer) lockDomain(domain string) func() {
 	return mu.Unlock
 }
 
-// StartHTTPServer starts the agent's HTTP server for file manager and other direct operations
+// StartHTTPServer starts the agent's HTTPS server for file manager and other direct operations.
+// A self-signed TLS certificate is generated in memory on every startup — no key material
+// is written to disk.  The API server connects with InsecureSkipVerify (traffic is still
+// encrypted; this prevents passive eavesdropping over the internal network).
 func (s *AgentServer) StartHTTPServer(port int) {
 	mux := http.NewServeMux()
 
@@ -80,10 +83,26 @@ func (s *AgentServer) StartHTTPServer(port int) {
 		w.Write([]byte(`{"status":"ok","version":"` + Version + `"}`))
 	})
 
-	addr := fmt.Sprintf(":%d", port)
-	slog.Info("Starting agent HTTP server", "port", port)
-	if err := http.ListenAndServe(addr, mux); err != nil {
-		slog.Error("Agent HTTP server failed", "error", err)
+	tlsCfg, err := newAgentTLSConfig()
+	if err != nil {
+		slog.Error("Failed to generate TLS certificate for agent HTTP server", "error", err)
+		slog.Warn("Falling back to plain HTTP — strongly recommended to fix TLS generation")
+		addr := fmt.Sprintf(":%d", port)
+		if err := http.ListenAndServe(addr, mux); err != nil {
+			slog.Error("Agent HTTP server failed", "error", err)
+		}
+		return
+	}
+
+	srv := &http.Server{
+		Addr:      fmt.Sprintf(":%d", port),
+		Handler:   mux,
+		TLSConfig: tlsCfg,
+	}
+	slog.Info("Starting agent HTTPS server (self-signed TLS)", "port", port)
+	// ListenAndServeTLS with empty cert/key paths uses srv.TLSConfig.Certificates
+	if err := srv.ListenAndServeTLS("", ""); err != nil {
+		slog.Error("Agent HTTPS server failed", "error", err)
 	}
 }
 
@@ -1094,13 +1113,14 @@ func (s *AgentServer) executeCreateBackup(taskID uint64, siteID uint64, task mod
 	slog.Info("Starting backup", "domain", task.Domain, "type", task.Type, "backup_id", task.BackupID)
 
 	params := agentbackup.BackupParams{
-		BackupID:   task.BackupID,
-		Domain:     task.Domain,
-		Type:       task.Type,
-		DBName:     task.DBName,
-		DBUser:     task.DBUser,
-		DBPass:     task.DBPass,
-		PHPVersion: task.PHPVersion,
+		BackupID:      task.BackupID,
+		Domain:        task.Domain,
+		Type:          task.Type,
+		DBName:        task.DBName,
+		DBUser:        task.DBUser,
+		DBPass:        task.DBPass,
+		PHPVersion:    task.PHPVersion,
+		EncryptionKey: s.apiKey, // used to AES-encrypt DBPass in manifest
 	}
 
 	result := agentbackup.RunBackup(params)
@@ -1141,14 +1161,15 @@ func (s *AgentServer) executeRestoreBackup(taskID uint64, siteID uint64, task mo
 	slog.Info("Starting restore", "domain", task.Domain, "type", task.Type, "backup_id", task.BackupID)
 
 	params := agentbackup.RestoreParams{
-		BackupID:   task.BackupID,
-		Domain:     task.Domain,
-		Type:       task.Type,
-		FilePath:   task.FilePath,
-		DBName:     task.DBName,
-		DBUser:     task.DBUser,
-		DBPass:     task.DBPass,
-		PHPVersion: task.PHPVersion,
+		BackupID:      task.BackupID,
+		Domain:        task.Domain,
+		Type:          task.Type,
+		FilePath:      task.FilePath,
+		DBName:        task.DBName,
+		DBUser:        task.DBUser,
+		DBPass:        task.DBPass,
+		PHPVersion:    task.PHPVersion,
+		EncryptionKey: s.apiKey, // used to AES-decrypt DBPass from manifest
 	}
 
 	manifest, err := agentbackup.RunRestore(params)

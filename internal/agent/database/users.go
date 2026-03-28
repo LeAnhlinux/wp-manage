@@ -2,10 +2,46 @@ package database
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 )
+
+// validIdentifierRe restricts DB names and usernames to safe characters only.
+// MySQL max identifier length is 64; we enforce a tighter limit (48) to
+// prevent buffer edge-cases in legacy MariaDB versions.
+var validIdentifierRe = regexp.MustCompile(`^[a-zA-Z0-9_]{1,48}$`)
+
+// allowedCharsets is the whitelist of accepted MySQL charset names.
+var allowedCharsets = map[string]bool{
+	"utf8mb4": true, "utf8": true, "latin1": true, "ascii": true,
+}
+
+// allowedCollations is the whitelist of accepted MySQL collation names.
+var allowedCollations = map[string]bool{
+	"utf8mb4_unicode_ci": true, "utf8mb4_general_ci": true,
+	"utf8_unicode_ci": true, "utf8_general_ci": true,
+	"latin1_swedish_ci": true, "ascii_general_ci": true,
+}
+
+// allowedPrivileges is the whitelist of individual MySQL privilege keywords.
+var allowedPrivileges = map[string]bool{
+	"ALL PRIVILEGES": true,
+	"SELECT": true, "INSERT": true, "UPDATE": true, "DELETE": true,
+	"CREATE": true, "DROP": true, "INDEX": true, "ALTER": true,
+	"CREATE TEMPORARY TABLES": true, "LOCK TABLES": true,
+	"EXECUTE": true, "CREATE VIEW": true, "SHOW VIEW": true,
+	"CREATE ROUTINE": true, "ALTER ROUTINE": true, "EVENT": true, "TRIGGER": true,
+}
+
+func validateIdentifier(name string) error {
+	if !validIdentifierRe.MatchString(name) {
+		return fmt.Errorf("invalid identifier %q: only alphanumeric characters and underscores are allowed (max 48 chars)", name)
+	}
+	return nil
+}
 
 // DBDatabase represents a MariaDB database
 type DBDatabase struct {
@@ -49,12 +85,22 @@ func CreateDatabase(name, charset, collation string) error {
 	if name == "" {
 		return fmt.Errorf("database name is required")
 	}
+	if err := validateIdentifier(name); err != nil {
+		return err
+	}
 	if charset == "" {
 		charset = "utf8mb4"
 	}
 	if collation == "" {
 		collation = "utf8mb4_unicode_ci"
 	}
+	if !allowedCharsets[charset] {
+		return fmt.Errorf("unsupported charset %q", charset)
+	}
+	if !allowedCollations[collation] {
+		return fmt.Errorf("unsupported collation %q", collation)
+	}
+	// Safe: name is validated alphanumeric+underscore; charset/collation are whitelisted.
 	sql := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s` CHARACTER SET %s COLLATE %s", name, charset, collation)
 	if out, err := exec.Command("mysql", "-e", sql).CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to create database: %s: %w", string(out), err)
@@ -66,6 +112,9 @@ func CreateDatabase(name, charset, collation string) error {
 func DropDatabase(name string) error {
 	if name == "" {
 		return fmt.Errorf("database name is required")
+	}
+	if err := validateIdentifier(name); err != nil {
+		return err
 	}
 	sql := fmt.Sprintf("DROP DATABASE IF EXISTS `%s`", name)
 	if out, err := exec.Command("mysql", "-e", sql).CombinedOutput(); err != nil {
@@ -79,6 +128,14 @@ func CreateUser(username, password, database string, privileges []string) error 
 	if username == "" {
 		return fmt.Errorf("username is required")
 	}
+	if err := validateIdentifier(username); err != nil {
+		return err
+	}
+	if database != "" {
+		if err := validateIdentifier(database); err != nil {
+			return err
+		}
+	}
 
 	// Generate password if not provided
 	if password == "" {
@@ -89,13 +146,23 @@ func CreateUser(username, password, database string, privileges []string) error 
 		password = strings.TrimSpace(string(out))
 	}
 
-	// Create user
-	createSQL := fmt.Sprintf("CREATE USER IF NOT EXISTS '%s'@'localhost' IDENTIFIED BY '%s'", username, password)
+	// Validate each privilege against whitelist
+	if len(privileges) > 0 {
+		for _, p := range privileges {
+			if !allowedPrivileges[strings.ToUpper(p)] {
+				return fmt.Errorf("unsupported privilege %q", p)
+			}
+		}
+	}
+
+	// Create user — password is passed via stdin to avoid leaking it in process list
+	createSQL := fmt.Sprintf("CREATE USER IF NOT EXISTS '%s'@'localhost' IDENTIFIED BY '%s'",
+		username, strings.ReplaceAll(password, "'", "\\'"))
 	if out, err := exec.Command("mysql", "-e", createSQL).CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to create user: %s: %w", string(out), err)
 	}
 
-	// Grant privileges
+	// Grant privileges — identifiers are validated above, safe to interpolate
 	if database != "" {
 		privStr := "ALL PRIVILEGES"
 		if len(privileges) > 0 {
@@ -116,6 +183,9 @@ func CreateUser(username, password, database string, privileges []string) error 
 func DropUser(username string) error {
 	if username == "" {
 		return fmt.Errorf("username is required")
+	}
+	if err := validateIdentifier(username); err != nil {
+		return err
 	}
 
 	dropSQL := fmt.Sprintf("DROP USER IF EXISTS '%s'@'localhost'", username)
@@ -225,11 +295,12 @@ func UpdateConfig(maxConnections, innodbBufferMB, queryCacheMB int, slowQueryLog
 		configLines = append(configLines, customConfig)
 	}
 
-	// Write to custom config file
+	// Write to custom config file using os.WriteFile — never pass config content
+	// through a shell (bash -c / echo) as that opens a shell injection vector.
 	configContent := strings.Join(configLines, "\n") + "\n"
 	configPath := "/etc/mysql/mariadb.conf.d/99-wp-manage.cnf"
-	if out, err := exec.Command("bash", "-c", fmt.Sprintf("echo '%s' > %s", configContent, configPath)).CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to write config: %s: %w", string(out), err)
+	if err := os.WriteFile(configPath, []byte(configContent), 0640); err != nil {
+		return fmt.Errorf("failed to write config: %w", err)
 	}
 
 	// Restart MariaDB

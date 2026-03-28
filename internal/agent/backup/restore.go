@@ -33,14 +33,15 @@ func ensureSiteUser(domain string) {
 }
 
 type RestoreParams struct {
-	BackupID   uint64
-	Domain     string
-	Type       string // full, incremental, database_only
-	FilePath   string
-	DBName     string
-	DBUser     string
-	DBPass     string
-	PHPVersion string // fallback if manifest is missing
+	BackupID      uint64
+	Domain        string
+	Type          string // full, database_only
+	FilePath      string
+	DBName        string
+	DBUser        string
+	DBPass        string
+	PHPVersion    string // fallback if manifest is missing
+	EncryptionKey string // agent API key — used to decrypt DBPass stored in manifest
 }
 
 // RunRestore restores a site from a backup archive.
@@ -86,6 +87,14 @@ func RunRestore(params RestoreParams) (*Manifest, error) {
 			DBHost:     "localhost",
 			PHPVersion: params.PHPVersion,
 			WebRoot:    fmt.Sprintf("/var/www/%s/public", params.Domain),
+		}
+	} else {
+		// Decrypt DBPass stored in the manifest (AES-256-GCM encrypted by backup agent).
+		// Falls back gracefully for legacy plaintext manifests.
+		if plain, decErr := decryptSecret(manifest.DBPass, params.EncryptionKey); decErr == nil {
+			manifest.DBPass = plain
+		} else {
+			slog.Warn("Could not decrypt manifest DBPass — using raw value", "error", decErr)
 		}
 	}
 	// Allow overriding DB creds from task params (in case they changed after backup)

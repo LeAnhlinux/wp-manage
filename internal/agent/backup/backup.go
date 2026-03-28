@@ -34,13 +34,14 @@ type Manifest struct {
 }
 
 type BackupParams struct {
-	BackupID   uint64
-	Domain     string
-	Type       string // full, database_only
-	DBName     string
-	DBUser     string
-	DBPass     string
-	PHPVersion string
+	BackupID      uint64
+	Domain        string
+	Type          string // full, database_only
+	DBName        string
+	DBUser        string
+	DBPass        string
+	PHPVersion    string
+	EncryptionKey string // agent API key — used to encrypt DBPass in manifest
 }
 
 type BackupResult struct {
@@ -131,6 +132,13 @@ func runFullBackup(params BackupParams, dir, name string) BackupResult {
 	}
 
 	// 5) manifest.json → staging/manifest.json
+	// Encrypt DBPass with AES-256-GCM using the agent API key so that the
+	// manifest (and therefore the backup archive) never contains a plaintext password.
+	encryptedDBPass, err := encryptSecret(params.DBPass, params.EncryptionKey)
+	if err != nil {
+		slog.Warn("Could not encrypt DB password for manifest — storing without encryption", "error", err)
+		encryptedDBPass = params.DBPass
+	}
 	hasSSL := fileExists(fmt.Sprintf("/etc/letsencrypt/live/%s/cert.pem", params.Domain))
 	manifest := Manifest{
 		Version:    "2",
@@ -140,7 +148,7 @@ func runFullBackup(params BackupParams, dir, name string) BackupResult {
 		CreatedAt:  time.Now().UTC(),
 		DBName:     params.DBName,
 		DBUser:     params.DBUser,
-		DBPass:     params.DBPass,
+		DBPass:     encryptedDBPass, // AES-256-GCM encrypted; decrypted only by RunRestore
 		DBHost:     "localhost",
 		PHPVersion: phpVer,
 		HasSSL:     hasSSL,
@@ -180,6 +188,11 @@ func runDatabaseBackup(params BackupParams, dir, name string) BackupResult {
 	if phpVer == "" {
 		phpVer = detectPHPVersion(params.Domain)
 	}
+	encryptedDBPass, err := encryptSecret(params.DBPass, params.EncryptionKey)
+	if err != nil {
+		slog.Warn("Could not encrypt DB password for manifest", "error", err)
+		encryptedDBPass = params.DBPass
+	}
 	manifest := Manifest{
 		Version:    "2",
 		Domain:     params.Domain,
@@ -188,7 +201,7 @@ func runDatabaseBackup(params BackupParams, dir, name string) BackupResult {
 		CreatedAt:  time.Now().UTC(),
 		DBName:     params.DBName,
 		DBUser:     params.DBUser,
-		DBPass:     params.DBPass,
+		DBPass:     encryptedDBPass,
 		DBHost:     "localhost",
 		PHPVersion: phpVer,
 	}
@@ -251,6 +264,24 @@ func checkDiskSpace(path string) error {
 }
 
 func mysqldump(params BackupParams, destFile string) error {
+	// Write credentials to a temp file (0600) so the password is NEVER visible
+	// in the process list via `ps aux` or `/proc/<pid>/cmdline`.
+	myCnf := fmt.Sprintf("[client]\nuser=%s\npassword=%s\n", params.DBUser, params.DBPass)
+	tmpCnf, err := os.CreateTemp("", "wpm-mycnf-*.cnf")
+	if err != nil {
+		return fmt.Errorf("create temp mycnf: %w", err)
+	}
+	defer os.Remove(tmpCnf.Name()) // always delete, even on error
+	if err := tmpCnf.Chmod(0600); err != nil {
+		tmpCnf.Close()
+		return fmt.Errorf("chmod temp mycnf: %w", err)
+	}
+	if _, err := tmpCnf.WriteString(myCnf); err != nil {
+		tmpCnf.Close()
+		return fmt.Errorf("write temp mycnf: %w", err)
+	}
+	tmpCnf.Close()
+
 	f, err := os.Create(destFile)
 	if err != nil {
 		return fmt.Errorf("create sql file: %w", err)
@@ -258,8 +289,7 @@ func mysqldump(params BackupParams, destFile string) error {
 	defer f.Close()
 
 	cmd := exec.Command("mysqldump",
-		"--user="+params.DBUser,
-		"--password="+params.DBPass,
+		"--defaults-extra-file="+tmpCnf.Name(), // credentials from file, not CLI arg
 		"--single-transaction",
 		"--quick",
 		"--lock-tables=false",

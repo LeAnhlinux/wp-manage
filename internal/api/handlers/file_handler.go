@@ -12,13 +12,15 @@ import (
 
 type FileHandler struct {
 	fileSvc *services.FileService
+	userSvc *services.UserService
 }
 
-func NewFileHandler(fileSvc *services.FileService) *FileHandler {
-	return &FileHandler{fileSvc: fileSvc}
+func NewFileHandler(fileSvc *services.FileService, userSvc *services.UserService) *FileHandler {
+	return &FileHandler{fileSvc: fileSvc, userSvc: userSvc}
 }
 
-// getSiteForFileOp retrieves the site and validates it exists
+// getSiteForFileOp retrieves the site, validates it exists, and enforces IDOR protection:
+// non-admin users must have explicit access to the site's server before any file operation.
 func (h *FileHandler) getSiteForFileOp(c *fiber.Ctx) (*models.Site, error) {
 	id, _ := strconv.ParseUint(c.Params("id"), 10, 64)
 	site, err := h.fileSvc.GetSiteWithServer(id)
@@ -28,6 +30,17 @@ func (h *FileHandler) getSiteForFileOp(c *fiber.Ctx) (*models.Site, error) {
 	if site.Server == nil {
 		return nil, c.Status(400).JSON(models.APIResponse{Error: "Server not found for site"})
 	}
+
+	// IDOR guard: verify the authenticated user has access to this site's server.
+	// Admins bypass the check; managers/viewers must be assigned to the server.
+	role, _ := c.Locals("role").(string)
+	if role != "admin" {
+		userID, _ := c.Locals("user_id").(uint64)
+		if !h.userSvc.HasServerAccess(userID, role, site.ServerID) {
+			return nil, c.Status(403).JSON(models.APIResponse{Error: "Access denied: you do not have permission to access files on this site's server"})
+		}
+	}
+
 	return site, nil
 }
 

@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"strconv"
 	"time"
@@ -86,7 +87,7 @@ func Load() *Config {
 			DB:       getEnvInt("REDIS_DB", 0),
 		},
 		JWT: JWTConfig{
-			Secret:     getEnv("JWT_SECRET", "change-me-in-production"),
+			Secret:     getRequiredJWTSecret(),
 			Expiration: time.Duration(getEnvInt("JWT_EXPIRATION_HOURS", 24)) * time.Hour,
 		},
 		Agent: AgentConfig{
@@ -104,6 +105,32 @@ func Load() *Config {
 		FCMServerKey: getEnv("FCM_SERVER_KEY", ""),
 		FCMProjectID: getEnv("FCM_PROJECT_ID", ""),
 	}
+}
+
+// getRequiredJWTSecret returns JWT_SECRET from env.
+// - In production mode: panics if not set or still the insecure default.
+// - In development mode: prints a warning and uses a fallback.
+func getRequiredJWTSecret() string {
+	const insecureDefault = "change-me-in-production"
+	secret := os.Getenv("JWT_SECRET")
+	mode := os.Getenv("SERVER_MODE")
+
+	if secret == "" || secret == insecureDefault {
+		if mode == "production" {
+			log.Fatal("FATAL: JWT_SECRET environment variable must be set to a strong random value in production. " +
+				"Generate one with: openssl rand -hex 32")
+		}
+		log.Println("WARNING: JWT_SECRET not set — using insecure default. Set JWT_SECRET in production!")
+		return insecureDefault
+	}
+	if len(secret) < 32 {
+		if mode == "production" {
+			log.Fatal("FATAL: JWT_SECRET is too short (minimum 32 characters). " +
+				"Generate a strong secret with: openssl rand -hex 32")
+		}
+		log.Println("WARNING: JWT_SECRET is shorter than 32 characters — use a longer secret in production!")
+	}
+	return secret
 }
 
 func getEnv(key, fallback string) string {

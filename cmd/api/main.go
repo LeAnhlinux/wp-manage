@@ -88,7 +88,7 @@ func main() {
 	serverHandler := handlers.NewServerHandler(serverService, siteService, backupService, cfg, hub)
 	siteHandler := handlers.NewSiteHandler(siteService, serverService)
 	deployHandler := handlers.NewDeployHandler(deployService, hub)
-	fileHandler := handlers.NewFileHandler(fileService)
+	fileHandler := handlers.NewFileHandler(fileService, userService)
 	userHandler := handlers.NewUserHandler(userService)
 	apiKeyHandler := handlers.NewAPIKeyHandler(apiKeyService)
 	backupHandler := handlers.NewBackupHandler(backupService)
