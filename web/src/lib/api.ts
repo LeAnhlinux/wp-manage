@@ -6,8 +6,9 @@ const api = axios.create({
   timeout: 120000, // 120s for long-running synchronous operations
 })
 
+// H15: read token from sessionStorage (matches auth.ts which stores in sessionStorage)
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('token')
+  const token = sessionStorage.getItem('token')
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
   }
@@ -18,7 +19,7 @@ api.interceptors.response.use(
   (res) => res,
   (err) => {
     if (err.response?.status === 401) {
-      localStorage.removeItem('token')
+      sessionStorage.removeItem('token')
       window.location.href = '/login'
     }
     return Promise.reject(err)
