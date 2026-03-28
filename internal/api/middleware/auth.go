@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
@@ -97,7 +98,8 @@ func PermissionRequired(resource, action string) fiber.Handler {
 	}
 }
 
-// ServerAccessRequired checks that the current user has access to the server referenced in route params
+// ServerAccessRequired checks that the current user has access to the server referenced in route params.
+// It always enforces access when a server ID param is present — never silently skips the check.
 func ServerAccessRequired(userSvc *services.UserService) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		role, _ := c.Locals("role").(string)
@@ -112,18 +114,15 @@ func ServerAccessRequired(userSvc *services.UserService) fiber.Handler {
 		if serverIDStr == "" {
 			serverIDStr = c.Params("serverId")
 		}
+		// No server ID in the route — this middleware is not applicable
 		if serverIDStr == "" {
 			return c.Next()
 		}
 
-		var serverID uint64
-		for _, ch := range serverIDStr {
-			if ch >= '0' && ch <= '9' {
-				serverID = serverID*10 + uint64(ch-'0')
-			}
-		}
-		if serverID == 0 {
-			return c.Next()
+		// Strict numeric parse — never silently skip on malformed input
+		serverID, err := strconv.ParseUint(serverIDStr, 10, 64)
+		if err != nil || serverID == 0 {
+			return c.Status(400).JSON(fiber.Map{"success": false, "error": "Invalid server ID"})
 		}
 
 		if !userSvc.HasServerAccess(userID, role, serverID) {

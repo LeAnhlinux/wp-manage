@@ -57,8 +57,12 @@ type AgentConfig struct {
 }
 
 type PanelConfig struct {
-	Domain    string
+	Domain     string
 	InstallURL string
+	// CORSOrigins is a comma-separated list of allowed CORS origins.
+	// Set CORS_ORIGINS env var to restrict which frontends can call the API.
+	// Defaults to https://{Panel.Domain} if unset.
+	CORSOrigins string
 }
 
 func (d DatabaseConfig) DSN() string {
@@ -96,8 +100,9 @@ func Load() *Config {
 			UpdateCheckSec: getEnvInt("AGENT_UPDATE_CHECK_SEC", 300),
 		},
 		Panel: PanelConfig{
-			Domain:    getEnv("PANEL_DOMAIN", "panel.wpm.vn"),
-			InstallURL: getEnv("INSTALL_URL", "https://install.wpm.vn"),
+			Domain:      getEnv("PANEL_DOMAIN", "panel.wpm.vn"),
+			InstallURL:  getEnv("INSTALL_URL", "https://install.wpm.vn"),
+			CORSOrigins: getEnv("CORS_ORIGINS", ""),
 		},
 		Google: GoogleConfig{
 			PageSpeedAPIKey: getEnv("GOOGLE_PAGESPEED_API_KEY", ""),

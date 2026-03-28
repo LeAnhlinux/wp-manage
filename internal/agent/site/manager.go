@@ -16,6 +16,8 @@ import (
 	"strings"
 	"text/template"
 	"time"
+
+	"github.com/gofiber-team/wp-manage/pkg/utils"
 )
 
 // SiteUser returns the Linux username for a WordPress site.
@@ -27,6 +29,9 @@ func SiteUser(domain string) string {
 
 // createSiteUser creates a system user for the site (no login shell, no home dir creation).
 func createSiteUser(domain string) error {
+	if err := utils.ValidateDomain(domain); err != nil {
+		return fmt.Errorf("createSiteUser: %w", err)
+	}
 	user := SiteUser(domain)
 	cmd := exec.Command("useradd",
 		"--system",
@@ -48,6 +53,10 @@ func createSiteUser(domain string) error {
 
 // deleteSiteUser removes the site's Linux user and group.
 func deleteSiteUser(domain string) {
+	if err := utils.ValidateDomain(domain); err != nil {
+		slog.Error("deleteSiteUser: invalid domain, aborting", "domain", domain, "error", err)
+		return
+	}
 	user := SiteUser(domain)
 	exec.Command("userdel", user).Run()
 	exec.Command("groupdel", user).Run()
@@ -143,6 +152,11 @@ func (m *Manager) cleanupFailedSite(domain, dbName, dbUser string) {
 }
 
 func (m *Manager) CreateSite(params CreateParams) error {
+	// Validate domain before any filesystem or system-user operations (H9/H10/H17)
+	if err := utils.ValidateDomain(params.Domain); err != nil {
+		return fmt.Errorf("CreateSite: %w", err)
+	}
+
 	siteRoot := fmt.Sprintf("/var/www/%s", params.Domain)
 	webRoot := siteRoot + "/public"
 	phpVer := params.PHPVersion
@@ -220,6 +234,11 @@ func (m *Manager) CreateSite(params CreateParams) error {
 }
 
 func (m *Manager) DeleteSite(domain, dbName, dbUser string) error {
+	// Validate domain before any filesystem operations (H9/H17)
+	if err := utils.ValidateDomain(domain); err != nil {
+		return fmt.Errorf("DeleteSite: %w", err)
+	}
+
 	siteRoot := fmt.Sprintf("/var/www/%s", domain)
 
 	// Remove nginx config

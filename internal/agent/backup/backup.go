@@ -59,7 +59,7 @@ func RunBackup(params BackupParams) BackupResult {
 	}
 
 	siteBackupDir := filepath.Join(BackupDir, params.Domain)
-	os.MkdirAll(siteBackupDir, 0750)
+	os.MkdirAll(siteBackupDir, 0700) // 0700: only root can read — prevents info leak to other users
 
 	timestamp := time.Now().Format("20060102-150405")
 	backupName := fmt.Sprintf("%s_%s_%s", params.Domain, params.Type, timestamp)
@@ -231,7 +231,7 @@ func runDatabaseBackup(params BackupParams, dir, name string) BackupResult {
 // the backup to proceed, so transient stat errors don't silently block all backups.
 func checkDiskSpace(path string) error {
 	// Ensure the directory exists so Statfs can stat it
-	os.MkdirAll(path, 0750)
+	os.MkdirAll(path, 0700)
 
 	var stat syscall.Statfs_t
 	if err := syscall.Statfs(path, &stat); err != nil {

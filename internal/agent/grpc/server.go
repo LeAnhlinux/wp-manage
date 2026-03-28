@@ -40,6 +40,7 @@ import (
 	"github.com/gofiber-team/wp-manage/internal/agent/ssl"
 	"github.com/gofiber-team/wp-manage/internal/agent/system"
 	"github.com/gofiber-team/wp-manage/internal/models"
+	"github.com/gofiber-team/wp-manage/pkg/utils"
 )
 
 // Version is set at build time via -ldflags="-X github.com/gofiber-team/wp-manage/internal/agent/grpc.Version=..."
@@ -54,6 +55,13 @@ type AgentServer struct {
 
 func NewAgentServer(apiURL, apiKey string) *AgentServer {
 	return &AgentServer{apiURL: apiURL, apiKey: apiKey}
+}
+
+// validateTaskDomain rejects tasks whose domain field fails RFC 1123 validation.
+// This prevents a compromised or malicious API response from triggering operations
+// on paths like "/../../etc/passwd" or other injection attempts. (H14/H17)
+func validateTaskDomain(domain string) error {
+	return utils.ValidateDomain(domain)
 }
 
 // lockDomain acquires a per-domain mutex and returns an unlock function.
@@ -186,6 +194,11 @@ func (s *AgentServer) pollTasks() {
 		case "create_site":
 			var siteTask models.AgentCreateSiteTask
 			json.Unmarshal(task.Data, &siteTask)
+			// H14: Validate domain before dispatching any task that touches the filesystem
+			if err := validateTaskDomain(siteTask.Domain); err != nil {
+				slog.Error("Rejecting create_site task with invalid domain", "domain", siteTask.Domain, "error", err)
+				continue
+			}
 			// Prevent double-dispatch: skip if a goroutine is already creating this site
 			if _, alreadyRunning := s.activeCreations.LoadOrStore(task.SiteID, true); alreadyRunning {
 				slog.Warn("Skipping duplicate create_site task", "site_id", task.SiteID, "domain", siteTask.Domain)
@@ -199,21 +212,37 @@ func (s *AgentServer) pollTasks() {
 		case "delete_site":
 			var data map[string]string
 			json.Unmarshal(task.Data, &data)
+			if err := validateTaskDomain(data["domain"]); err != nil {
+				slog.Error("Rejecting delete_site task with invalid domain", "domain", data["domain"], "error", err)
+				continue
+			}
 			go s.executeDeleteSite(task.TaskID, data["domain"], data["db_name"], data["db_user"])
 
 		case "restart_site":
 			var data map[string]string
 			json.Unmarshal(task.Data, &data)
+			if err := validateTaskDomain(data["domain"]); err != nil {
+				slog.Error("Rejecting restart_site task with invalid domain", "domain", data["domain"], "error", err)
+				continue
+			}
 			go s.executeRestartSite(task.TaskID, data["domain"], data["php_version"])
 
 		case "suspend_site":
 			var data map[string]string
 			json.Unmarshal(task.Data, &data)
+			if err := validateTaskDomain(data["domain"]); err != nil {
+				slog.Error("Rejecting suspend_site task with invalid domain", "domain", data["domain"], "error", err)
+				continue
+			}
 			go s.executeSuspendSite(task.TaskID, data["domain"])
 
 		case "resume_site":
 			var data map[string]string
 			json.Unmarshal(task.Data, &data)
+			if err := validateTaskDomain(data["domain"]); err != nil {
+				slog.Error("Rejecting resume_site task with invalid domain", "domain", data["domain"], "error", err)
+				continue
+			}
 			go s.executeResumeSite(task.TaskID, data["domain"])
 
 		case "update_php":

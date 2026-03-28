@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -15,13 +17,98 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
+	"time"
 
 	"github.com/gofiber-team/wp-manage/internal/models"
 )
 
 const maxFileReadSize = 10 * 1024 * 1024 // 10MB max for file content read
 const maxUploadSize = 2 * 1024 * 1024 * 1024 // 2GB max upload
+
+// authFailEntry tracks failed authentication attempts per IP address.
+type authFailEntry struct {
+	count    int
+	blockedUntil time.Time
+}
+
+// authRateLimiter protects the agent HTTP server against brute-force of the API key.
+// After 10 consecutive failures from the same IP within 1 minute, that IP is blocked
+// for 5 minutes. Legitimate callers (the API server) should never fail auth.
+type authRateLimiter struct {
+	mu      sync.Mutex
+	entries map[string]*authFailEntry
+}
+
+func newAuthRateLimiter() *authRateLimiter {
+	rl := &authRateLimiter{entries: make(map[string]*authFailEntry)}
+	// Background cleanup every 10 minutes
+	go func() {
+		ticker := time.NewTicker(10 * time.Minute)
+		for range ticker.C {
+			rl.mu.Lock()
+			now := time.Now()
+			for ip, e := range rl.entries {
+				if now.After(e.blockedUntil) && e.count == 0 {
+					delete(rl.entries, ip)
+				}
+			}
+			rl.mu.Unlock()
+		}
+	}()
+	return rl
+}
+
+const (
+	authMaxFailures = 10              // max consecutive failures before block
+	authBlockWindow = 1 * time.Minute // sliding window for failures
+	authBlockDuration = 5 * time.Minute // how long to block after exceeding limit
+)
+
+// isBlocked returns true if the IP is currently blocked. On failure it increments
+// the counter; on success it resets it.
+func (rl *authRateLimiter) recordFailure(ip string) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	e, ok := rl.entries[ip]
+	if !ok {
+		e = &authFailEntry{}
+		rl.entries[ip] = e
+	}
+	// If currently blocked, reject immediately
+	if time.Now().Before(e.blockedUntil) {
+		return true
+	}
+	e.count++
+	if e.count >= authMaxFailures {
+		e.blockedUntil = time.Now().Add(authBlockDuration)
+		e.count = 0
+		slog.Warn("Blocking IP after repeated auth failures on agent HTTP server",
+			"ip", ip, "block_until", e.blockedUntil)
+		return true
+	}
+	return false
+}
+
+func (rl *authRateLimiter) recordSuccess(ip string) {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	delete(rl.entries, ip)
+}
+
+func (rl *authRateLimiter) checkBlocked(ip string) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	e, ok := rl.entries[ip]
+	if !ok {
+		return false
+	}
+	return time.Now().Before(e.blockedUntil)
+}
+
+// globalAuthRateLimiter is shared across all Handler instances on this agent process.
+var globalAuthRateLimiter = newAuthRateLimiter()
 
 // Handler handles file manager HTTP requests on the agent
 type Handler struct {
@@ -252,11 +339,28 @@ func (h *Handler) handleExtract(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Extract remote IP (strip port)
+		remoteIP := r.RemoteAddr
+		if host, _, err := net.SplitHostPort(remoteIP); err == nil {
+			remoteIP = host
+		}
+
+		// Pre-check: reject IPs that are already blocked
+		if globalAuthRateLimiter.checkBlocked(remoteIP) {
+			writeJSON(w, 429, models.APIResponse{Error: "Too many failed attempts. Try again later."})
+			return
+		}
+
 		key := r.Header.Get("X-Agent-Key")
 		if key != h.apiKey {
+			// Record failure — block IP after authMaxFailures consecutive bad keys
+			globalAuthRateLimiter.recordFailure(remoteIP)
 			writeJSON(w, 401, models.APIResponse{Error: "Unauthorized"})
 			return
 		}
+
+		// Successful auth — reset failure counter
+		globalAuthRateLimiter.recordSuccess(remoteIP)
 		next(w, r)
 	}
 }

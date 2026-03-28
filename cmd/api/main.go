@@ -149,8 +149,22 @@ func main() {
 
 	app.Use(recover.New())
 	app.Use(logger.New())
+
+	// Determine allowed CORS origins.
+	// In production set CORS_ORIGINS to the exact panel domain (e.g. "https://panel.example.com").
+	// Wildcard "*" is used only when CORS_ORIGINS is not configured AND we are in development mode.
+	corsOrigins := cfg.Panel.CORSOrigins
+	if corsOrigins == "" {
+		if cfg.Server.Mode == "production" {
+			// Production default: restrict to the panel domain
+			corsOrigins = "https://" + cfg.Panel.Domain
+		} else {
+			// Development: allow all origins for convenience
+			corsOrigins = "*"
+		}
+	}
 	app.Use(cors.New(cors.Config{
-		AllowOrigins: "*",
+		AllowOrigins: corsOrigins,
 		AllowMethods: "GET,POST,PUT,DELETE,PATCH,OPTIONS",
 		AllowHeaders: "Origin,Content-Type,Accept,Authorization,X-Agent-Key,X-API-Key",
 	}))
