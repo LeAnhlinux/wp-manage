@@ -88,7 +88,8 @@ type Migration struct {
 	TargetServerID uint64     `json:"target_server_id" gorm:"index;not null"`
 	// Mode: keep_domain (suspend source, auto-update DNS) or change_domain (wp search-replace)
 	Mode           string     `json:"mode" gorm:"size:20;default:'keep_domain'"`
-	NewDomain      string     `json:"new_domain,omitempty" gorm:"size:255"` // only for change_domain mode
+	OldDomain      string     `json:"old_domain,omitempty" gorm:"size:255"`  // original domain before change_domain migration
+	NewDomain      string     `json:"new_domain,omitempty" gorm:"size:255"`  // only for change_domain mode
 	UpdateDNS         bool       `json:"update_dns" gorm:"default:false"`          // auto-update DNS A record after keep_domain migration
 	SourceCleanedUp   bool       `json:"source_cleaned_up" gorm:"default:false"`   // true once source files/DB/configs deleted
 	Phase             string     `json:"phase" gorm:"type:enum('preparation','initial_sync','delta_sync','switchover','cleanup');default:'preparation'"`

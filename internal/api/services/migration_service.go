@@ -59,11 +59,18 @@ func (s *MigrationService) StartMigration(siteID uint64, req models.MigrateReque
 	}
 
 	now := time.Now()
+	// Store OldDomain for change_domain mode so CleanupSource can find the correct
+	// source directory even after site.Domain has been updated to the new domain.
+	oldDomain := ""
+	if mode == "change_domain" {
+		oldDomain = site.Domain
+	}
 	migration := models.Migration{
 		SiteID:         siteID,
 		SourceServerID: site.ServerID,
 		TargetServerID: req.TargetServerID,
 		Mode:           mode,
+		OldDomain:      oldDomain,
 		NewDomain:      req.NewDomain,
 		UpdateDNS:      req.UpdateDNS,
 		Phase:          "preparation",
@@ -420,9 +427,15 @@ func (s *MigrationService) CleanupSource(id uint64) error {
 		return fmt.Errorf("server nguồn đã được dọn dẹp trước đó")
 	}
 
+	// For change_domain migrations, the source still has OldDomain files/configs.
+	// site.Domain has already been updated to the new domain — using it would cause
+	// the cleanup task to try deleting a non-existent path, leaving old files as orphans.
 	domain := ""
 	if migration.Site != nil {
 		domain = migration.Site.Domain
+	}
+	if migration.Mode == "change_domain" && migration.OldDomain != "" {
+		domain = migration.OldDomain
 	}
 
 	taskData, _ := json.Marshal(models.AgentMigrateTask{
