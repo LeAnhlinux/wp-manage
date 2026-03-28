@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -21,7 +22,7 @@ type Manifest struct {
 	Version    string    `json:"version"`     // "2"
 	Domain     string    `json:"domain"`
 	BackupID   uint64    `json:"backup_id"`
-	BackupType string    `json:"backup_type"` // full | incremental | database_only
+	BackupType string    `json:"backup_type"` // full | database_only
 	CreatedAt  time.Time `json:"created_at"`
 	DBName     string    `json:"db_name"`
 	DBUser     string    `json:"db_user"`
@@ -35,7 +36,7 @@ type Manifest struct {
 type BackupParams struct {
 	BackupID   uint64
 	Domain     string
-	Type       string // full, incremental, database_only
+	Type       string // full, database_only
 	DBName     string
 	DBUser     string
 	DBPass     string
@@ -51,6 +52,11 @@ type BackupResult struct {
 
 // RunBackup executes a backup based on the type.
 func RunBackup(params BackupParams) BackupResult {
+	// Pre-flight: abort if disk usage on backup partition ≥ 90%
+	if err := checkDiskSpace(BackupDir); err != nil {
+		return BackupResult{Error: err}
+	}
+
 	siteBackupDir := filepath.Join(BackupDir, params.Domain)
 	os.MkdirAll(siteBackupDir, 0750)
 
@@ -62,8 +68,6 @@ func RunBackup(params BackupParams) BackupResult {
 		return runDatabaseBackup(params, siteBackupDir, backupName)
 	case "full":
 		return runFullBackup(params, siteBackupDir, backupName)
-	case "incremental":
-		return runIncrementalBackup(params, siteBackupDir, backupName)
 	default:
 		return BackupResult{Error: fmt.Errorf("unknown backup type: %s", params.Type)}
 	}
@@ -207,83 +211,44 @@ func runDatabaseBackup(params BackupParams, dir, name string) BackupResult {
 	return fileResult(tarFile)
 }
 
-func runIncrementalBackup(params BackupParams, dir, name string) BackupResult {
-	slog.Info("Starting incremental backup", "domain", params.Domain)
-
-	phpVer := params.PHPVersion
-	if phpVer == "" {
-		phpVer = detectPHPVersion(params.Domain)
-	}
-
-	webRoot := fmt.Sprintf("/var/www/%s/public", params.Domain)
-	stagingDir := filepath.Join(dir, ".staging_"+name)
-	defer os.RemoveAll(stagingDir)
-
-	for _, sub := range []string{"files/public", "database", "config"} {
-		os.MkdirAll(filepath.Join(stagingDir, sub), 0755)
-	}
-
-	// DB dump (always full for incremental)
-	sqlFile := filepath.Join(stagingDir, "database", "dump.sql")
-	if err := mysqldump(params, sqlFile); err != nil {
-		return BackupResult{Error: err}
-	}
-
-	// Configs
-	copyFileIfExists(
-		fmt.Sprintf("/etc/nginx/sites-available/%s.conf", params.Domain),
-		filepath.Join(stagingDir, "config", "nginx.conf"),
-	)
-	copyFileIfExists(
-		fmt.Sprintf("/etc/php/%s/fpm/pool.d/%s.conf", phpVer, params.Domain),
-		filepath.Join(stagingDir, "config", "phpfpm.conf"),
-	)
-
-	// Incremental files: only changed in last 24h
-	yesterday := time.Now().Add(-24 * time.Hour).Format("2006-01-02")
-	filesTarget := filepath.Join(stagingDir, "files", "public")
-	rsyncCmd := exec.Command("rsync", "-a",
-		"--newer="+yesterday,
-		"--exclude=*.log",
-		"--exclude=wp-content/cache/",
-		webRoot+"/", filesTarget+"/",
-	)
-	rsyncCmd.CombinedOutput() // tolerate errors
-
-	// Manifest
-	hasSSL := fileExists(fmt.Sprintf("/etc/letsencrypt/live/%s/cert.pem", params.Domain))
-	manifest := Manifest{
-		Version:    "2",
-		Domain:     params.Domain,
-		BackupID:   params.BackupID,
-		BackupType: "incremental",
-		CreatedAt:  time.Now().UTC(),
-		DBName:     params.DBName,
-		DBUser:     params.DBUser,
-		DBPass:     params.DBPass,
-		DBHost:     "localhost",
-		PHPVersion: phpVer,
-		HasSSL:     hasSSL,
-		WebRoot:    webRoot, // /var/www/{domain}/public
-	}
-	manifestBytes, _ := json.MarshalIndent(manifest, "", "  ")
-	os.WriteFile(filepath.Join(stagingDir, "manifest.json"), manifestBytes, 0600)
-
-	tarFile := filepath.Join(dir, name+".tar.gz")
-	tarCmd := exec.Command("tar", "czf", tarFile,
-		"--warning=no-file-changed",
-		"-C", filepath.Dir(stagingDir), filepath.Base(stagingDir),
-	)
-	if out, err := tarCmd.CombinedOutput(); err != nil {
-		if tarCmd.ProcessState != nil && tarCmd.ProcessState.ExitCode() > 1 {
-			return BackupResult{Error: fmt.Errorf("tar failed: %s %w", string(out), err)}
-		}
-	}
-
-	return fileResult(tarFile)
-}
-
 // ─── helpers ────────────────────────────────────────────────────────────────
+
+// checkDiskSpace returns an error if the partition containing path has ≥ 90% disk usage.
+// If the check itself fails (e.g. path doesn't exist yet) it logs a warning and allows
+// the backup to proceed, so transient stat errors don't silently block all backups.
+func checkDiskSpace(path string) error {
+	// Ensure the directory exists so Statfs can stat it
+	os.MkdirAll(path, 0750)
+
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(path, &stat); err != nil {
+		slog.Warn("Could not check disk space before backup, proceeding anyway",
+			"path", path, "error", err)
+		return nil
+	}
+
+	total := stat.Blocks * uint64(stat.Bsize)
+	if total == 0 {
+		return nil // avoid division by zero on unusual mounts
+	}
+	avail := stat.Bavail * uint64(stat.Bsize)
+	used := total - avail
+	usedPct := float64(used) / float64(total) * 100
+
+	slog.Info("Disk space check", "path", path,
+		"used_pct", fmt.Sprintf("%.1f%%", usedPct),
+		"used_gb", fmt.Sprintf("%.1f GB", float64(used)/1e9),
+		"avail_gb", fmt.Sprintf("%.1f GB", float64(avail)/1e9),
+	)
+
+	if usedPct >= 90 {
+		return fmt.Errorf(
+			"disk usage is %.1f%% (≥ 90%%) on %s — backup aborted to prevent disk full (%.1f GB used / %.1f GB total)",
+			usedPct, path, float64(used)/1e9, float64(total)/1e9,
+		)
+	}
+	return nil
+}
 
 func mysqldump(params BackupParams, destFile string) error {
 	f, err := os.Create(destFile)

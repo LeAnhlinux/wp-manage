@@ -43,7 +43,7 @@ type AutoTuneRequest struct {
 }
 
 type CreateBackupRequest struct {
-	Type    string `json:"type" validate:"required,oneof=full incremental database_only"`
+	Type    string `json:"type" validate:"required,oneof=full database_only"`
 	Storage string `json:"storage" validate:"omitempty,oneof=local s3 r2 gdrive backblaze"`
 }
 
@@ -53,7 +53,7 @@ type RestoreRequest struct {
 }
 
 type CreateBackupScheduleRequest struct {
-	Type      string `json:"type" validate:"required,oneof=full incremental database_only"`
+	Type      string `json:"type" validate:"required,oneof=full database_only"`
 	Storage   string `json:"storage" validate:"omitempty,oneof=local s3 r2 gdrive backblaze"`
 	CronExpr  string `json:"cron_expr" validate:"required"`
 	Retention int    `json:"retention" validate:"omitempty,min=1,max=365"`
@@ -61,7 +61,7 @@ type CreateBackupScheduleRequest struct {
 }
 
 type UpdateBackupScheduleRequest struct {
-	Type      *string `json:"type" validate:"omitempty,oneof=full incremental database_only"`
+	Type      *string `json:"type" validate:"omitempty,oneof=full database_only"`
 	Storage   *string `json:"storage" validate:"omitempty,oneof=local s3 r2 gdrive backblaze"`
 	CronExpr  *string `json:"cron_expr"`
 	Retention *int    `json:"retention" validate:"omitempty,min=1,max=365"`
@@ -72,7 +72,7 @@ type UpdateBackupScheduleRequest struct {
 type AgentBackupTask struct {
 	BackupID   uint64 `json:"backup_id"`
 	Domain     string `json:"domain"`
-	Type       string `json:"type"` // full, incremental, database_only
+	Type       string `json:"type"` // full, database_only
 	DBName     string `json:"db_name"`
 	DBUser     string `json:"db_user"`
 	DBPass     string `json:"db_password"`

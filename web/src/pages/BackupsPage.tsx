@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { HardDrive, Plus, RotateCcw, Trash2, Clock, Database, Archive, FileArchive, AlertCircle, CheckCircle2, Loader2, X } from 'lucide-react'
+import { HardDrive, Plus, RotateCcw, Trash2, Clock, Database, Archive, AlertCircle, CheckCircle2, Loader2, X } from 'lucide-react'
 import { useBackups, useCreateBackup, useDeleteBackup, useRestoreBackupByID } from '@/hooks/useBackups'
 import { useSites } from '@/hooks/useSites'
 import { useServers } from '@/hooks/useServers'
@@ -29,12 +29,10 @@ function formatDate(dateStr: string): string {
 function BackupTypeBadge({ type }: { type: string }) {
   const styles: Record<string, string> = {
     full: 'bg-blue-100 text-blue-700',
-    incremental: 'bg-purple-100 text-purple-700',
     database_only: 'bg-amber-100 text-amber-700',
   }
   const labels: Record<string, string> = {
     full: 'Full',
-    incremental: 'Incremental',
     database_only: 'Database',
   }
   return (
@@ -60,7 +58,6 @@ function StatusBadge({ status }: { status: string }) {
 function BackupTypeIcon({ type }: { type: string }) {
   switch (type) {
     case 'full': return <Archive size={16} className="text-blue-500" />
-    case 'incremental': return <FileArchive size={16} className="text-purple-500" />
     case 'database_only': return <Database size={16} className="text-amber-500" />
     default: return <HardDrive size={16} />
   }
@@ -131,7 +128,7 @@ export default function BackupsPage() {
 
   // Create backup form state
   const [createSiteId, setCreateSiteId] = useState<number>(0)
-  const [createType, setCreateType] = useState<'full' | 'incremental' | 'database_only'>('full')
+  const [createType, setCreateType] = useState<'full' | 'database_only'>('full')
 
   const handleCreate = () => {
     if (!createSiteId) return
@@ -281,7 +278,6 @@ export default function BackupsPage() {
                 >
                   <option value="full">Full (Files + Database + Config)</option>
                   <option value="database_only">Database Only</option>
-                  <option value="incremental">Incremental (Last 24h changes)</option>
                 </select>
               </div>
             </div>

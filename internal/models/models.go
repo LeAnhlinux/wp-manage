@@ -69,7 +69,7 @@ type Backup struct {
 	ServerID    uint64     `json:"server_id" gorm:"index;not null;default:0"`
 	// Domain is captured at backup-creation time and survives site deletion.
 	Domain      string     `json:"domain" gorm:"size:255;index"`
-	Type        string     `json:"type" gorm:"type:enum('full','incremental','database_only');not null"`
+	Type        string     `json:"type" gorm:"type:enum('full','database_only');not null"`
 	Storage     string     `json:"storage" gorm:"type:enum('local','s3','r2','gdrive','backblaze');default:'local'"`
 	FilePath    string     `json:"file_path" gorm:"size:500"`
 	SizeBytes   int64      `json:"size_bytes"`
@@ -128,7 +128,7 @@ type ActivityLog struct {
 type BackupSchedule struct {
 	ID         uint64     `json:"id" gorm:"primaryKey;autoIncrement"`
 	SiteID     uint64     `json:"site_id" gorm:"index;not null"`
-	Type       string     `json:"type" gorm:"type:enum('full','incremental','database_only');not null"`
+	Type       string     `json:"type" gorm:"type:enum('full','database_only');not null"`
 	Storage    string     `json:"storage" gorm:"type:enum('local','s3','r2','gdrive','backblaze');default:'local'"`
 	CronExpr   string     `json:"cron_expr" gorm:"size:100;not null"`
 	Retention  int        `json:"retention" gorm:"default:7"`

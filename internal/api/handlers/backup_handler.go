@@ -23,7 +23,7 @@ func (h *BackupHandler) Create(c *fiber.Ctx) error {
 		return c.Status(400).JSON(models.APIResponse{Error: "Invalid request body"})
 	}
 	if req.Type == "" {
-		return c.Status(400).JSON(models.APIResponse{Error: "Backup type is required (full, incremental, database_only)"})
+		return c.Status(400).JSON(models.APIResponse{Error: "Backup type is required (full, database_only)"})
 	}
 
 	backup, err := h.svc.CreateBackup(siteID, req)

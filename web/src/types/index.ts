@@ -69,7 +69,7 @@ export interface Backup {
   site_id: number | null  // null = orphaned (site was deleted, backup preserved)
   server_id: number       // always set — allows restore dispatch after site deletion
   domain: string          // stored at backup time, survives site deletion
-  type: 'full' | 'incremental' | 'database_only'
+  type: 'full' | 'database_only'
   storage: string
   file_path: string
   size_bytes: number
@@ -84,7 +84,7 @@ export interface Backup {
 export interface BackupSchedule {
   id: number
   site_id: number
-  type: 'full' | 'incremental' | 'database_only'
+  type: 'full' | 'database_only'
   storage: string
   cron_expr: string
   retention: number
@@ -95,7 +95,7 @@ export interface BackupSchedule {
 }
 
 export interface CreateBackupRequest {
-  type: 'full' | 'incremental' | 'database_only'
+  type: 'full' | 'database_only'
   storage?: string
 }
 
@@ -105,7 +105,7 @@ export interface RestoreRequest {
 }
 
 export interface CreateBackupScheduleRequest {
-  type: 'full' | 'incremental' | 'database_only'
+  type: 'full' | 'database_only'
   storage?: string
   cron_expr: string
   retention?: number

@@ -89,7 +89,7 @@ func (h *OperationsHandler) GetBackup(c *fiber.Ctx) error {
 
 // CreateBackup godoc
 // POST /api/mobile/v1/sites/:siteId/backups
-// Body: { type: "full"|"database_only"|"incremental", storage: "local" }
+// Body: { type: "full"|"database_only", storage: "local" }
 func (h *OperationsHandler) CreateBackup(c *fiber.Ctx) error {
 	siteID, err := c.ParamsInt("siteId")
 	if err != nil {

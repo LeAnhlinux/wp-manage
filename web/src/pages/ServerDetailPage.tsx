@@ -3124,8 +3124,8 @@ function BackupArchivesTab({ serverId, canManage }: { serverId: number; canManag
   const meta = data?.meta
   const totalPages = meta ? Math.ceil(meta.total / meta.per_page) : 1
 
-  const typeLabel = (type: string) => (({ full: 'Full', database_only: 'DB Only', incremental: 'Incremental' } as Record<string, string>)[type] ?? type)
-  const typeColor = (type: string) => (({ full: 'bg-blue-100 text-blue-700', database_only: 'bg-purple-100 text-purple-700', incremental: 'bg-gray-100 text-gray-600' } as Record<string, string>)[type] ?? 'bg-gray-100 text-gray-600')
+  const typeLabel = (type: string) => (({ full: 'Full', database_only: 'DB Only' } as Record<string, string>)[type] ?? type)
+  const typeColor = (type: string) => (({ full: 'bg-blue-100 text-blue-700', database_only: 'bg-purple-100 text-purple-700' } as Record<string, string>)[type] ?? 'bg-gray-100 text-gray-600')
   const statusColor = (status: string) => (({ completed: 'bg-green-100 text-green-700', running: 'bg-amber-100 text-amber-700', failed: 'bg-red-100 text-red-700' } as Record<string, string>)[status] ?? 'bg-gray-100 text-gray-600')
 
   return (

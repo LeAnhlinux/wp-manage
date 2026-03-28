@@ -30,7 +30,7 @@ import { StatusBadge } from '@/components/ui/Badge'
 import { formatDate } from '@/lib/utils'
 import api from '@/lib/api'
 import FileBrowser from '@/components/files/FileBrowser'
-import type { StagingSite, UpdateLog, PerformanceMetric, Subsite, ImageOptResult, APIResponse, Backup } from '@/types'
+import type { StagingSite, UpdateLog, PerformanceMetric, Subsite, ImageOptResult, APIResponse, Backup, BackupSchedule } from '@/types'
 
 export default function SiteDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -3397,7 +3397,7 @@ function BackupPanel({ siteId, domain, canManage }: { siteId: number; domain: st
   const [restoreConfirm, setRestoreConfirm] = useState('')
   const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
-  // Schedule form
+  // Schedule form (create)
   const [showSchedForm, setShowSchedForm] = useState(false)
   const [schedForm, setSchedForm] = useState({
     type: 'full' as 'full' | 'database_only',
@@ -3405,6 +3405,33 @@ function BackupPanel({ siteId, domain, canManage }: { siteId: number; domain: st
     retention: 7,
   })
   const [customCron, setCustomCron] = useState(false)
+
+  // Schedule edit modal
+  const [editSched, setEditSched] = useState<BackupSchedule | null>(null)
+  const [editForm, setEditForm] = useState({
+    type: 'full' as 'full' | 'database_only',
+    cron_expr: '0 3 * * *',
+    retention: 7,
+  })
+  const [editCustomCron, setEditCustomCron] = useState(false)
+
+  const openEditSched = (sched: BackupSchedule) => {
+    setEditSched(sched)
+    setEditForm({ type: sched.type, cron_expr: sched.cron_expr, retention: sched.retention })
+    setEditCustomCron(!BACKUP_CRON_PRESETS.find(p => p.value === sched.cron_expr))
+  }
+
+  const handleUpdateSchedule = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!editSched) return
+    try {
+      await updateSchedule.mutateAsync({ id: editSched.id, ...editForm })
+      showMsg('success', 'Schedule updated.')
+      setEditSched(null)
+    } catch (e: any) {
+      showMsg('error', e?.response?.data?.error || 'Failed to update schedule')
+    }
+  }
 
   const showMsg = (type: 'success' | 'error', text: string) => {
     setMsg({ type, text })
@@ -3656,7 +3683,7 @@ function BackupPanel({ siteId, domain, canManage }: { siteId: number; domain: st
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Keep Backups (days)</label>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Keep Backups (số bản)</label>
                 <input
                   type="number" min={1} max={365}
                   value={schedForm.retention}
@@ -3716,7 +3743,7 @@ function BackupPanel({ siteId, domain, canManage }: { siteId: number; domain: st
                     <p className="text-sm font-mono font-medium text-gray-800 truncate">{sched.cron_expr}</p>
                     <p className="text-xs text-gray-500">
                       {BACKUP_CRON_PRESETS.find(p => p.value === sched.cron_expr)?.label ?? sched.cron_expr}
-                      {' · '}Keep {sched.retention} days
+                      {' · '}Giữ {sched.retention} bản
                     </p>
                   </div>
                 </div>
@@ -3724,6 +3751,14 @@ function BackupPanel({ siteId, domain, canManage }: { siteId: number; domain: st
                   <span className={`text-xs font-medium ${sched.enabled ? 'text-green-600' : 'text-gray-400'}`}>
                     {sched.enabled ? 'Active' : 'Paused'}
                   </span>
+                  {canManage && (
+                    <button
+                      onClick={() => openEditSched(sched)}
+                      title="Edit schedule"
+                      className="p-1 text-gray-400 hover:text-blue-600 transition-colors">
+                      <Edit2 size={14} />
+                    </button>
+                  )}
                   {canManage && (
                     <button
                       onClick={() => updateSchedule.mutate({ id: sched.id, enabled: !sched.enabled })}
@@ -3751,6 +3786,87 @@ function BackupPanel({ siteId, domain, canManage }: { siteId: number; domain: st
           </div>
         )}
       </div>
+
+      {/* ── Edit Schedule Modal ── */}
+      {editSched && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl max-w-lg w-full p-6 shadow-xl">
+            <div className="flex items-center justify-between mb-5">
+              <h3 className="text-base font-semibold text-gray-900 flex items-center gap-2">
+                <Edit2 size={16} className="text-blue-600" /> Sửa lịch backup
+              </h3>
+              <button onClick={() => setEditSched(null)} className="p-1 text-gray-400 hover:text-gray-600">
+                <X size={18} />
+              </button>
+            </div>
+            <form onSubmit={handleUpdateSchedule} className="space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Loại backup</label>
+                  <select
+                    value={editForm.type}
+                    onChange={e => setEditForm({ ...editForm, type: e.target.value as 'full' | 'database_only' })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white">
+                    <option value="full">Full (Files + DB)</option>
+                    <option value="database_only">Database Only</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Giữ lại (số bản)</label>
+                  <input
+                    type="number" min={1} max={365}
+                    value={editForm.retention}
+                    onChange={e => setEditForm({ ...editForm, retention: Number(e.target.value) })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
+                  <p className="text-xs text-gray-400 mt-1">Bản cũ hơn sẽ bị xóa tự động</p>
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Schedule Preset</label>
+                <select
+                  value={editCustomCron ? 'custom' : (BACKUP_CRON_PRESETS.find(p => p.value === editForm.cron_expr) ? editForm.cron_expr : 'custom')}
+                  onChange={e => {
+                    if (e.target.value === 'custom') {
+                      setEditCustomCron(true)
+                    } else {
+                      setEditCustomCron(false)
+                      setEditForm({ ...editForm, cron_expr: e.target.value })
+                    }
+                  }}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white">
+                  {BACKUP_CRON_PRESETS.map(p => (
+                    <option key={p.value} value={p.value}>{p.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Cron Expression</label>
+                <input
+                  value={editForm.cron_expr}
+                  onChange={e => { setEditCustomCron(true); setEditForm({ ...editForm, cron_expr: e.target.value }) }}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono"
+                  placeholder="0 3 * * *"
+                  required />
+                <p className="text-xs text-gray-400 mt-1">minute hour day-of-month month day-of-week</p>
+              </div>
+              <div className="flex gap-2 pt-1">
+                <button
+                  type="submit"
+                  disabled={updateSchedule.isPending}
+                  className="flex-1 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">
+                  {updateSchedule.isPending ? 'Đang lưu...' : 'Lưu thay đổi'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditSched(null)}
+                  className="px-4 py-2 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200">
+                  Hủy
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* ── Restore Confirmation Modal ── */}
       {restoreTarget && (
