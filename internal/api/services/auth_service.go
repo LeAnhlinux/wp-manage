@@ -5,6 +5,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"regexp"
+	"strings"
+	"unicode"
 
 	"github.com/pquerna/otp/totp"
 
@@ -13,6 +16,41 @@ import (
 	"github.com/gofiber-team/wp-manage/pkg/utils"
 	"gorm.io/gorm"
 )
+
+// emailRegex validates basic email format (RFC 5322 simplified).
+var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$`)
+
+// validatePassword enforces minimum password strength:
+// - At least 8 characters
+// - At least 1 uppercase letter
+// - At least 1 lowercase letter
+// - At least 1 digit
+func validatePassword(password string) error {
+	if len(password) < 8 {
+		return errors.New("password must be at least 8 characters")
+	}
+	var hasUpper, hasLower, hasDigit bool
+	for _, ch := range password {
+		switch {
+		case unicode.IsUpper(ch):
+			hasUpper = true
+		case unicode.IsLower(ch):
+			hasLower = true
+		case unicode.IsDigit(ch):
+			hasDigit = true
+		}
+	}
+	if !hasUpper {
+		return errors.New("password must contain at least one uppercase letter")
+	}
+	if !hasLower {
+		return errors.New("password must contain at least one lowercase letter")
+	}
+	if !hasDigit {
+		return errors.New("password must contain at least one digit")
+	}
+	return nil
+}
 
 type AuthService struct {
 	db  *gorm.DB
@@ -24,6 +62,26 @@ func NewAuthService(db *gorm.DB, cfg *config.Config) *AuthService {
 }
 
 func (s *AuthService) Register(req models.RegisterRequest) (*models.User, error) {
+	// M5: Validate email format
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
+	if !emailRegex.MatchString(req.Email) {
+		return nil, errors.New("invalid email address format")
+	}
+
+	// M2: Enforce password strength
+	if err := validatePassword(req.Password); err != nil {
+		return nil, err
+	}
+
+	// M1: Determine role — first admin registers freely (bootstrap);
+	// subsequent public registrations are blocked.
+	// Admins can still create users via the admin panel (POST /api/v1/users).
+	var adminCount int64
+	s.db.Model(&models.User{}).Where("role = ?", "admin").Count(&adminCount)
+	if adminCount > 0 {
+		return nil, errors.New("registration is closed. Contact your administrator to create an account")
+	}
+
 	var existing models.User
 	if err := s.db.Where("email = ?", req.Email).First(&existing).Error; err == nil {
 		return nil, errors.New("email already registered")
@@ -40,7 +98,7 @@ func (s *AuthService) Register(req models.RegisterRequest) (*models.User, error)
 		Email:        req.Email,
 		PasswordHash: hash,
 		Name:         req.Name,
-		Role:         "admin",
+		Role:         "admin", // first user is always admin (bootstrap)
 		APIKey:       apiKey,
 	}
 

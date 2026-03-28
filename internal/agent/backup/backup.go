@@ -171,6 +171,9 @@ func runFullBackup(params BackupParams, dir, name string) BackupResult {
 		}
 		slog.Warn("tar completed with warnings", "output", string(out))
 	}
+	// M3: Restrict backup archive to root-only — tar creates files with default
+	// umask (typically 0644); chmod ensures no other user can read the archive.
+	os.Chmod(tarFile, 0600)
 
 	slog.Info("Full backup completed", "domain", params.Domain, "file", tarFile)
 	return fileResult(tarFile)
@@ -220,6 +223,8 @@ func runDatabaseBackup(params BackupParams, dir, name string) BackupResult {
 	if out, err := tarCmd.CombinedOutput(); err != nil {
 		return BackupResult{Error: fmt.Errorf("tar failed: %s %w", string(out), err)}
 	}
+	// M3: Restrict backup archive to root-only
+	os.Chmod(tarFile, 0600)
 
 	return fileResult(tarFile)
 }
@@ -286,7 +291,7 @@ func mysqldump(params BackupParams, destFile string) error {
 	}
 	tmpCnf.Close()
 
-	f, err := os.Create(destFile)
+	f, err := os.OpenFile(destFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("create sql file: %w", err)
 	}

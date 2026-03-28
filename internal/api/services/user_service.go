@@ -2,6 +2,7 @@ package services
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/gofiber-team/wp-manage/internal/models"
 	"github.com/gofiber-team/wp-manage/pkg/utils"
@@ -17,6 +18,17 @@ func NewUserService(db *gorm.DB) *UserService {
 }
 
 func (s *UserService) Create(req models.CreateUserRequest) (*models.User, error) {
+	// M5: Validate email format
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
+	if !emailRegex.MatchString(req.Email) {
+		return nil, errors.New("invalid email address format")
+	}
+
+	// M2: Enforce password strength
+	if err := validatePassword(req.Password); err != nil {
+		return nil, err
+	}
+
 	var existing models.User
 	if err := s.db.Where("email = ?", req.Email).First(&existing).Error; err == nil {
 		return nil, errors.New("email already registered")
@@ -67,12 +79,17 @@ func (s *UserService) Update(id uint64, req models.UpdateUserRequest) (*models.U
 
 	updates := map[string]interface{}{}
 	if req.Email != nil {
+		// M5: Validate email format
+		email := strings.ToLower(strings.TrimSpace(*req.Email))
+		if !emailRegex.MatchString(email) {
+			return nil, errors.New("invalid email address format")
+		}
 		// Check uniqueness
 		var existing models.User
-		if err := s.db.Where("email = ? AND id != ?", *req.Email, id).First(&existing).Error; err == nil {
+		if err := s.db.Where("email = ? AND id != ?", email, id).First(&existing).Error; err == nil {
 			return nil, errors.New("email already in use")
 		}
-		updates["email"] = *req.Email
+		updates["email"] = email
 	}
 	if req.Name != nil {
 		updates["name"] = *req.Name
@@ -81,6 +98,10 @@ func (s *UserService) Update(id uint64, req models.UpdateUserRequest) (*models.U
 		updates["role"] = *req.Role
 	}
 	if req.Password != nil {
+		// M2: Enforce password strength on update
+		if err := validatePassword(*req.Password); err != nil {
+			return nil, err
+		}
 		hash, err := utils.HashPassword(*req.Password)
 		if err != nil {
 			return nil, err
