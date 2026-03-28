@@ -266,7 +266,11 @@ func checkDiskSpace(path string) error {
 func mysqldump(params BackupParams, destFile string) error {
 	// Write credentials to a temp file (0600) so the password is NEVER visible
 	// in the process list via `ps aux` or `/proc/<pid>/cmdline`.
-	myCnf := fmt.Sprintf("[client]\nuser=%s\npassword=%s\n", params.DBUser, params.DBPass)
+	// IMPORTANT: In MySQL option files '#' starts a comment — passwords MUST be
+	// double-quoted so that special characters like # and % are treated literally.
+	// Any embedded double-quote in the password is escaped as \".
+	escapedPass := strings.ReplaceAll(params.DBPass, `"`, `\"`)
+	myCnf := fmt.Sprintf("[client]\nuser=%s\npassword=\"%s\"\n", params.DBUser, escapedPass)
 	tmpCnf, err := os.CreateTemp("", "wpm-mycnf-*.cnf")
 	if err != nil {
 		return fmt.Errorf("create temp mycnf: %w", err)
