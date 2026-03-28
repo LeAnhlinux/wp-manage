@@ -94,6 +94,11 @@ func (s *ServerService) UpdateHeartbeat(serverID uint64, hb models.AgentHeartbea
 		"last_heartbeat": &now,
 		"agent_version":  hb.Version,
 		"status":         "active",
+		// Cache latest metrics so Dashboard can show them immediately on load
+		// without waiting for the next heartbeat (up to 30s).
+		"cpu_usage":  hb.CPUUsage,
+		"ram_usage":  hb.RAMUsage,
+		"disk_usage": hb.DiskUsage,
 	}).Error
 }
 

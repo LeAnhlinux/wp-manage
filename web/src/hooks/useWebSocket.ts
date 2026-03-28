@@ -109,18 +109,77 @@ export function useServerMetrics(serverIds: number[]) {
   return { metrics, connected }
 }
 
-// Hook for dashboard-level metrics from all servers
-export function useDashboardMetrics() {
-  const [metrics, setMetrics] = useState<Record<number, {
-    server_id: number
-    server_name: string
-    ip_address: string
-    cpu_usage: number
-    ram_usage: number
-    disk_usage: number
-    uptime: number
-    status: string
-  }>>({})
+type DashboardMetric = {
+  server_id: number
+  server_name: string
+  ip_address: string
+  cpu_usage: number
+  ram_usage: number
+  disk_usage: number
+  uptime: number
+  status: string
+}
+
+type InitialServer = {
+  id: number
+  name: string
+  ip_address: string
+  status: string
+  cpu_usage?: number
+  ram_usage?: number
+  disk_usage?: number
+}
+
+// Hook for dashboard-level metrics from all servers.
+// Accepts optional initialServers (from REST /servers) to pre-populate state
+// immediately on mount — avoiding the blank screen while waiting for the first
+// WebSocket heartbeat (up to 30s).
+export function useDashboardMetrics(initialServers?: InitialServer[]) {
+  const [metrics, setMetrics] = useState<Record<number, DashboardMetric>>(() => {
+    // Pre-populate from REST server list so metrics show immediately on load.
+    // WebSocket updates will overwrite these with live values as they arrive.
+    if (!initialServers?.length) return {}
+    const initial: Record<number, DashboardMetric> = {}
+    for (const s of initialServers) {
+      if (s.status === 'active') {
+        initial[s.id] = {
+          server_id: s.id,
+          server_name: s.name,
+          ip_address: s.ip_address,
+          cpu_usage:  s.cpu_usage  ?? 0,
+          ram_usage:  s.ram_usage  ?? 0,
+          disk_usage: s.disk_usage ?? 0,
+          uptime: 0,
+          status: s.status,
+        }
+      }
+    }
+    return initial
+  })
+
+  // Re-sync if REST data arrives after initial render (e.g. slow network)
+  useEffect(() => {
+    if (!initialServers?.length) return
+    setMetrics(prev => {
+      const next = { ...prev }
+      for (const s of initialServers) {
+        if (s.status === 'active' && !next[s.id]) {
+          next[s.id] = {
+            server_id: s.id,
+            server_name: s.name,
+            ip_address: s.ip_address,
+            cpu_usage:  s.cpu_usage  ?? 0,
+            ram_usage:  s.ram_usage  ?? 0,
+            disk_usage: s.disk_usage ?? 0,
+            uptime: 0,
+            status: s.status,
+          }
+        }
+      }
+      return next
+    })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialServers?.length])
 
   const handleMessage = useCallback((data: unknown) => {
     const d = data as { server_id: number; server_name: string; ip_address: string; cpu_usage: number; ram_usage: number; disk_usage: number; uptime: number; status: string }

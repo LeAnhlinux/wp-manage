@@ -28,6 +28,10 @@ type Server struct {
 	AgentAPIKey    string    `json:"-" gorm:"uniqueIndex;size:64"`
 	Status         string    `json:"status" gorm:"type:enum('active','provisioning','offline','error');default:'provisioning';not null"`
 	LastHeartbeat  *time.Time `json:"last_heartbeat"`
+	// Latest metrics from heartbeat — cached so Dashboard can show immediately on load
+	CPUUsage   float64 `json:"cpu_usage" gorm:"default:0"`
+	RAMUsage   float64 `json:"ram_usage" gorm:"default:0"`
+	DiskUsage  float64 `json:"disk_usage" gorm:"default:0"`
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
 	Sites          []Site     `json:"sites,omitempty" gorm:"foreignKey:ServerID"`

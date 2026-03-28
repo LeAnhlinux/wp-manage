@@ -28,15 +28,21 @@ type Hub struct {
 	unregister chan *Client
 	broadcast  chan Message
 	mu         sync.RWMutex
+	// metricsCache stores the latest dashboard:metrics payload per server_id so
+	// new WebSocket clients receive current metrics immediately on subscribe
+	// instead of waiting up to 30s for the next heartbeat.
+	metricsCache   map[interface{}]Message
+	metricsCacheMu sync.RWMutex
 }
 
 func NewHub() *Hub {
 	return &Hub{
-		clients:    make(map[*Client]bool),
-		channels:   make(map[string]map[*Client]bool),
-		register:   make(chan *Client),
-		unregister: make(chan *Client),
-		broadcast:  make(chan Message, 256),
+		clients:      make(map[*Client]bool),
+		channels:     make(map[string]map[*Client]bool),
+		register:     make(chan *Client),
+		unregister:   make(chan *Client),
+		broadcast:    make(chan Message, 256),
+		metricsCache: make(map[interface{}]Message),
 	}
 }
 
@@ -78,16 +84,46 @@ func (h *Hub) Run() {
 
 func (h *Hub) Subscribe(client *Client, channel string) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	if _, ok := h.channels[channel]; !ok {
 		h.channels[channel] = make(map[*Client]bool)
 	}
 	h.channels[channel][client] = true
 	client.Channels[channel] = true
+	h.mu.Unlock()
+
+	// Immediately push cached metrics to the new subscriber so the Dashboard
+	// shows current data without waiting for the next 30s heartbeat.
+	if channel == "dashboard:metrics" {
+		h.metricsCacheMu.RLock()
+		cached := make([]Message, 0, len(h.metricsCache))
+		for _, msg := range h.metricsCache {
+			cached = append(cached, msg)
+		}
+		h.metricsCacheMu.RUnlock()
+
+		client.mu.Lock()
+		for _, msg := range cached {
+			if data, err := json.Marshal(msg); err == nil {
+				_ = client.Conn.WriteMessage(1, data)
+			}
+		}
+		client.mu.Unlock()
+	}
 }
 
 func (h *Hub) Broadcast(channel string, msgType string, data interface{}) {
-	h.broadcast <- Message{Type: msgType, Channel: channel, Data: data}
+	msg := Message{Type: msgType, Channel: channel, Data: data}
+	// Cache dashboard metrics per server_id for instant delivery to new subscribers
+	if channel == "dashboard:metrics" {
+		if m, ok := data.(map[string]interface{}); ok {
+			if serverID := m["server_id"]; serverID != nil {
+				h.metricsCacheMu.Lock()
+				h.metricsCache[serverID] = msg
+				h.metricsCacheMu.Unlock()
+			}
+		}
+	}
+	h.broadcast <- msg
 }
 
 func (h *Hub) Handler() fiber.Handler {

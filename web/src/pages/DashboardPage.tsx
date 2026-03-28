@@ -48,9 +48,11 @@ function StatCard({ label, value, icon: Icon, gradient, sub }: {
 export default function DashboardPage() {
   const { data: serversData } = useServers()
   const { data: sitesData } = useSites()
-  const { metrics: liveMetrics, connected: wsConnected } = useDashboardMetrics()
-
   const servers = serversData?.data || []
+
+  // Pass REST server data as initial metrics so Dashboard renders immediately
+  // without waiting up to 30s for the first WebSocket heartbeat.
+  const { metrics: liveMetrics, connected: wsConnected } = useDashboardMetrics(servers)
   const sites = sitesData?.data || []
   const activeServers = servers.filter((s) => s.status === 'active').length
   const activeSites = sites.filter((s) => s.status === 'active').length
@@ -88,7 +90,8 @@ export default function DashboardPage() {
     },
   ]
 
-  const liveMetricsList = Object.values(liveMetrics)
+  type MetricEntry = { server_id: number; server_name: string; ip_address: string; cpu_usage: number; ram_usage: number; disk_usage: number; uptime: number; status: string }
+  const liveMetricsList = Object.values(liveMetrics) as MetricEntry[]
 
   return (
     <div>
