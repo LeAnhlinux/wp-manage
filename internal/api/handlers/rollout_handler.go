@@ -22,12 +22,12 @@ func NewRolloutHandler(svc *services.RolloutService) *RolloutHandler {
 func (h *RolloutHandler) CreateRelease(c *fiber.Ctx) error {
 	var req models.CreateReleaseRequest
 	if err := c.BodyParser(&req); err != nil {
-		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "invalid request body"})
+		return c.Status(400).JSON(models.APIResponse{Error: "invalid request body"})
 	}
 
 	release, err := h.svc.CreateRelease(req)
 	if err != nil {
-		return c.Status(400).JSON(models.APIResponse{Success: false, Error: err.Error()})
+		return c.Status(400).JSON(models.APIResponse{Error: err.Error()})
 	}
 
 	return c.Status(201).JSON(models.APIResponse{Success: true, Data: release})
@@ -37,7 +37,7 @@ func (h *RolloutHandler) CreateRelease(c *fiber.Ctx) error {
 func (h *RolloutHandler) ListReleases(c *fiber.Ctx) error {
 	releases, err := h.svc.ListReleases()
 	if err != nil {
-		return c.Status(500).JSON(models.APIResponse{Success: false, Error: err.Error()})
+		return c.Status(500).JSON(models.APIResponse{Error: err.Error()})
 	}
 
 	return c.JSON(models.APIResponse{Success: true, Data: releases})
@@ -47,12 +47,12 @@ func (h *RolloutHandler) ListReleases(c *fiber.Ctx) error {
 func (h *RolloutHandler) GetRelease(c *fiber.Ctx) error {
 	id, err := strconv.ParseUint(c.Params("id"), 10, 64)
 	if err != nil {
-		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "invalid release ID"})
+		return c.Status(400).JSON(models.APIResponse{Error: "invalid release ID"})
 	}
 
 	release, err := h.svc.GetRelease(id)
 	if err != nil {
-		return c.Status(404).JSON(models.APIResponse{Success: false, Error: "release not found"})
+		return c.Status(404).JSON(models.APIResponse{Error: "release not found"})
 	}
 
 	return c.JSON(models.APIResponse{Success: true, Data: release})
@@ -62,11 +62,11 @@ func (h *RolloutHandler) GetRelease(c *fiber.Ctx) error {
 func (h *RolloutHandler) DeleteRelease(c *fiber.Ctx) error {
 	id, err := strconv.ParseUint(c.Params("id"), 10, 64)
 	if err != nil {
-		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "invalid release ID"})
+		return c.Status(400).JSON(models.APIResponse{Error: "invalid release ID"})
 	}
 
 	if err := h.svc.DeleteRelease(id); err != nil {
-		return c.Status(400).JSON(models.APIResponse{Success: false, Error: err.Error()})
+		return c.Status(400).JSON(models.APIResponse{Error: err.Error()})
 	}
 
 	return c.JSON(models.APIResponse{Success: true, Message: "release deleted"})
@@ -78,12 +78,12 @@ func (h *RolloutHandler) DeleteRelease(c *fiber.Ctx) error {
 func (h *RolloutHandler) CreateRollout(c *fiber.Ctx) error {
 	var req models.CreateRolloutRequest
 	if err := c.BodyParser(&req); err != nil {
-		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "invalid request body"})
+		return c.Status(400).JSON(models.APIResponse{Error: "invalid request body"})
 	}
 
 	plan, err := h.svc.CreateRollout(req)
 	if err != nil {
-		return c.Status(400).JSON(models.APIResponse{Success: false, Error: err.Error()})
+		return c.Status(400).JSON(models.APIResponse{Error: err.Error()})
 	}
 
 	return c.Status(201).JSON(models.APIResponse{Success: true, Data: plan})
@@ -101,7 +101,7 @@ func (h *RolloutHandler) ListRollouts(c *fiber.Ctx) error {
 
 	plans, total, err := h.svc.ListRollouts(pg.Page, pg.PerPage)
 	if err != nil {
-		return c.Status(500).JSON(models.APIResponse{Success: false, Error: err.Error()})
+		return c.Status(500).JSON(models.APIResponse{Error: err.Error()})
 	}
 
 	totalPages := calcTotalPages(total, pg.PerPage)
@@ -122,12 +122,12 @@ func (h *RolloutHandler) ListRollouts(c *fiber.Ctx) error {
 func (h *RolloutHandler) GetRollout(c *fiber.Ctx) error {
 	id, err := strconv.ParseUint(c.Params("id"), 10, 64)
 	if err != nil {
-		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "invalid rollout ID"})
+		return c.Status(400).JSON(models.APIResponse{Error: "invalid rollout ID"})
 	}
 
 	plan, err := h.svc.GetRollout(id)
 	if err != nil {
-		return c.Status(404).JSON(models.APIResponse{Success: false, Error: "rollout not found"})
+		return c.Status(404).JSON(models.APIResponse{Error: "rollout not found"})
 	}
 
 	return c.JSON(models.APIResponse{Success: true, Data: plan})
@@ -137,11 +137,11 @@ func (h *RolloutHandler) GetRollout(c *fiber.Ctx) error {
 func (h *RolloutHandler) StartRollout(c *fiber.Ctx) error {
 	id, err := strconv.ParseUint(c.Params("id"), 10, 64)
 	if err != nil {
-		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "invalid rollout ID"})
+		return c.Status(400).JSON(models.APIResponse{Error: "invalid rollout ID"})
 	}
 
 	if err := h.svc.StartRollout(id); err != nil {
-		return c.Status(400).JSON(models.APIResponse{Success: false, Error: err.Error()})
+		return c.Status(400).JSON(models.APIResponse{Error: err.Error()})
 	}
 
 	return c.JSON(models.APIResponse{Success: true, Message: "rollout started"})
@@ -151,11 +151,11 @@ func (h *RolloutHandler) StartRollout(c *fiber.Ctx) error {
 func (h *RolloutHandler) PauseRollout(c *fiber.Ctx) error {
 	id, err := strconv.ParseUint(c.Params("id"), 10, 64)
 	if err != nil {
-		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "invalid rollout ID"})
+		return c.Status(400).JSON(models.APIResponse{Error: "invalid rollout ID"})
 	}
 
 	if err := h.svc.PauseRollout(id); err != nil {
-		return c.Status(400).JSON(models.APIResponse{Success: false, Error: err.Error()})
+		return c.Status(400).JSON(models.APIResponse{Error: err.Error()})
 	}
 
 	return c.JSON(models.APIResponse{Success: true, Message: "rollout paused"})
@@ -165,11 +165,11 @@ func (h *RolloutHandler) PauseRollout(c *fiber.Ctx) error {
 func (h *RolloutHandler) UpdateComplete(c *fiber.Ctx) error {
 	var result models.AgentUpdateResult
 	if err := c.BodyParser(&result); err != nil {
-		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "invalid body"})
+		return c.Status(400).JSON(models.APIResponse{Error: "invalid body"})
 	}
 
 	if err := h.svc.HandleUpdateResult(result); err != nil {
-		return c.Status(500).JSON(models.APIResponse{Success: false, Error: err.Error()})
+		return c.Status(500).JSON(models.APIResponse{Error: err.Error()})
 	}
 
 	return c.JSON(models.APIResponse{Success: true})

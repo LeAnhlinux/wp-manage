@@ -52,8 +52,7 @@ func (h *RedisHandler) Toggle(c *fiber.Ctx) error {
 	if err != nil {
 		// Still return updated config with error message
 		return c.Status(500).JSON(models.APIResponse{
-			Success: false,
-			Error:   err.Error(),
+						Error:   err.Error(),
 			Data:    config,
 		})
 	}

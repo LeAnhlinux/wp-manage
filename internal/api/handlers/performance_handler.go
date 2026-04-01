@@ -20,7 +20,7 @@ func NewPerformanceHandler(svc *services.PerformanceService) *PerformanceHandler
 func (h *PerformanceHandler) RunAudit(c *fiber.Ctx) error {
 	siteID, err := strconv.ParseUint(c.Params("siteId"), 10, 64)
 	if err != nil {
-		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "invalid site ID"})
+		return c.Status(400).JSON(models.APIResponse{Error: "invalid site ID"})
 	}
 
 	var req models.RunPageSpeedRequest
@@ -30,7 +30,7 @@ func (h *PerformanceHandler) RunAudit(c *fiber.Ctx) error {
 
 	metric, err := h.svc.RunPageSpeed(siteID, req.DeviceType)
 	if err != nil {
-		return c.Status(400).JSON(models.APIResponse{Success: false, Error: err.Error()})
+		return c.Status(400).JSON(models.APIResponse{Error: err.Error()})
 	}
 
 	return c.Status(201).JSON(models.APIResponse{Success: true, Data: metric})
@@ -40,7 +40,7 @@ func (h *PerformanceHandler) RunAudit(c *fiber.Ctx) error {
 func (h *PerformanceHandler) GetMetrics(c *fiber.Ctx) error {
 	siteID, err := strconv.ParseUint(c.Params("siteId"), 10, 64)
 	if err != nil {
-		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "invalid site ID"})
+		return c.Status(400).JSON(models.APIResponse{Error: "invalid site ID"})
 	}
 
 	deviceType := c.Query("device_type")
@@ -52,7 +52,7 @@ func (h *PerformanceHandler) GetMetrics(c *fiber.Ctx) error {
 
 	metrics, total, err := h.svc.GetMetrics(siteID, deviceType, days, pg.Page, pg.PerPage)
 	if err != nil {
-		return c.Status(500).JSON(models.APIResponse{Success: false, Error: err.Error()})
+		return c.Status(500).JSON(models.APIResponse{Error: err.Error()})
 	}
 
 	totalPages := calcTotalPages(total, pg.PerPage)
@@ -73,12 +73,12 @@ func (h *PerformanceHandler) GetMetrics(c *fiber.Ctx) error {
 func (h *PerformanceHandler) GetLatest(c *fiber.Ctx) error {
 	siteID, err := strconv.ParseUint(c.Params("siteId"), 10, 64)
 	if err != nil {
-		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "invalid site ID"})
+		return c.Status(400).JSON(models.APIResponse{Error: "invalid site ID"})
 	}
 
 	latest, err := h.svc.GetLatest(siteID)
 	if err != nil {
-		return c.Status(500).JSON(models.APIResponse{Success: false, Error: err.Error()})
+		return c.Status(500).JSON(models.APIResponse{Error: err.Error()})
 	}
 
 	return c.JSON(models.APIResponse{Success: true, Data: latest})

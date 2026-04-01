@@ -99,7 +99,7 @@ func (h *CronHandler) RunNow(c *fiber.Ctx) error {
 
 	out, err := h.svc.RunNow(serverID, jobID)
 	if err != nil {
-		return c.JSON(models.APIResponse{Success: false, Error: err.Error(), Data: map[string]string{"output": out}})
+		return c.JSON(models.APIResponse{Error: err.Error(), Data: map[string]string{"output": out}})
 	}
 	return c.JSON(models.APIResponse{Success: true, Message: "Cron job executed", Data: map[string]string{"output": out}})
 }

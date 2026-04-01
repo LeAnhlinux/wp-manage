@@ -164,8 +164,7 @@ func (h *InfrastructureHandler) RebuildConfig(c *fiber.Ctx) error {
 	if err != nil {
 		// Partial success: return output + error so UI can show what succeeded/failed
 		return c.Status(207).JSON(models.APIResponse{
-			Success: false,
-			Error:   err.Error(),
+						Error:   err.Error(),
 			Data:    map[string]string{"output": output},
 		})
 	}

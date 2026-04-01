@@ -364,8 +364,7 @@ func (h *SiteHandler) Autologin(c *fiber.Ctx) error {
 			"domain": site.Domain,
 		})
 		return c.Status(202).JSON(models.APIResponse{
-			Success: false,
-			Error:   "Autologin is being configured. Please try again in 30 seconds.",
+						Error:   "Autologin is being configured. Please try again in 30 seconds.",
 		})
 	}
 

@@ -20,12 +20,12 @@ func NewImageOptHandler(svc *services.ImageOptService) *ImageOptHandler {
 func (h *ImageOptHandler) GetConfig(c *fiber.Ctx) error {
 	siteID, err := strconv.ParseUint(c.Params("siteId"), 10, 64)
 	if err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "Invalid site ID")
+		return c.Status(400).JSON(models.APIResponse{Error: "Invalid site ID"})
 	}
 
 	config, err := h.svc.GetConfig(siteID)
 	if err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		return c.Status(500).JSON(models.APIResponse{Error: err.Error()})
 	}
 
 	return c.JSON(models.APIResponse{Success: true, Data: config})
@@ -35,17 +35,17 @@ func (h *ImageOptHandler) GetConfig(c *fiber.Ctx) error {
 func (h *ImageOptHandler) UpdateConfig(c *fiber.Ctx) error {
 	siteID, err := strconv.ParseUint(c.Params("siteId"), 10, 64)
 	if err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "Invalid site ID")
+		return c.Status(400).JSON(models.APIResponse{Error: "Invalid site ID"})
 	}
 
 	var req models.UpdateImageOptConfigRequest
 	if err := c.BodyParser(&req); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "Invalid request body")
+		return c.Status(400).JSON(models.APIResponse{Error: "Invalid request body"})
 	}
 
 	config, err := h.svc.UpdateConfig(siteID, req)
 	if err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		return c.Status(400).JSON(models.APIResponse{Error: err.Error()})
 	}
 
 	return c.JSON(models.APIResponse{Success: true, Data: config})
@@ -55,17 +55,17 @@ func (h *ImageOptHandler) UpdateConfig(c *fiber.Ctx) error {
 func (h *ImageOptHandler) Toggle(c *fiber.Ctx) error {
 	siteID, err := strconv.ParseUint(c.Params("siteId"), 10, 64)
 	if err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "Invalid site ID")
+		return c.Status(400).JSON(models.APIResponse{Error: "Invalid site ID"})
 	}
 	var body struct {
 		Enabled bool `json:"enabled"`
 	}
 	if err := c.BodyParser(&body); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "Invalid request body")
+		return c.Status(400).JSON(models.APIResponse{Error: "Invalid request body"})
 	}
 	config, err := h.svc.Toggle(siteID, body.Enabled)
 	if err != nil {
-		return c.Status(500).JSON(models.APIResponse{Success: false, Error: err.Error(), Data: config})
+		return c.Status(500).JSON(models.APIResponse{Error: err.Error(), Data: config})
 	}
 	msg := "Image optimization disabled"
 	if body.Enabled {
@@ -78,17 +78,17 @@ func (h *ImageOptHandler) Toggle(c *fiber.Ctx) error {
 func (h *ImageOptHandler) ToggleNginxWebP(c *fiber.Ctx) error {
 	siteID, err := strconv.ParseUint(c.Params("siteId"), 10, 64)
 	if err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "Invalid site ID")
+		return c.Status(400).JSON(models.APIResponse{Error: "Invalid site ID"})
 	}
 	var body struct {
 		Enabled bool `json:"enabled"`
 	}
 	if err := c.BodyParser(&body); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "Invalid request body")
+		return c.Status(400).JSON(models.APIResponse{Error: "Invalid request body"})
 	}
 	config, err := h.svc.ToggleNginxWebP(siteID, body.Enabled)
 	if err != nil {
-		return c.Status(500).JSON(models.APIResponse{Success: false, Error: err.Error(), Data: config})
+		return c.Status(500).JSON(models.APIResponse{Error: err.Error(), Data: config})
 	}
 	msg := "WebP nginx serving disabled"
 	if body.Enabled {
@@ -101,12 +101,12 @@ func (h *ImageOptHandler) ToggleNginxWebP(c *fiber.Ctx) error {
 func (h *ImageOptHandler) RunOptimization(c *fiber.Ctx) error {
 	siteID, err := strconv.ParseUint(c.Params("siteId"), 10, 64)
 	if err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "Invalid site ID")
+		return c.Status(400).JSON(models.APIResponse{Error: "Invalid site ID"})
 	}
 
 	result, err := h.svc.RunOptimizationSync(siteID)
 	if err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		return c.Status(400).JSON(models.APIResponse{Error: err.Error()})
 	}
 
 	return c.JSON(models.APIResponse{
@@ -120,11 +120,11 @@ func (h *ImageOptHandler) RunOptimization(c *fiber.Ctx) error {
 func (h *ImageOptHandler) ProgressUpdate(c *fiber.Ctx) error {
 	var result models.AgentImageOptResult
 	if err := c.BodyParser(&result); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "Invalid request body")
+		return c.Status(400).JSON(models.APIResponse{Error: "Invalid request body"})
 	}
 	cancelled, err := h.svc.ProgressUpdate(result)
 	if err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		return c.Status(500).JSON(models.APIResponse{Error: err.Error()})
 	}
 	return c.JSON(fiber.Map{"success": true, "cancel": cancelled})
 }
@@ -133,10 +133,10 @@ func (h *ImageOptHandler) ProgressUpdate(c *fiber.Ctx) error {
 func (h *ImageOptHandler) CancelOptimization(c *fiber.Ctx) error {
 	siteID, err := strconv.ParseUint(c.Params("siteId"), 10, 64)
 	if err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "Invalid site ID")
+		return c.Status(400).JSON(models.APIResponse{Error: "Invalid site ID"})
 	}
 	if err := h.svc.CancelOptimization(siteID); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		return c.Status(400).JSON(models.APIResponse{Error: err.Error()})
 	}
 	return c.JSON(models.APIResponse{Success: true, Message: "Optimization cancelled"})
 }
@@ -145,11 +145,11 @@ func (h *ImageOptHandler) CancelOptimization(c *fiber.Ctx) error {
 func (h *ImageOptHandler) OptimizeComplete(c *fiber.Ctx) error {
 	var result models.AgentImageOptResult
 	if err := c.BodyParser(&result); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "Invalid request body")
+		return c.Status(400).JSON(models.APIResponse{Error: "Invalid request body"})
 	}
 
 	if err := h.svc.OptimizeComplete(result); err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		return c.Status(500).JSON(models.APIResponse{Error: err.Error()})
 	}
 
 	return c.JSON(models.APIResponse{Success: true, Message: "Updated"})
@@ -159,7 +159,7 @@ func (h *ImageOptHandler) OptimizeComplete(c *fiber.Ctx) error {
 func (h *ImageOptHandler) GetResults(c *fiber.Ctx) error {
 	siteID, err := strconv.ParseUint(c.Params("siteId"), 10, 64)
 	if err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "Invalid site ID")
+		return c.Status(400).JSON(models.APIResponse{Error: "Invalid site ID"})
 	}
 
 	pg := parsePage(c)
@@ -168,7 +168,7 @@ func (h *ImageOptHandler) GetResults(c *fiber.Ctx) error {
 
 	results, total, err := h.svc.GetResults(siteID, pg.Page, pg.PerPage)
 	if err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		return c.Status(500).JSON(models.APIResponse{Error: err.Error()})
 	}
 
 	totalPages := calcTotalPages(total, pg.PerPage)
