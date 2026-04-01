@@ -27,10 +27,13 @@ func EnableFastCGICache(domain, cacheTime, excludes string) error {
 		return testAndReload()
 	}
 
-	// Add cache zone definition before server block
+	// Đảm bảo fastcgi_cache_key có trong nginx.conf (http block) — chỉ 1 lần toàn server.
+	// Nginx 1.24+ không cho phép khai báo fastcgi_cache_key nhiều lần trong http context.
+	ensureFastCGICacheKey()
+
+	// Add cache zone definition before server block — chỉ fastcgi_cache_path (site-specific)
 	cacheZone := fmt.Sprintf(`# FastCGI Cache for %s
 fastcgi_cache_path /var/cache/nginx/%s levels=1:2 keys_zone=%s:10m max_size=256m inactive=%s;
-fastcgi_cache_key "$scheme$request_method$host$request_uri";
 
 `, domain, domain, domain, cacheTime)
 
@@ -131,6 +134,26 @@ func DisableFastCGICache(domain string) error {
 
 	slog.Info("FastCGI cache disabled", "domain", domain)
 	return testAndReload()
+}
+
+// ensureFastCGICacheKey đảm bảo fastcgi_cache_key xuất hiện đúng 1 lần trong nginx.conf http block.
+// Nginx 1.24+ không cho phép duplicate directive này trong http context.
+func ensureFastCGICacheKey() {
+	const cacheKeyLine = `fastcgi_cache_key "$scheme$request_method$host$request_uri";`
+	nginxConf := "/etc/nginx/nginx.conf"
+	data, err := os.ReadFile(nginxConf)
+	if err != nil {
+		return
+	}
+	if strings.Contains(string(data), "fastcgi_cache_key") {
+		return // đã có rồi, không thêm nữa
+	}
+	// Chèn vào cuối http block, trước dòng include sites-enabled
+	content := strings.Replace(string(data),
+		"include /etc/nginx/sites-enabled",
+		cacheKeyLine+"\n\tinclude /etc/nginx/sites-enabled",
+		1)
+	os.WriteFile(nginxConf, []byte(content), 0644)
 }
 
 // PurgeCache clears the FastCGI cache for a domain
