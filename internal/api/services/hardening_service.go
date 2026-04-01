@@ -55,8 +55,8 @@ func (s *HardeningService) hardenOrRevert(siteID uint64, req models.HardenWordPr
 		return fmt.Errorf("failed to queue task: %w", err)
 	}
 
-	// Wait for agent to complete (max 60s)
-	result, err := WaitForTaskCompleteWithTimeout(s.db, task.ID, 60*time.Second)
+	// Wait for agent to complete (max 120s — hardening có thể mất ~60s trên site lớn)
+	result, err := WaitForTaskCompleteWithTimeout(s.db, task.ID, 120*time.Second)
 	if err != nil {
 		return fmt.Errorf("agent timeout: %w", err)
 	}
