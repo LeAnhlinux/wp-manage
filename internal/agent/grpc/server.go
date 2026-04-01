@@ -1362,15 +1362,13 @@ func (s *AgentServer) executeStagingCreate(taskID uint64, data map[string]interf
 	}
 
 	// Fix #6 — safe dump via file (no pipe, with error handling)
-	// --single-transaction: dùng snapshot thay vì LOCK TABLES (InnoDB safe)
-	// --skip-lock-tables: bỏ qua lock cho bảng không phải InnoDB
-	// --skip-definer: bỏ DEFINER clause (tránh lỗi 1449 khi user definer không tồn tại)
+	// --single-transaction + --skip-lock-tables: tránh LOCK TABLES (lỗi 1449 DEFINER)
 	// --no-tablespaces: tránh lỗi ACCESS DENIED với tablespace info
+	// Sau dump: sed strip DEFINER clause khỏi file (--skip-definer không có trong MariaDB 10.11)
 	dumpFile := fmt.Sprintf("/tmp/staging-dump-%s.sql", stagingDomain)
 	if out, err := exec.Command("mysqldump",
 		"--single-transaction",
 		"--skip-lock-tables",
-		"--skip-definer",
 		"--no-tablespaces",
 		"--result-file="+dumpFile,
 		dbName).CombinedOutput(); err != nil {
@@ -1378,6 +1376,10 @@ func (s *AgentServer) executeStagingCreate(taskID uint64, data map[string]interf
 		fail("DB dump failed: " + string(out))
 		return
 	}
+	// Strip DEFINER clauses — tránh lỗi 1449 khi import vào DB mới
+	exec.Command("sed", "-i",
+		"s/DEFINER=[^ ]* //g",
+		dumpFile).Run()
 	defer os.Remove(dumpFile)
 
 	sqlBytes, _ := os.ReadFile(dumpFile)
@@ -1473,7 +1475,7 @@ func (s *AgentServer) executeStagingPush(taskID uint64, data map[string]interfac
 	backupFile := fmt.Sprintf("%s/pre-push-%d-%s.sql",
 		backupDir, stagingID, time.Now().Format("20060102-150405"))
 	if out, err := exec.Command("mysqldump",
-		"--single-transaction", "--skip-lock-tables", "--skip-definer", "--no-tablespaces",
+		"--single-transaction", "--skip-lock-tables", "--no-tablespaces",
 		"--result-file="+backupFile, dbName).CombinedOutput(); err != nil {
 		slog.Warn("Production DB backup before push failed (non-fatal)", "error", string(out))
 	} else {
@@ -1488,7 +1490,7 @@ func (s *AgentServer) executeStagingPush(taskID uint64, data map[string]interfac
 	// 2. Dump staging DB (temp file, deleted after import)
 	stagingDumpFile := fmt.Sprintf("/tmp/staging-push-dump-%d.sql", stagingID)
 	if out, err := exec.Command("mysqldump",
-		"--single-transaction", "--skip-lock-tables", "--skip-definer", "--no-tablespaces",
+		"--single-transaction", "--skip-lock-tables", "--no-tablespaces",
 		"--result-file="+stagingDumpFile, stagingDBName).CombinedOutput(); err != nil {
 		fail("Failed to dump staging DB: " + string(out))
 		return
