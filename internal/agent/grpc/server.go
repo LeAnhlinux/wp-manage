@@ -1362,9 +1362,18 @@ func (s *AgentServer) executeStagingCreate(taskID uint64, data map[string]interf
 	}
 
 	// Fix #6 — safe dump via file (no pipe, with error handling)
+	// --single-transaction: dùng snapshot thay vì LOCK TABLES (InnoDB safe)
+	// --skip-lock-tables: bỏ qua lock cho bảng không phải InnoDB
+	// --skip-definer: bỏ DEFINER clause (tránh lỗi 1449 khi user definer không tồn tại)
+	// --no-tablespaces: tránh lỗi ACCESS DENIED với tablespace info
 	dumpFile := fmt.Sprintf("/tmp/staging-dump-%s.sql", stagingDomain)
-	if out, err := exec.Command("mysqldump", "--no-tablespaces",
-		"--result-file="+dumpFile, dbName).CombinedOutput(); err != nil {
+	if out, err := exec.Command("mysqldump",
+		"--single-transaction",
+		"--skip-lock-tables",
+		"--skip-definer",
+		"--no-tablespaces",
+		"--result-file="+dumpFile,
+		dbName).CombinedOutput(); err != nil {
 		slog.Error("Staging DB dump failed", "error", err, "output", string(out))
 		fail("DB dump failed: " + string(out))
 		return
@@ -1463,7 +1472,8 @@ func (s *AgentServer) executeStagingPush(taskID uint64, data map[string]interfac
 	os.MkdirAll(backupDir, 0700)
 	backupFile := fmt.Sprintf("%s/pre-push-%d-%s.sql",
 		backupDir, stagingID, time.Now().Format("20060102-150405"))
-	if out, err := exec.Command("mysqldump", "--no-tablespaces",
+	if out, err := exec.Command("mysqldump",
+		"--single-transaction", "--skip-lock-tables", "--skip-definer", "--no-tablespaces",
 		"--result-file="+backupFile, dbName).CombinedOutput(); err != nil {
 		slog.Warn("Production DB backup before push failed (non-fatal)", "error", string(out))
 	} else {
@@ -1477,7 +1487,8 @@ func (s *AgentServer) executeStagingPush(taskID uint64, data map[string]interfac
 
 	// 2. Dump staging DB (temp file, deleted after import)
 	stagingDumpFile := fmt.Sprintf("/tmp/staging-push-dump-%d.sql", stagingID)
-	if out, err := exec.Command("mysqldump", "--no-tablespaces",
+	if out, err := exec.Command("mysqldump",
+		"--single-transaction", "--skip-lock-tables", "--skip-definer", "--no-tablespaces",
 		"--result-file="+stagingDumpFile, stagingDBName).CombinedOutput(); err != nil {
 		fail("Failed to dump staging DB: " + string(out))
 		return
