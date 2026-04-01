@@ -30,17 +30,19 @@ func stagingDBNameFromDomain(stagingDomain string) string {
 }
 
 type WordPressService struct {
-	db *gorm.DB
+	db     *gorm.DB
+	dnsSvc *DNSService
 }
 
-func NewWordPressService(db *gorm.DB) *WordPressService {
-	return &WordPressService{db: db}
+func NewWordPressService(db *gorm.DB, dnsSvc *DNSService) *WordPressService {
+	return &WordPressService{db: db, dnsSvc: dnsSvc}
 }
 
 // --- Staging ---
 
-// CreateStaging creates a staging environment for a production site
-func (s *WordPressService) CreateStaging(productionSiteID uint64) (*models.StagingSite, error) {
+// CreateStaging creates a staging environment for a production site.
+// customDomain overrides the default "staging-{domain}" naming.
+func (s *WordPressService) CreateStaging(productionSiteID uint64, customDomain string) (*models.StagingSite, error) {
 	var site models.Site
 	if err := s.db.Preload("Server").First(&site, productionSiteID).Error; err != nil {
 		return nil, fmt.Errorf("site not found")
@@ -57,7 +59,10 @@ func (s *WordPressService) CreateStaging(productionSiteID uint64) (*models.Stagi
 	}
 
 	// Create the staging Site record (cloned from production)
-	stagingDomain := fmt.Sprintf("staging-%s", site.Domain)
+	stagingDomain := customDomain
+	if stagingDomain == "" {
+		stagingDomain = fmt.Sprintf("staging-%s", site.Domain)
+	}
 	stagingDB := stagingDBNameFromDomain(stagingDomain)
 	stagingUser := stagingDB
 	if len(stagingUser) > 32 {
@@ -114,6 +119,18 @@ func (s *WordPressService) CreateStaging(productionSiteID uint64) (*models.Stagi
 	}
 	s.db.Create(&task)
 
+	// Fire-and-forget: try to auto-create DNS A record for the staging domain
+	if s.dnsSvc != nil {
+		serverIP := site.Server.IPAddress
+		go func() {
+			if _, err := s.dnsSvc.AutoCreateRecord(stagingDomain, serverIP); err != nil {
+				fmt.Printf("[staging] DNS auto-create for %s: %v\n", stagingDomain, err)
+			} else {
+				fmt.Printf("[staging] DNS A record created for %s -> %s\n", stagingDomain, serverIP)
+			}
+		}()
+	}
+
 	staging.Production = &site
 	staging.StagingSite2 = &stagingSite
 	return &staging, nil
@@ -151,6 +168,7 @@ func (s *WordPressService) PushStaging(stagingID uint64) error {
 		"staging_db_name":     staging.StagingSite2.DBName,
 		"staging_db_user":     staging.StagingSite2.DBUser,
 		"staging_db_password": staging.StagingSite2.DBPassword,
+		"ssl_enabled":         staging.Production.SSLEnabled,
 	}
 	dataJSON, _ := json.Marshal(taskData)
 	task := models.TaskQueue{
@@ -193,11 +211,23 @@ func (s *WordPressService) DeleteStaging(stagingID uint64) error {
 	return nil
 }
 
-// UpdateStagingStatus updates staging status (called after agent completes task)
+// UpdateStagingStatus updates staging status (called after agent completes task).
+// When status="deleted", physically delete the staging Site and staging_sites records
+// so the domain is freed and can be reused on the next staging create.
 func (s *WordPressService) UpdateStagingStatus(stagingID uint64, status string, siteStatus string) error {
-	s.db.Model(&models.StagingSite{}).Where("id = ?", stagingID).Update("status", status)
 	var staging models.StagingSite
-	s.db.First(&staging, stagingID)
+	if err := s.db.First(&staging, stagingID).Error; err != nil {
+		return nil // already gone
+	}
+
+	if status == "deleted" {
+		// Delete staging_sites first (FK → sites), then the Site record
+		s.db.Delete(&models.StagingSite{}, stagingID)
+		s.db.Delete(&models.Site{}, staging.StagingSiteID)
+		return nil
+	}
+
+	s.db.Model(&models.StagingSite{}).Where("id = ?", stagingID).Update("status", status)
 	if siteStatus != "" {
 		s.db.Model(&models.Site{}).Where("id = ?", staging.StagingSiteID).Update("status", siteStatus)
 	}
@@ -495,6 +525,17 @@ func (s *WordPressService) OptimizeDatabase(siteID uint64) (uint64, error) {
 	return task.ID, nil
 }
 
+// DBOptimizeResponse is the structured response returned to the frontend after optimization.
+type DBOptimizeResponse struct {
+	Status          string `json:"status"`
+	TablesOptimized int    `json:"tables_optimized"`
+	SpaceSaved      int64  `json:"space_saved"`
+	RevisionsClean  int    `json:"revisions_cleaned"`
+	TransientsClear int    `json:"transients_cleared"`
+	Error           string `json:"error,omitempty"`
+	CreatedAt       string `json:"created_at"`
+}
+
 // OptimizeDatabaseSync queues DB optimization and waits for result
 func (s *WordPressService) OptimizeDatabaseSync(siteID uint64) (interface{}, error) {
 	startTime := time.Now()
@@ -508,23 +549,56 @@ func (s *WordPressService) OptimizeDatabaseSync(siteID uint64) (interface{}, err
 		return nil, err
 	}
 
-	// Read db_optimize result from UpdateLog
+	// Read the db_optimize UpdateLog written by SaveDBOptimizeResult callback
 	var logs []models.UpdateLog
 	s.db.Where("site_id = ? AND update_type = ? AND created_at >= ?", siteID, "db_optimize", startTime).
 		Order("created_at DESC").Limit(1).Find(&logs)
-	if len(logs) > 0 {
-		return logs[0], nil
+
+	if len(logs) == 0 {
+		return DBOptimizeResponse{Status: "completed", CreatedAt: time.Now().Format(time.RFC3339)}, nil
 	}
-	return map[string]string{"message": "Database optimization completed"}, nil
+
+	log := logs[0]
+
+	// Parse the JSON payload stored in item_name
+	var p struct {
+		Tables     int   `json:"tables"`
+		Space      int64 `json:"space"`
+		Revisions  int   `json:"revisions"`
+		Transients int   `json:"transients"`
+	}
+	json.Unmarshal([]byte(log.ItemName), &p)
+
+	return DBOptimizeResponse{
+		Status:          log.Status,
+		TablesOptimized: p.Tables,
+		SpaceSaved:      p.Space,
+		RevisionsClean:  p.Revisions,
+		TransientsClear: p.Transients,
+		Error:           log.Error,
+		CreatedAt:       log.CreatedAt.Format(time.RFC3339),
+	}, nil
 }
 
-// SaveDBOptimizeResult saves DB optimization result from agent
+// SaveDBOptimizeResult saves DB optimization result from agent.
+// item_name stores a compact JSON payload so the frontend can parse it without string splitting.
 func (s *WordPressService) SaveDBOptimizeResult(result models.AgentDBOptimizeResult) error {
-	// Log optimization as an activity
+	type payload struct {
+		Tables     int   `json:"tables"`
+		Space      int64 `json:"space"`
+		Revisions  int   `json:"revisions"`
+		Transients int   `json:"transients"`
+	}
+	raw, _ := json.Marshal(payload{
+		Tables:     result.TablesOptimized,
+		Space:      result.SpaceSaved,
+		Revisions:  result.RevisionsClean,
+		Transients: result.TransientsClear,
+	})
 	log := models.UpdateLog{
 		SiteID:     result.SiteID,
 		UpdateType: "db_optimize",
-		ItemName:   fmt.Sprintf("tables=%d, space=%d, revisions=%d, transients=%d", result.TablesOptimized, result.SpaceSaved, result.RevisionsClean, result.TransientsClear),
+		ItemName:   string(raw),
 		Status:     result.Status,
 		Error:      result.Error,
 		CreatedAt:  time.Now(),

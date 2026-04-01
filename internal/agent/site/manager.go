@@ -943,8 +943,10 @@ func EnsureWebPNginx(domain string) error {
 	if strings.Contains(content, oldBlock) {
 		content = strings.Replace(content, oldBlock, newBlock, 1)
 	} else if !strings.Contains(content, "do_webp") {
-		// Fallback: inject before last closing brace
-		idx := strings.LastIndex(content, "\n}")
+		// Fallback: inject before the closing brace of the FIRST server block.
+		// Using LastIndex would target the last server block (HTTP redirect),
+		// which is wrong for configs managed by Certbot that have two server blocks.
+		idx := firstServerBlockEnd(content)
 		if idx < 0 {
 			return fmt.Errorf("cannot locate end of server block")
 		}
@@ -960,6 +962,34 @@ func EnsureWebPNginx(domain string) error {
 	}
 	exec.Command("systemctl", "reload", "nginx").Run()
 	return nil
+}
+
+// firstServerBlockEnd returns the index of "\n}" that closes the FIRST top-level
+// server block in an nginx config. Configs managed by Certbot often have two
+// server blocks: the primary HTTPS block followed by an HTTP→HTTPS redirect block.
+// Using strings.LastIndex would wrongly target the redirect block.
+func firstServerBlockEnd(content string) int {
+	depth := 0
+	inFirstServer := false
+	for i := 0; i < len(content); i++ {
+		switch content[i] {
+		case '{':
+			depth++
+			if depth == 1 {
+				inFirstServer = true
+			}
+		case '}':
+			depth--
+			if inFirstServer && depth == 0 {
+				// Find the \n before this }
+				if i > 0 && content[i-1] == '\n' {
+					return i - 1
+				}
+				return i
+			}
+		}
+	}
+	return -1
 }
 
 // RevertWebPNginx removes WebP location blocks from a site's nginx config.

@@ -1390,13 +1390,14 @@ func (s *AgentServer) executeStagingCreate(taskID uint64, data map[string]interf
 	exec.Command("mkdir", "-p", fmt.Sprintf("/var/www/%s/logs", stagingDomain)).Run()
 	exec.Command("mkdir", "-p", fmt.Sprintf("/var/www/%s/tmp", stagingDomain)).Run()
 
-	// 3. Update wp-config.php with staging DB creds
-	wpConfig := fmt.Sprintf("%swp-config.php", dstDir)
-	exec.Command("sed", "-i", fmt.Sprintf("s/%s/%s/g", dbName, stagingDBName), wpConfig).Run()
-	exec.Command("sed", "-i", fmt.Sprintf("s/%s/%s/g", stagingDBUser, stagingDBUser), wpConfig).Run()
+	// 3. Update wp-config.php with staging DB creds using WP-CLI config set
+	// (safer than sed — handles special chars in passwords correctly)
+	wpPath := fmt.Sprintf("/var/www/%s/public", stagingDomain)
+	exec.Command("wp", "config", "set", "DB_NAME", stagingDBName, "--path="+wpPath, "--allow-root").Run()
+	exec.Command("wp", "config", "set", "DB_USER", stagingDBUser, "--path="+wpPath, "--allow-root").Run()
+	exec.Command("wp", "config", "set", "DB_PASSWORD", stagingDBPassword, "--path="+wpPath, "--allow-root").Run()
 
 	// Fix #5 — search-replace production URL → staging URL in DB
-	wpPath := fmt.Sprintf("/var/www/%s/public", stagingDomain)
 	stagingURL := "http://" + stagingDomain
 	for _, prodURL := range []string{"https://" + productionDomain, "http://" + productionDomain} {
 		exec.Command("wp", "search-replace", prodURL, stagingURL,
@@ -1413,6 +1414,13 @@ func (s *AgentServer) executeStagingCreate(taskID uint64, data map[string]interf
 
 	// 5. Create Nginx vhost + PHP-FPM pool for staging
 	agentconfig.RebuildNginxVhost(stagingDomain, map[string]string{"php_version": phpVersion})
+
+	// Symlink into sites-enabled (RebuildNginxVhost only writes sites-available)
+	nginxConf := fmt.Sprintf("/etc/nginx/sites-available/%s.conf", stagingDomain)
+	nginxEnabled := fmt.Sprintf("/etc/nginx/sites-enabled/%s.conf", stagingDomain)
+	os.Remove(nginxEnabled) // remove stale symlink if any
+	os.Symlink(nginxConf, nginxEnabled)
+
 	agentconfig.RebuildPHPFPMPool(stagingDomain, phpVersion, map[string]string{})
 	exec.Command("systemctl", "reload", "nginx").Run()
 	exec.Command("systemctl", "restart", fmt.Sprintf("php%s-fpm", phpVersion)).Run()
@@ -1432,8 +1440,9 @@ func (s *AgentServer) executeStagingPush(taskID uint64, data map[string]interfac
 	stagingDomain, _ := data["staging_domain"].(string)
 	dbName, _ := data["db_name"].(string)
 	stagingDBName, _ := data["staging_db_name"].(string)
+	sslEnabled, _ := data["ssl_enabled"].(bool)
 
-	slog.Info("Pushing staging to production", "staging", stagingDomain, "production", productionDomain)
+	slog.Info("Pushing staging to production", "staging", stagingDomain, "production", productionDomain, "ssl", sslEnabled)
 
 	// fail helper
 	fail := func(msg string) {
@@ -1449,12 +1458,24 @@ func (s *AgentServer) executeStagingPush(taskID uint64, data map[string]interfac
 
 	// Fix #9 — sync DB: backup production, dump staging, import into production
 
-	// 1. Backup production DB first (safety, non-fatal if it fails)
-	backupFile := fmt.Sprintf("/tmp/prod-backup-before-push-%d.sql", stagingID)
-	exec.Command("mysqldump", "--no-tablespaces", "--result-file="+backupFile, dbName).Run()
-	defer os.Remove(backupFile)
+	// 1. Backup production DB → keep in site's backup dir for 7 days (rollback safety)
+	backupDir := fmt.Sprintf("/var/www/%s/backups", productionDomain)
+	os.MkdirAll(backupDir, 0700)
+	backupFile := fmt.Sprintf("%s/pre-push-%d-%s.sql",
+		backupDir, stagingID, time.Now().Format("20060102-150405"))
+	if out, err := exec.Command("mysqldump", "--no-tablespaces",
+		"--result-file="+backupFile, dbName).CombinedOutput(); err != nil {
+		slog.Warn("Production DB backup before push failed (non-fatal)", "error", string(out))
+	} else {
+		slog.Info("Production DB backed up before push", "file", backupFile)
+		// Auto-delete backups older than 7 days
+		go func() {
+			exec.Command("find", backupDir, "-name", "pre-push-*.sql",
+				"-mtime", "+7", "-delete").Run()
+		}()
+	}
 
-	// 2. Dump staging DB
+	// 2. Dump staging DB (temp file, deleted after import)
 	stagingDumpFile := fmt.Sprintf("/tmp/staging-push-dump-%d.sql", stagingID)
 	if out, err := exec.Command("mysqldump", "--no-tablespaces",
 		"--result-file="+stagingDumpFile, stagingDBName).CombinedOutput(); err != nil {
@@ -1478,13 +1499,19 @@ func (s *AgentServer) executeStagingPush(taskID uint64, data map[string]interfac
 
 	// 4. Search-replace staging URL → production URL in production DB
 	wpPath := fmt.Sprintf("/var/www/%s/public", productionDomain)
-	prodURL := "https://" + productionDomain
+	prodScheme := "http"
+	if sslEnabled {
+		prodScheme = "https"
+	}
+	prodURL := prodScheme + "://" + productionDomain
 	stagingURL := "http://" + stagingDomain
 	exec.Command("wp", "search-replace", stagingURL, prodURL,
 		"--path="+wpPath, "--skip-themes", "--skip-plugins", "--allow-root").Run()
-	// Also fix http → https for production
-	exec.Command("wp", "search-replace", "http://"+productionDomain, prodURL,
-		"--path="+wpPath, "--skip-themes", "--skip-plugins", "--allow-root").Run()
+	// Also normalize any stale http:// refs to production domain
+	if sslEnabled {
+		exec.Command("wp", "search-replace", "http://"+productionDomain, prodURL,
+			"--path="+wpPath, "--skip-themes", "--skip-plugins", "--allow-root").Run()
+	}
 
 	// rsync staging files to production (excluding wp-config.php)
 	srcDir := fmt.Sprintf("/var/www/%s/public/", stagingDomain)
@@ -1541,7 +1568,7 @@ func (s *AgentServer) executeStagingDelete(taskID uint64, data map[string]interf
 	s.reportStagingResult(map[string]interface{}{
 		"staging_id":  stagingID,
 		"status":      "deleted",
-		"site_status": "deleting",
+		"site_status": "deleted",
 	})
 	s.completeTask(taskID, "completed", "")
 }
@@ -2757,11 +2784,12 @@ func (s *AgentServer) executeManageSFTP(taskID uint64, task models.AgentSFTPTask
 
 func (s *AgentServer) executeHardenWordPress(taskID uint64, task models.AgentHardenTask) {
 	opts := agentsecurity.HardenOptions{
-		DisableXMLRPC:     task.DisableXMLRPC,
-		HideWPVersion:     task.HideWPVersion,
-		SecureFilePerms:   task.SecureFilePerms,
-		SecurityHeaders:   task.SecurityHeaders,
-		DisableFileEditor: task.DisableFileEditor,
+		DisableXMLRPC:      task.DisableXMLRPC,
+		HideWPVersion:      task.HideWPVersion,
+		SecureFilePerms:    task.SecureFilePerms,
+		SecurityHeaders:    task.SecurityHeaders,
+		DisableFileEditor:  task.DisableFileEditor,
+		LimitLoginAttempts: task.LimitLoginAttempts,
 	}
 
 	var err error

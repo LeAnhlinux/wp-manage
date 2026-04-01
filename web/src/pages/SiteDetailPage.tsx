@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, Globe, Lock, LockOpen, RefreshCw,
@@ -9,7 +9,8 @@ import {
   ShieldCheck, AlertCircle, CornerDownRight, X, Edit2, Upload
 } from 'lucide-react'
 import { useSite, useDeleteSite, useUpdatePHP, useRestartSite, useSuspendSite, useResumeSite, useIssueSSL, useSiteCredentials, useAutologin, useUploadSource, useImportDB, useToggleOpenBasedir } from '@/hooks/useSites'
-import { useStagingSites, useCreateStaging, usePushStaging, useDeleteStaging, useAutoUpdateConfig, useUpdateAutoUpdateConfig, useCheckUpdates, useUpdateLogs, useOptimizeDatabase } from '@/hooks/useWordPress'
+import { useStagingSites, useCreateStaging, usePushStaging, useDeleteStaging, useCheckDNSProvider, useAutoUpdateConfig, useUpdateAutoUpdateConfig, useCheckUpdates, useUpdateLogs, useOptimizeDatabase } from '@/hooks/useWordPress'
+import type { CheckUpdatesResult, DBOptimizeResult } from '@/hooks/useWordPress'
 import { useLatestPerformance, usePerformanceMetrics, useRunPageSpeed } from '@/hooks/usePerformance'
 import { useSubsites, useEnableMultisite, useCreateSubsite, useDeleteSubsite, useSyncSubsites } from '@/hooks/useMultisite'
 import { useImageOptConfig, useUpdateImageOptConfig, useToggleImageOpt, useRunImageOpt, useImageOptResults, useRunningImageOpt, useCancelImageOpt, useToggleNginxWebP } from '@/hooks/useImageOpt'
@@ -341,7 +342,7 @@ export default function SiteDetailPage() {
 
       {/* Staging Tab */}
       {activeTab === 'staging' && (
-        <StagingPanel siteId={site.id} canManage={can('sites', 'manage')} />
+        <StagingPanel siteId={site.id} canManage={can('sites', 'manage')} siteDomain={site.domain} />
       )}
 
       {/* Updates Tab */}
@@ -932,18 +933,103 @@ export default function SiteDetailPage() {
   )
 }
 
+// --- Create Staging Modal ---
+function CreateStagingModal({ defaultDomain, onConfirm, onClose }: {
+  defaultDomain: string
+  onConfirm: (domain: string) => void
+  onClose: () => void
+}) {
+  const [domain, setDomain] = useState(defaultDomain)
+  const [debouncedDomain, setDebouncedDomain] = useState(defaultDomain)
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedDomain(domain), 500)
+    return () => clearTimeout(timer)
+  }, [domain])
+
+  const { data: dnsCheck, isLoading: dnsLoading } = useCheckDNSProvider(debouncedDomain)
+  const dnsData = dnsCheck?.data
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4 p-6">
+        <h3 className="text-lg font-semibold mb-4">Create Staging Environment</h3>
+
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Staging Domain</label>
+            <input
+              type="text"
+              value={domain}
+              onChange={e => setDomain(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="staging-example.com"
+            />
+            <p className="text-xs text-gray-400 mt-1">Default: staging-{'{production domain}'}</p>
+          </div>
+
+          {debouncedDomain.length > 3 && (
+            <div className={`flex items-start gap-2 p-3 rounded-lg text-sm ${
+              dnsLoading ? 'bg-gray-50 text-gray-500' :
+              dnsData?.found ? 'bg-green-50 text-green-700' : 'bg-yellow-50 text-yellow-700'
+            }`}>
+              {dnsLoading ? (
+                <><Loader2 size={14} className="animate-spin mt-0.5 shrink-0" /><span>Checking DNS providers…</span></>
+              ) : dnsData?.found ? (
+                <><CheckCircle size={14} className="mt-0.5 shrink-0" /><div><p className="font-medium">DNS auto-configure via {dnsData.provider_name}</p><p className="text-xs mt-0.5">An A record for <strong>{debouncedDomain}</strong> will be created automatically.</p></div></>
+              ) : (
+                <><AlertCircle size={14} className="mt-0.5 shrink-0" /><div><p className="font-medium">DNS not managed</p><p className="text-xs mt-0.5">No DNS provider found for this domain. You'll need to configure DNS manually.</p></div></>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="flex gap-3 mt-6">
+          <button
+            onClick={onClose}
+            className="flex-1 px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"
+          >Cancel</button>
+          <button
+            onClick={() => onConfirm(domain)}
+            disabled={!domain.trim()}
+            className="flex-1 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+          >Create Staging</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // --- Staging Panel ---
-function StagingPanel({ siteId, canManage }: { siteId: number; canManage: boolean }) {
+function StagingPanel({ siteId, canManage, siteDomain }: { siteId: number; canManage: boolean; siteDomain: string }) {
   const { data: stagingData, isLoading } = useStagingSites(siteId)
   const createStaging = useCreateStaging()
   const pushStaging = usePushStaging()
   const deleteStaging = useDeleteStaging()
+  const [showModal, setShowModal] = useState(false)
 
   const stagings: StagingSite[] = stagingData?.data || []
   const activeStagings = stagings.filter(s => s.status !== 'deleted')
 
+  // Collect any error from mutations
+  const mutationError = createStaging.error || pushStaging.error || deleteStaging.error
+  const errorMsg = mutationError
+    ? ((mutationError as any)?.response?.data?.error || (mutationError as Error)?.message || 'Unknown error')
+    : null
+
   return (
     <div className="space-y-4">
+      {showModal && (
+        <CreateStagingModal
+          defaultDomain={`staging-${siteDomain}`}
+          onConfirm={(domain) => {
+            createStaging.mutate({ siteId, stagingDomain: domain })
+            setShowModal(false)
+          }}
+          onClose={() => setShowModal(false)}
+        />
+      )}
+
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-lg font-semibold">Staging Environments</h2>
@@ -951,15 +1037,46 @@ function StagingPanel({ siteId, canManage }: { siteId: number; canManage: boolea
         </div>
         {canManage && activeStagings.length === 0 && (
           <button
-            onClick={() => createStaging.mutate(siteId)}
+            onClick={() => setShowModal(true)}
             disabled={createStaging.isPending}
             className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm disabled:opacity-50"
           >
             {createStaging.isPending ? <Loader2 size={14} className="animate-spin" /> : <Layers size={14} />}
-            Create Staging
+            {createStaging.isPending ? 'Creating...' : 'Create Staging'}
           </button>
         )}
       </div>
+
+      {/* Error banner */}
+      {errorMsg && (
+        <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+          <AlertCircle size={16} className="mt-0.5 shrink-0" />
+          <div>
+            <p className="font-medium">Operation failed</p>
+            <p className="text-red-600">{errorMsg}</p>
+          </div>
+        </div>
+      )}
+
+      {/* Loading banners for in-progress operations */}
+      {createStaging.isPending && (
+        <div className="flex items-center gap-2 p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-700">
+          <Loader2 size={14} className="animate-spin shrink-0" />
+          <span>Creating staging environment… this may take a minute.</span>
+        </div>
+      )}
+      {pushStaging.isPending && (
+        <div className="flex items-center gap-2 p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-sm text-yellow-700">
+          <Loader2 size={14} className="animate-spin shrink-0" />
+          <span>Pushing staging to production… do not close this page.</span>
+        </div>
+      )}
+      {deleteStaging.isPending && (
+        <div className="flex items-center gap-2 p-3 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-700">
+          <Loader2 size={14} className="animate-spin shrink-0" />
+          <span>Deleting staging environment…</span>
+        </div>
+      )}
 
       {isLoading ? (
         <div className="text-center py-8 text-gray-500">Loading...</div>
@@ -977,27 +1094,50 @@ function StagingPanel({ siteId, canManage }: { siteId: number; canManage: boolea
                 <div>
                   <p className="font-medium">{staging.staging_site?.domain || `Staging #${staging.staging_site_id}`}</p>
                   <p className="text-sm text-gray-500">Created {formatDate(staging.created_at)}</p>
+                  {staging.status === 'creating' && (
+                    <p className="text-xs text-blue-500 mt-1 flex items-center gap-1">
+                      <Loader2 size={10} className="animate-spin" /> Setting up environment…
+                    </p>
+                  )}
+                  {staging.status === 'pushing' && (
+                    <p className="text-xs text-yellow-600 mt-1 flex items-center gap-1">
+                      <Loader2 size={10} className="animate-spin" /> Pushing to production…
+                    </p>
+                  )}
+                  {staging.status === 'error' && (
+                    <p className="text-xs text-red-500 mt-1 flex items-center gap-1">
+                      <AlertCircle size={10} /> Failed — check agent logs
+                    </p>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                    staging.status === 'active' ? 'bg-green-100 text-green-800' :
+                    staging.status === 'active'   ? 'bg-green-100 text-green-800' :
                     staging.status === 'creating' ? 'bg-blue-100 text-blue-800' :
-                    staging.status === 'pushing' ? 'bg-yellow-100 text-yellow-800' :
+                    staging.status === 'pushing'  ? 'bg-yellow-100 text-yellow-800' :
+                    staging.status === 'error'    ? 'bg-red-100 text-red-800' :
                     'bg-gray-100 text-gray-800'
                   }`}>{staging.status}</span>
                   {canManage && staging.status === 'active' && (
                     <>
                       <button
-                        onClick={() => { if (confirm('Push staging to production? This will overwrite production files.')) pushStaging.mutate(staging.id) }}
+                        onClick={() => { if (confirm('Push staging to production? This will overwrite production files and database.')) pushStaging.mutate(staging.id) }}
                         disabled={pushStaging.isPending}
-                        className="px-3 py-1 text-xs bg-yellow-50 text-yellow-700 rounded hover:bg-yellow-100"
+                        className="px-3 py-1 text-xs bg-yellow-50 text-yellow-700 rounded hover:bg-yellow-100 disabled:opacity-50"
                       >Push to Production</button>
                       <button
                         onClick={() => { if (confirm('Delete this staging environment?')) deleteStaging.mutate(staging.id) }}
                         disabled={deleteStaging.isPending}
-                        className="px-3 py-1 text-xs bg-red-50 text-red-700 rounded hover:bg-red-100"
+                        className="px-3 py-1 text-xs bg-red-50 text-red-700 rounded hover:bg-red-100 disabled:opacity-50"
                       >Delete</button>
                     </>
+                  )}
+                  {canManage && staging.status === 'error' && (
+                    <button
+                      onClick={() => { if (confirm('Delete this failed staging environment?')) deleteStaging.mutate(staging.id) }}
+                      disabled={deleteStaging.isPending}
+                      className="px-3 py-1 text-xs bg-red-50 text-red-700 rounded hover:bg-red-100 disabled:opacity-50"
+                    >Delete</button>
                   )}
                 </div>
               </div>
@@ -1012,6 +1152,7 @@ function StagingPanel({ siteId, canManage }: { siteId: number; canManage: boolea
 // --- Updates Panel ---
 function UpdatesPanel({ siteId, canManage }: { siteId: number; canManage: boolean }) {
   const [logPage, setLogPage] = useState(1)
+  const [checkedAt, setCheckedAt] = useState<Date | null>(null)
   const { data: configData } = useAutoUpdateConfig(siteId)
   const updateConfig = useUpdateAutoUpdateConfig()
   const checkUpdates = useCheckUpdates()
@@ -1021,10 +1162,22 @@ function UpdatesPanel({ siteId, canManage }: { siteId: number; canManage: boolea
   const config = configData?.data
   const logs: UpdateLog[] = logsData?.data || []
   const meta = logsData?.meta
+  const checkResult = checkUpdates.data?.data as CheckUpdatesResult | undefined
 
   const toggleConfig = (field: string, value: boolean) => {
     updateConfig.mutate({ siteId, [field]: value } as any)
   }
+
+  const handleCheckUpdates = () => {
+    checkUpdates.mutate(siteId, {
+      onSuccess: () => setCheckedAt(new Date()),
+    })
+  }
+
+  // Count available updates from result
+  const availableCount = checkResult
+    ? (checkResult.core ? 1 : 0) + (checkResult.plugins?.length ?? 0) + (checkResult.themes?.length ?? 0)
+    : 0
 
   return (
     <div className="space-y-6">
@@ -1037,15 +1190,52 @@ function UpdatesPanel({ siteId, canManage }: { siteId: number; canManage: boolea
           </div>
           {canManage && (
             <button
-              onClick={() => checkUpdates.mutate(siteId)}
+              onClick={handleCheckUpdates}
               disabled={checkUpdates.isPending}
               className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm disabled:opacity-50"
             >
               {checkUpdates.isPending ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-              Check for Updates
+              {checkUpdates.isPending ? 'Scanning...' : 'Check for Updates'}
             </button>
           )}
         </div>
+
+        {/* Check result banner */}
+        {!checkUpdates.isPending && checkedAt && (
+          <div className={`mb-4 p-3 rounded-lg border text-sm flex items-start gap-2 ${
+            availableCount > 0 ? 'bg-yellow-50 border-yellow-200 text-yellow-800' : 'bg-green-50 border-green-200 text-green-800'
+          }`}>
+            {availableCount > 0 ? <AlertCircle size={16} className="mt-0.5 shrink-0" /> : <CheckCircle2 size={16} className="mt-0.5 shrink-0" />}
+            <div className="flex-1">
+              {availableCount === 0 ? (
+                <span>Tất cả đang dùng phiên bản mới nhất.</span>
+              ) : (
+                <div className="space-y-1">
+                  <span className="font-medium">Có {availableCount} cập nhật:</span>
+                  {checkResult?.core && (
+                    <div>• WordPress Core: {checkResult.core.from_version} → {checkResult.core.to_version}</div>
+                  )}
+                  {(checkResult?.plugins?.length ?? 0) > 0 && (
+                    <div>• {checkResult!.plugins!.length} plugin(s) cần update</div>
+                  )}
+                  {(checkResult?.themes?.length ?? 0) > 0 && (
+                    <div>• {checkResult!.themes!.length} theme(s) cần update</div>
+                  )}
+                </div>
+              )}
+              <div className="mt-1 text-xs opacity-70">
+                Kiểm tra lúc {checkedAt.toLocaleTimeString('vi-VN')}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {checkUpdates.isPending && (
+          <div className="mb-4 p-3 rounded-lg border bg-blue-50 border-blue-200 text-blue-700 text-sm flex items-center gap-2">
+            <Loader2 size={14} className="animate-spin shrink-0" />
+            Đang kiểm tra WordPress core, plugins và themes — có thể mất 1–2 phút...
+          </div>
+        )}
 
         {config && (
           <div className="grid grid-cols-2 gap-4">
@@ -1069,7 +1259,7 @@ function UpdatesPanel({ siteId, canManage }: { siteId: number; canManage: boolea
       <div className="bg-white rounded-lg border p-6">
         <h2 className="text-lg font-semibold mb-4">Update History</h2>
         {logs.length === 0 ? (
-          <p className="text-gray-500 text-sm text-center py-4">No update logs yet. Click "Check for Updates" to scan.</p>
+          <p className="text-gray-500 text-sm text-center py-4">Chưa có lịch sử cập nhật. Bật Auto-Update hoặc bấm "Check for Updates" để quét.</p>
         ) : (
           <>
             <table className="w-full">
@@ -1143,12 +1333,71 @@ function ToggleRow({ label, description, enabled, canManage, onToggle }: {
 }
 
 // --- Database Panel ---
+function parseDbLog(log: UpdateLog): DBOptimizeResult | null {
+  try {
+    const p = JSON.parse(log.item_name)
+    return {
+      status: log.status,
+      tables_optimized: p.tables ?? 0,
+      space_saved: p.space ?? 0,
+      revisions_cleaned: p.revisions ?? 0,
+      transients_cleared: p.transients ?? 0,
+      error: log.error,
+      created_at: log.created_at,
+    }
+  } catch {
+    return null
+  }
+}
+
+function DBOptimizeResultCard({ result }: { result: DBOptimizeResult }) {
+  const isOk = result.status === 'completed'
+  return (
+    <div className={`p-4 rounded-lg border ${isOk ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
+      <div className="flex items-center gap-2 mb-3">
+        {isOk
+          ? <CheckCircle2 size={16} className="text-green-600" />
+          : <XCircle size={16} className="text-red-600" />}
+        <span className={`text-sm font-semibold ${isOk ? 'text-green-800' : 'text-red-800'}`}>
+          {isOk ? 'Tối ưu hoàn tất' : 'Tối ưu thất bại'}
+        </span>
+        <span className="ml-auto text-xs text-gray-400">
+          {new Date(result.created_at).toLocaleString('vi-VN')}
+        </span>
+      </div>
+      {isOk ? (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="bg-white rounded p-2 text-center border border-green-100">
+            <p className="text-lg font-bold text-blue-600">{result.tables_optimized}</p>
+            <p className="text-xs text-gray-500">Tables tối ưu</p>
+          </div>
+          <div className="bg-white rounded p-2 text-center border border-green-100">
+            <p className="text-lg font-bold text-green-600">{formatBytes(result.space_saved)}</p>
+            <p className="text-xs text-gray-500">Dung lượng thu hồi</p>
+          </div>
+          <div className="bg-white rounded p-2 text-center border border-green-100">
+            <p className="text-lg font-bold text-yellow-600">{result.revisions_cleaned}</p>
+            <p className="text-xs text-gray-500">Revisions đã xóa</p>
+          </div>
+          <div className="bg-white rounded p-2 text-center border border-green-100">
+            <p className="text-lg font-bold text-purple-600">{result.transients_cleared}</p>
+            <p className="text-xs text-gray-500">Transients đã xóa</p>
+          </div>
+        </div>
+      ) : (
+        <p className="text-sm text-red-700">{result.error || 'Unknown error'}</p>
+      )}
+    </div>
+  )
+}
+
 function DatabasePanel({ siteId, canManage }: { siteId: number; canManage: boolean }) {
   const optimizeDb = useOptimizeDatabase()
   const [logPage, setLogPage] = useState(1)
   const { data: logsData } = useUpdateLogs(siteId, logPage)
 
   const dbLogs = (logsData?.data || []).filter((l: UpdateLog) => l.update_type === 'db_optimize')
+  const latestResult = optimizeDb.data?.data as DBOptimizeResult | undefined
 
   return (
     <div className="space-y-6">
@@ -1156,7 +1405,7 @@ function DatabasePanel({ siteId, canManage }: { siteId: number; canManage: boole
         <div className="flex items-center justify-between mb-4">
           <div>
             <h2 className="text-lg font-semibold">Database Optimization</h2>
-            <p className="text-sm text-gray-500">Optimize tables, clean revisions, and clear expired transients</p>
+            <p className="text-sm text-gray-500">Tối ưu tables, dọn revisions và xóa transients hết hạn</p>
           </div>
           {canManage && (
             <button
@@ -1165,31 +1414,47 @@ function DatabasePanel({ siteId, canManage }: { siteId: number; canManage: boole
               className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm disabled:opacity-50"
             >
               {optimizeDb.isPending ? <Loader2 size={14} className="animate-spin" /> : <HardDrive size={14} />}
-              Optimize Now
+              {optimizeDb.isPending ? 'Đang tối ưu...' : 'Optimize Now'}
             </button>
           )}
         </div>
 
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="p-4 bg-blue-50 rounded-lg text-center">
-            <Database size={24} className="mx-auto text-blue-500 mb-2" />
-            <p className="text-sm font-medium">Table Optimization</p>
-            <p className="text-xs text-gray-500">OPTIMIZE TABLE on all InnoDB tables</p>
+        {/* Pending indicator */}
+        {optimizeDb.isPending && (
+          <div className="mb-4 p-3 rounded-lg border bg-blue-50 border-blue-200 text-blue-700 text-sm flex items-center gap-2">
+            <Loader2 size={14} className="animate-spin shrink-0" />
+            Đang chạy OPTIMIZE TABLE, dọn revisions và transients...
           </div>
-          <div className="p-4 bg-green-50 rounded-lg text-center">
-            <HardDrive size={24} className="mx-auto text-green-500 mb-2" />
-            <p className="text-sm font-medium">Space Recovery</p>
-            <p className="text-xs text-gray-500">Reclaim fragmented disk space</p>
+        )}
+
+        {/* Latest result (from current session) */}
+        {!optimizeDb.isPending && latestResult && (
+          <div className="mb-4">
+            <DBOptimizeResultCard result={latestResult} />
           </div>
-          <div className="p-4 bg-yellow-50 rounded-lg text-center">
-            <RefreshCw size={24} className="mx-auto text-yellow-500 mb-2" />
-            <p className="text-sm font-medium">Revision Cleanup</p>
-            <p className="text-xs text-gray-500">Remove old post revisions</p>
+        )}
+
+        {/* What it does — info cards */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="p-3 bg-blue-50 rounded-lg text-center">
+            <Database size={20} className="mx-auto text-blue-500 mb-1" />
+            <p className="text-xs font-medium">Table Optimization</p>
+            <p className="text-xs text-gray-400">OPTIMIZE TABLE (InnoDB)</p>
           </div>
-          <div className="p-4 bg-purple-50 rounded-lg text-center">
-            <Clock size={24} className="mx-auto text-purple-500 mb-2" />
-            <p className="text-sm font-medium">Transient Cleanup</p>
-            <p className="text-xs text-gray-500">Clear expired WP transients</p>
+          <div className="p-3 bg-green-50 rounded-lg text-center">
+            <HardDrive size={20} className="mx-auto text-green-500 mb-1" />
+            <p className="text-xs font-medium">Space Recovery</p>
+            <p className="text-xs text-gray-400">Thu hồi fragmented space</p>
+          </div>
+          <div className="p-3 bg-yellow-50 rounded-lg text-center">
+            <RefreshCw size={20} className="mx-auto text-yellow-500 mb-1" />
+            <p className="text-xs font-medium">Revision Cleanup</p>
+            <p className="text-xs text-gray-400">Giữ lại 5 bản gần nhất/post</p>
+          </div>
+          <div className="p-3 bg-purple-50 rounded-lg text-center">
+            <Clock size={20} className="mx-auto text-purple-500 mb-1" />
+            <p className="text-xs font-medium">Transient Cleanup</p>
+            <p className="text-xs text-gray-400">Xóa expired WP transients</p>
           </div>
         </div>
       </div>
@@ -1197,26 +1462,22 @@ function DatabasePanel({ siteId, canManage }: { siteId: number; canManage: boole
       {/* Optimization History */}
       {dbLogs.length > 0 && (
         <div className="bg-white rounded-lg border p-6">
-          <h3 className="text-sm font-semibold mb-3">Optimization History</h3>
-          <div className="space-y-2">
-            {dbLogs.map((log: UpdateLog) => (
-              <div key={log.id} className="flex items-center justify-between p-3 bg-gray-50 rounded">
-                <div>
-                  <p className="text-sm font-medium">{log.item_name}</p>
-                  <p className="text-xs text-gray-500">{new Date(log.created_at).toLocaleString()}</p>
-                </div>
-                <span className={`px-2 py-0.5 rounded text-xs font-medium ${
-                  log.status === 'completed' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
-                }`}>{log.status}</span>
-              </div>
-            ))}
+          <h3 className="text-sm font-semibold mb-3">Lịch sử tối ưu</h3>
+          <div className="space-y-3">
+            {dbLogs.map((log: UpdateLog) => {
+              const parsed = parseDbLog(log)
+              return parsed
+                ? <DBOptimizeResultCard key={log.id} result={parsed} />
+                : (
+                  <div key={log.id} className="flex items-center justify-between p-3 bg-gray-50 rounded border">
+                    <p className="text-xs text-gray-500">{new Date(log.created_at).toLocaleString('vi-VN')}</p>
+                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                      log.status === 'completed' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                    }`}>{log.status}</span>
+                  </div>
+                )
+            })}
           </div>
-        </div>
-      )}
-
-      {optimizeDb.isSuccess && (
-        <div className="p-4 bg-green-50 border border-green-200 rounded-lg text-sm text-green-700">
-          Database optimization task queued. Results will appear shortly after the agent processes it.
         </div>
       )}
     </div>
@@ -2630,6 +2891,7 @@ type HardenOptionsState = {
   secure_file_perms: boolean
   security_headers: boolean
   disable_file_editor: boolean
+  limit_login_attempts: boolean
 }
 
 const HARDEN_OPTIONS_LIST = [
@@ -2638,6 +2900,7 @@ const HARDEN_OPTIONS_LIST = [
   { key: 'secure_file_perms' as const, label: 'Secure File Permissions', desc: 'Set directories to 755, files to 644, wp-config.php to 600' },
   { key: 'security_headers' as const, label: 'Add Security Headers', desc: 'Add X-Content-Type-Options, X-Frame-Options, XSS-Protection headers' },
   { key: 'disable_file_editor' as const, label: 'Disable File Editor', desc: 'Disable the built-in WordPress theme/plugin editor' },
+  { key: 'limit_login_attempts' as const, label: 'Limit Login Attempts', desc: 'Rate limit wp-login.php to 5 requests/min per IP + Fail2ban auto-ban' },
 ]
 
 function SecurityPanel({ siteId, canManage }: { siteId: number; canManage: boolean }) {
@@ -2650,6 +2913,7 @@ function SecurityPanel({ siteId, canManage }: { siteId: number; canManage: boole
     secure_file_perms: true,
     security_headers: true,
     disable_file_editor: true,
+    limit_login_attempts: true,
   }
 
   const [applyOptions, setApplyOptions] = useState<HardenOptionsState>(defaultOptions)

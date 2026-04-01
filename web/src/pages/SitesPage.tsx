@@ -661,31 +661,49 @@ export default function SitesPage() {
                 <td className="px-6 py-4"><StatusBadge status={site.status} /></td>
                 <td className="px-6 py-4 text-right">
                   <div className="flex items-center justify-end gap-1">
-                    <button onClick={() => restartSite.mutate(site.id)} title="Restart"
-                      className="p-1.5 text-gray-300 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
-                      <RefreshCw size={14} />
+                    <button
+                      onClick={() => { if (confirm(`Restart site ${site.domain}?`)) restartSite.mutate(site.id) }}
+                      disabled={restartSite.isPending}
+                      title="Restart"
+                      className="p-1.5 text-gray-300 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+                      <RefreshCw size={14} className={restartSite.isPending ? 'animate-spin' : ''} />
                     </button>
                     {site.status === 'active' ? (
-                      <button onClick={() => { if(confirm(`Suspend ${site.domain}?`)) suspendSite.mutate(site.id) }} title="Suspend"
-                        className="p-1.5 text-gray-300 hover:text-amber-500 hover:bg-amber-50 rounded-lg transition-colors">
-                        <Pause size={14} />
+                      <button onClick={() => { if(confirm(`Suspend site ${site.domain}?`)) suspendSite.mutate(site.id) }}
+                        disabled={suspendSite.isPending}
+                        title="Suspend"
+                        className="p-1.5 text-gray-300 hover:text-amber-500 hover:bg-amber-50 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+                        {suspendSite.isPending ? <Loader2 size={14} className="animate-spin" /> : <Pause size={14} />}
                       </button>
                     ) : site.status === 'suspended' ? (
-                      <button onClick={() => resumeSite.mutate(site.id)} title="Resume"
-                        className="p-1.5 text-gray-300 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors">
-                        <Play size={14} />
+                      <button onClick={() => resumeSite.mutate(site.id)}
+                        disabled={resumeSite.isPending}
+                        title="Resume"
+                        className="p-1.5 text-gray-300 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+                        {resumeSite.isPending ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
                       </button>
                     ) : null}
-                    <button onClick={async () => {
-                      const res = await autologinMut.mutateAsync(site.id)
-                      if(res?.data?.url) window.open(res.data.url, '_blank')
-                    }} title="WP Admin"
-                      className="p-1.5 text-gray-300 hover:text-violet-600 hover:bg-violet-50 rounded-lg transition-colors">
-                      <ExternalLink size={14} />
+                    <button
+                      onClick={async () => {
+                        try {
+                          const res = await autologinMut.mutateAsync(site.id)
+                          if (res?.data?.url) window.open(res.data.url, '_blank')
+                          else alert(res?.error || 'Autologin đang được cài đặt. Thử lại sau 30 giây.')
+                        } catch (e: any) {
+                          alert(e?.response?.data?.error || 'Không thể mở WP Admin.')
+                        }
+                      }}
+                      disabled={autologinMut.isPending}
+                      title="WP Admin"
+                      className="p-1.5 text-gray-300 hover:text-violet-600 hover:bg-violet-50 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+                      {autologinMut.isPending ? <Loader2 size={14} className="animate-spin" /> : <ExternalLink size={14} />}
                     </button>
-                    <button onClick={() => { if (confirm(`Xoá site ${site.domain}?`)) deleteSite.mutate(site.id) }}
-                      className="p-1.5 text-gray-300 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                      <Trash2 size={14} />
+                    <button
+                      onClick={() => { if (confirm(`Xoá site ${site.domain}?`)) deleteSite.mutate(site.id) }}
+                      disabled={deleteSite.isPending}
+                      title="Delete"
+                      className="p-1.5 text-gray-300 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+                      {deleteSite.isPending ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
                     </button>
                   </div>
                 </td>
@@ -737,19 +755,32 @@ export default function SitesPage() {
                 : <span className="flex items-center gap-1 text-xs text-gray-400"><LockOpen size={11} /> No SSL</span>
               }
               <div className="ml-auto flex items-center gap-1">
-                <button onClick={() => restartSite.mutate(site.id)}
-                  className="p-1.5 text-gray-300 hover:text-blue-600 rounded-lg transition-colors">
-                  <RefreshCw size={13} />
+                <button onClick={() => { if (confirm(`Restart site ${site.domain}?`)) restartSite.mutate(site.id) }}
+                  disabled={restartSite.isPending}
+                  title="Restart"
+                  className="p-1.5 text-gray-300 hover:text-blue-600 rounded-lg transition-colors disabled:opacity-40">
+                  <RefreshCw size={13} className={restartSite.isPending ? 'animate-spin' : ''} />
                 </button>
-                <button onClick={async () => {
-                  const res = await autologinMut.mutateAsync(site.id)
-                  if(res?.data?.url) window.open(res.data.url, '_blank')
-                }} className="p-1.5 text-gray-300 hover:text-violet-600 rounded-lg transition-colors">
-                  <ExternalLink size={13} />
+                <button
+                  onClick={async () => {
+                    try {
+                      const res = await autologinMut.mutateAsync(site.id)
+                      if (res?.data?.url) window.open(res.data.url, '_blank')
+                      else alert(res?.error || 'Autologin đang được cài đặt. Thử lại sau 30 giây.')
+                    } catch (e: any) {
+                      alert(e?.response?.data?.error || 'Không thể mở WP Admin.')
+                    }
+                  }}
+                  disabled={autologinMut.isPending}
+                  title="WP Admin"
+                  className="p-1.5 text-gray-300 hover:text-violet-600 rounded-lg transition-colors disabled:opacity-40">
+                  {autologinMut.isPending ? <Loader2 size={13} className="animate-spin" /> : <ExternalLink size={13} />}
                 </button>
                 <button onClick={() => { if (confirm(`Xoá site ${site.domain}?`)) deleteSite.mutate(site.id) }}
-                  className="p-1.5 text-gray-300 hover:text-red-600 rounded-lg transition-colors">
-                  <Trash2 size={13} />
+                  disabled={deleteSite.isPending}
+                  title="Delete"
+                  className="p-1.5 text-gray-300 hover:text-red-600 rounded-lg transition-colors disabled:opacity-40">
+                  {deleteSite.isPending ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
                 </button>
               </div>
             </div>

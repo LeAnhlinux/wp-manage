@@ -133,3 +133,18 @@ func (h *DNSHandler) ListAll(c *fiber.Ctx) error {
 	return c.JSON(models.APIResponse{Success: true, Data: providers})
 }
 
+// CheckProviderForDomain checks whether a DNS provider manages the given domain.
+// GET /dns-providers/check?domain=xxx
+func (h *DNSHandler) CheckProviderForDomain(c *fiber.Ctx) error {
+	domain := c.Query("domain")
+	if domain == "" {
+		return c.Status(400).JSON(models.APIResponse{Error: "domain query param required"})
+	}
+	providerType, providerName := h.svc.FindProviderForDomain(domain)
+	return c.JSON(models.APIResponse{Success: true, Data: fiber.Map{
+		"found":         providerType != "",
+		"provider_type": providerType,
+		"provider_name": providerName,
+	}})
+}
+

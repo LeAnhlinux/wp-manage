@@ -489,6 +489,7 @@ func Setup(
 	protected.Post("/dns-providers/test", middleware.PermissionRequired("infrastructure", "manage"), dnsHandler.TestProvider)
 	protected.Post("/dns-providers/lookup-zone", middleware.PermissionRequired("infrastructure", "manage"), dnsHandler.LookupZone)
 	protected.Post("/dns-providers/auto-create-record", middleware.PermissionRequired("infrastructure", "manage"), dnsHandler.AutoCreateRecord)
+	protected.Get("/dns-providers/check", middleware.PermissionRequired("infrastructure", "read"), dnsHandler.CheckProviderForDomain)
 	globalDNS := protected.Group("/dns-providers/:id", middleware.PermissionRequired("infrastructure", "read"))
 	globalDNS.Get("/records", dnsHandler.ListRecordsGlobal)
 	globalDNS.Post("/records", middleware.PermissionRequired("infrastructure", "manage"), dnsHandler.CreateRecordGlobal)

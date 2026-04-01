@@ -919,11 +919,12 @@ type CreateSFTPRequest struct {
 }
 
 type HardenWordPressRequest struct {
-	DisableXMLRPC     bool `json:"disable_xmlrpc"`
-	HideWPVersion     bool `json:"hide_wp_version"`
-	SecureFilePerms   bool `json:"secure_file_perms"`
-	SecurityHeaders   bool `json:"security_headers"`
-	DisableFileEditor bool `json:"disable_file_editor"`
+	DisableXMLRPC       bool `json:"disable_xmlrpc"`
+	HideWPVersion       bool `json:"hide_wp_version"`
+	SecureFilePerms     bool `json:"secure_file_perms"`
+	SecurityHeaders     bool `json:"security_headers"`
+	DisableFileEditor   bool `json:"disable_file_editor"`
+	LimitLoginAttempts  bool `json:"limit_login_attempts"`
 }
 
 // ==================== Batch 5: Monitoring & Alerts ====================
@@ -989,13 +990,14 @@ type AgentSFTPTask struct {
 }
 
 type AgentHardenTask struct {
-	Domain            string `json:"domain"`
-	Revert            bool   `json:"revert"` // true = revert mode
-	DisableXMLRPC     bool   `json:"disable_xmlrpc"`
-	HideWPVersion     bool   `json:"hide_wp_version"`
-	SecureFilePerms   bool   `json:"secure_file_perms"`
-	SecurityHeaders   bool   `json:"security_headers"`
-	DisableFileEditor bool   `json:"disable_file_editor"`
+	Domain              string `json:"domain"`
+	Revert              bool   `json:"revert"` // true = revert mode
+	DisableXMLRPC       bool   `json:"disable_xmlrpc"`
+	HideWPVersion       bool   `json:"hide_wp_version"`
+	SecureFilePerms     bool   `json:"secure_file_perms"`
+	SecurityHeaders     bool   `json:"security_headers"`
+	DisableFileEditor   bool   `json:"disable_file_editor"`
+	LimitLoginAttempts  bool   `json:"limit_login_attempts"`
 }
 
 // ==================== Batch 6: WordPress Advanced Operations ====================

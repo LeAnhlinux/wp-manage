@@ -375,7 +375,7 @@ export interface StagingSite {
   id: number
   production_id: number
   staging_site_id: number
-  status: 'creating' | 'active' | 'pushing' | 'deleted'
+  status: 'creating' | 'active' | 'pushing' | 'deleted' | 'error'
   created_at: string
   updated_at: string
   production?: Site
@@ -887,6 +887,7 @@ export interface HardenWordPressRequest {
   secure_file_perms: boolean
   security_headers: boolean
   disable_file_editor: boolean
+  limit_login_attempts: boolean
 }
 
 // ==================== Batch 5: Monitoring & Alerts ====================

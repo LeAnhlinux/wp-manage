@@ -96,7 +96,7 @@ func (s *SiteService) List(userID uint64, role string, serverID uint64, page, pe
 	var sites []models.Site
 	var total int64
 
-	query := s.db.Model(&models.Site{})
+	query := s.db.Model(&models.Site{}).Where("status != ?", "deleted")
 	if serverID > 0 {
 		query = query.Where("server_id = ?", serverID)
 	}
@@ -167,7 +167,7 @@ func (s *SiteService) UpdatePHP(id uint64, version string) error {
 
 func (s *SiteService) GetSitesByServer(serverID uint64) ([]models.Site, error) {
 	var sites []models.Site
-	err := s.db.Where("server_id = ?", serverID).Find(&sites).Error
+	err := s.db.Where("server_id = ? AND status != ?", serverID, "deleted").Find(&sites).Error
 	return sites, err
 }
 

@@ -34,13 +34,14 @@ func (s *HardeningService) hardenOrRevert(siteID uint64, req models.HardenWordPr
 	}
 
 	taskData, _ := json.Marshal(models.AgentHardenTask{
-		Domain:            site.Domain,
-		Revert:            revert,
-		DisableXMLRPC:     req.DisableXMLRPC,
-		HideWPVersion:     req.HideWPVersion,
-		SecureFilePerms:   req.SecureFilePerms,
-		SecurityHeaders:   req.SecurityHeaders,
-		DisableFileEditor: req.DisableFileEditor,
+		Domain:             site.Domain,
+		Revert:             revert,
+		DisableXMLRPC:      req.DisableXMLRPC,
+		HideWPVersion:      req.HideWPVersion,
+		SecureFilePerms:    req.SecureFilePerms,
+		SecurityHeaders:    req.SecurityHeaders,
+		DisableFileEditor:  req.DisableFileEditor,
+		LimitLoginAttempts: req.LimitLoginAttempts,
 	})
 
 	task := models.TaskQueue{

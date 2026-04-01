@@ -25,7 +25,12 @@ func (h *WordPressHandler) CreateStaging(c *fiber.Ctx) error {
 		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "invalid site ID"})
 	}
 
-	staging, err := h.svc.CreateStaging(siteID)
+	var req struct {
+		StagingDomain string `json:"staging_domain"`
+	}
+	c.BodyParser(&req) // ignore parse error; domain is optional
+
+	staging, err := h.svc.CreateStaging(siteID, req.StagingDomain)
 	if err != nil {
 		return c.Status(400).JSON(models.APIResponse{Success: false, Error: err.Error()})
 	}

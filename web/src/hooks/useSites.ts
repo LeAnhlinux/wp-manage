@@ -152,7 +152,7 @@ export function useUploadSource() {
       return new Promise<APIResponse<{ domain: string; file_size: number }>>((resolve, reject) => {
         const formData = new FormData()
         formData.append('file', file)
-        const token = localStorage.getItem('token')
+        const token = sessionStorage.getItem('token')
         const xhr = new XMLHttpRequest()
         xhr.open('POST', `/api/v1/sites/${siteId}/upload-source`)
         if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
@@ -183,7 +183,7 @@ export function useImportDB() {
       return new Promise<APIResponse<{ domain: string; db_name: string; file_size: number }>>((resolve, reject) => {
         const formData = new FormData()
         formData.append('file', file)
-        const token = localStorage.getItem('token')
+        const token = sessionStorage.getItem('token')
         const url = oldDomain?.trim()
           ? `/api/v1/sites/${siteId}/import-db?old_domain=${encodeURIComponent(oldDomain.trim())}`
           : `/api/v1/sites/${siteId}/import-db`
