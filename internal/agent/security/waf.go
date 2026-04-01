@@ -120,9 +120,10 @@ func buildModSecConfig(task models.AgentWAFTask) string {
 		sb.WriteString("\n")
 	}
 
-	// Include OWASP CRS — try known install paths in priority order
+	// Include OWASP CRS — setup và rules PHẢI cùng base dir
+	// vì rules/*.conf reference "../crs-setup.conf" relative đến vị trí của chúng
 	crsCandidates := []struct{ setup, rules string }{
-		{"/etc/modsecurity/crs/crs-setup.conf", "/usr/share/modsecurity-crs/rules"},
+		{"/etc/modsecurity/crs/crs-setup.conf", "/etc/modsecurity/crs/rules"},
 		{"/usr/share/modsecurity-crs/crs-setup.conf", "/usr/share/modsecurity-crs/rules"},
 		{"/usr/local/owasp-modsecurity-crs/crs-setup.conf", "/usr/local/owasp-modsecurity-crs/rules"},
 	}
