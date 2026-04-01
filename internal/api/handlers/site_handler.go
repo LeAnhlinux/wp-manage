@@ -66,24 +66,20 @@ func (h *SiteHandler) List(c *fiber.Ctx) error {
 	userID := c.Locals("user_id").(uint64)
 	role, _ := c.Locals("role").(string)
 	serverID, _ := strconv.ParseUint(c.Query("server_id", "0"), 10, 64)
-	page, _ := strconv.Atoi(c.Query("page", "1"))
-	perPage, _ := strconv.Atoi(c.Query("per_page", "20"))
+	pg := parsePage(c)
 
-	sites, total, err := h.svc.List(userID, role, serverID, page, perPage)
+	sites, total, err := h.svc.List(userID, role, serverID, pg.Page, pg.PerPage)
 	if err != nil {
 		return c.Status(500).JSON(models.APIResponse{Error: "Failed to fetch sites"})
 	}
 
-	totalPages := int(total) / perPage
-	if int(total)%perPage > 0 {
-		totalPages++
-	}
+	totalPages := calcTotalPages(total, pg.PerPage)
 
 	return c.JSON(models.PaginatedResponse{
 		Success: true,
 		Data:    sites,
 		Meta: models.PaginationMeta{
-			Page: page, PerPage: perPage, Total: total, TotalPages: totalPages,
+			Page: pg.Page, PerPage: pg.PerPage, Total: total, TotalPages: totalPages,
 		},
 	})
 }

@@ -40,24 +40,20 @@ func (h *BackupHandler) Create(c *fiber.Ctx) error {
 
 func (h *BackupHandler) ListBySite(c *fiber.Ctx) error {
 	siteID, _ := strconv.ParseUint(c.Params("siteId"), 10, 64)
-	page, _ := strconv.Atoi(c.Query("page", "1"))
-	perPage, _ := strconv.Atoi(c.Query("per_page", "20"))
+	pg := parsePage(c)
 
-	backups, total, err := h.svc.List(siteID, page, perPage)
+	backups, total, err := h.svc.List(siteID, pg.Page, pg.PerPage)
 	if err != nil {
 		return c.Status(500).JSON(models.APIResponse{Error: "Failed to fetch backups"})
 	}
 
-	totalPages := int(total) / perPage
-	if int(total)%perPage > 0 {
-		totalPages++
-	}
+	totalPages := calcTotalPages(total, pg.PerPage)
 
 	return c.JSON(models.PaginatedResponse{
 		Success: true,
 		Data:    backups,
 		Meta: models.PaginationMeta{
-			Page: page, PerPage: perPage, Total: total, TotalPages: totalPages,
+			Page: pg.Page, PerPage: pg.PerPage, Total: total, TotalPages: totalPages,
 		},
 	})
 }
@@ -65,24 +61,20 @@ func (h *BackupHandler) ListBySite(c *fiber.Ctx) error {
 func (h *BackupHandler) ListAll(c *fiber.Ctx) error {
 	userID := c.Locals("user_id").(uint64)
 	role, _ := c.Locals("role").(string)
-	page, _ := strconv.Atoi(c.Query("page", "1"))
-	perPage, _ := strconv.Atoi(c.Query("per_page", "20"))
+	pg := parsePage(c)
 
-	backups, total, err := h.svc.ListAll(userID, role, page, perPage)
+	backups, total, err := h.svc.ListAll(userID, role, pg.Page, pg.PerPage)
 	if err != nil {
 		return c.Status(500).JSON(models.APIResponse{Error: "Failed to fetch backups"})
 	}
 
-	totalPages := int(total) / perPage
-	if int(total)%perPage > 0 {
-		totalPages++
-	}
+	totalPages := calcTotalPages(total, pg.PerPage)
 
 	return c.JSON(models.PaginatedResponse{
 		Success: true,
 		Data:    backups,
 		Meta: models.PaginationMeta{
-			Page: page, PerPage: perPage, Total: total, TotalPages: totalPages,
+			Page: pg.Page, PerPage: pg.PerPage, Total: total, TotalPages: totalPages,
 		},
 	})
 }
@@ -145,24 +137,20 @@ func (h *BackupHandler) RestoreByID(c *fiber.Ctx) error {
 // ListByServer returns all backups for every site on a server, including orphaned ones.
 func (h *BackupHandler) ListByServer(c *fiber.Ctx) error {
 	serverID, _ := strconv.ParseUint(c.Params("id"), 10, 64)
-	page, _ := strconv.Atoi(c.Query("page", "1"))
-	perPage, _ := strconv.Atoi(c.Query("per_page", "30"))
+	pg := parsePage(c, 30)
 
-	backups, total, err := h.svc.ListByServer(serverID, page, perPage)
+	backups, total, err := h.svc.ListByServer(serverID, pg.Page, pg.PerPage)
 	if err != nil {
 		return c.Status(500).JSON(models.APIResponse{Error: "Failed to fetch server backups"})
 	}
 
-	totalPages := int(total) / perPage
-	if int(total)%perPage > 0 {
-		totalPages++
-	}
+	totalPages := calcTotalPages(total, pg.PerPage)
 
 	return c.JSON(models.PaginatedResponse{
 		Success: true,
 		Data:    backups,
 		Meta: models.PaginationMeta{
-			Page: page, PerPage: perPage, Total: total, TotalPages: totalPages,
+			Page: pg.Page, PerPage: pg.PerPage, Total: total, TotalPages: totalPages,
 		},
 	})
 }

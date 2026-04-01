@@ -68,46 +68,38 @@ func (h *SecurityHandler) GetScan(c *fiber.Ctx) error {
 
 func (h *SecurityHandler) ListSiteScans(c *fiber.Ctx) error {
 	siteID, _ := strconv.ParseUint(c.Params("siteId"), 10, 64)
-	page, _ := strconv.Atoi(c.Query("page", "1"))
-	perPage, _ := strconv.Atoi(c.Query("per_page", "20"))
+	pg := parsePage(c)
 
-	scans, total, err := h.svc.ListScans(siteID, page, perPage)
+	scans, total, err := h.svc.ListScans(siteID, pg.Page, pg.PerPage)
 	if err != nil {
 		return c.Status(500).JSON(models.APIResponse{Error: "Failed to fetch scans"})
 	}
 
-	totalPages := int(total) / perPage
-	if int(total)%perPage > 0 {
-		totalPages++
-	}
+	totalPages := calcTotalPages(total, pg.PerPage)
 
 	return c.JSON(models.PaginatedResponse{
 		Success: true,
 		Data:    scans,
-		Meta:    models.PaginationMeta{Page: page, PerPage: perPage, Total: total, TotalPages: totalPages},
+		Meta:    models.PaginationMeta{Page: pg.Page, PerPage: pg.PerPage, Total: total, TotalPages: totalPages},
 	})
 }
 
 func (h *SecurityHandler) ListAllScans(c *fiber.Ctx) error {
 	userID := c.Locals("user_id").(uint64)
 	role, _ := c.Locals("role").(string)
-	page, _ := strconv.Atoi(c.Query("page", "1"))
-	perPage, _ := strconv.Atoi(c.Query("per_page", "20"))
+	pg := parsePage(c)
 
-	scans, total, err := h.svc.ListAllScans(userID, role, page, perPage)
+	scans, total, err := h.svc.ListAllScans(userID, role, pg.Page, pg.PerPage)
 	if err != nil {
 		return c.Status(500).JSON(models.APIResponse{Error: "Failed to fetch scans"})
 	}
 
-	totalPages := int(total) / perPage
-	if int(total)%perPage > 0 {
-		totalPages++
-	}
+	totalPages := calcTotalPages(total, pg.PerPage)
 
 	return c.JSON(models.PaginatedResponse{
 		Success: true,
 		Data:    scans,
-		Meta:    models.PaginationMeta{Page: page, PerPage: perPage, Total: total, TotalPages: totalPages},
+		Meta:    models.PaginationMeta{Page: pg.Page, PerPage: pg.PerPage, Total: total, TotalPages: totalPages},
 	})
 }
 

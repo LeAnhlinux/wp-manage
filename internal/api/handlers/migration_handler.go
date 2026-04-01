@@ -41,24 +41,20 @@ func (h *MigrationHandler) Start(c *fiber.Ctx) error {
 func (h *MigrationHandler) List(c *fiber.Ctx) error {
 	userID := c.Locals("user_id").(uint64)
 	role, _ := c.Locals("role").(string)
-	page, _ := strconv.Atoi(c.Query("page", "1"))
-	perPage, _ := strconv.Atoi(c.Query("per_page", "20"))
+	pg := parsePage(c)
 
-	migrations, total, err := h.svc.List(userID, role, page, perPage)
+	migrations, total, err := h.svc.List(userID, role, pg.Page, pg.PerPage)
 	if err != nil {
 		return c.Status(500).JSON(models.APIResponse{Error: "Failed to fetch migrations"})
 	}
 
-	totalPages := int(total) / perPage
-	if int(total)%perPage > 0 {
-		totalPages++
-	}
+	totalPages := calcTotalPages(total, pg.PerPage)
 
 	return c.JSON(models.PaginatedResponse{
 		Success: true,
 		Data:    migrations,
 		Meta: models.PaginationMeta{
-			Page: page, PerPage: perPage, Total: total, TotalPages: totalPages,
+			Page: pg.Page, PerPage: pg.PerPage, Total: total, TotalPages: totalPages,
 		},
 	})
 }

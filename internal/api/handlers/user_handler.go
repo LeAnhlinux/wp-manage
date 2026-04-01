@@ -41,24 +41,20 @@ func (h *UserHandler) Create(c *fiber.Ctx) error {
 }
 
 func (h *UserHandler) List(c *fiber.Ctx) error {
-	page, _ := strconv.Atoi(c.Query("page", "1"))
-	perPage, _ := strconv.Atoi(c.Query("per_page", "20"))
+	pg := parsePage(c)
 
-	users, total, err := h.svc.List(page, perPage)
+	users, total, err := h.svc.List(pg.Page, pg.PerPage)
 	if err != nil {
 		return c.Status(500).JSON(models.APIResponse{Error: "Failed to fetch users"})
 	}
 
-	totalPages := int(total) / perPage
-	if int(total)%perPage > 0 {
-		totalPages++
-	}
+	totalPages := calcTotalPages(total, pg.PerPage)
 
 	return c.JSON(models.PaginatedResponse{
 		Success: true,
 		Data:    users,
 		Meta: models.PaginationMeta{
-			Page: page, PerPage: perPage, Total: total, TotalPages: totalPages,
+			Page: pg.Page, PerPage: pg.PerPage, Total: total, TotalPages: totalPages,
 		},
 	})
 }

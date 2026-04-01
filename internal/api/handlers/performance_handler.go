@@ -45,31 +45,24 @@ func (h *PerformanceHandler) GetMetrics(c *fiber.Ctx) error {
 
 	deviceType := c.Query("device_type")
 	days, _ := strconv.Atoi(c.Query("days", "30"))
-	page, _ := strconv.Atoi(c.Query("page", "1"))
-	perPage, _ := strconv.Atoi(c.Query("per_page", "50"))
-	if page < 1 {
-		page = 1
-	}
-	if perPage < 1 || perPage > 100 {
-		perPage = 50
+	pg := parsePage(c, 50)
+	if pg.PerPage > 100 {
+		pg.PerPage = 50
 	}
 
-	metrics, total, err := h.svc.GetMetrics(siteID, deviceType, days, page, perPage)
+	metrics, total, err := h.svc.GetMetrics(siteID, deviceType, days, pg.Page, pg.PerPage)
 	if err != nil {
 		return c.Status(500).JSON(models.APIResponse{Success: false, Error: err.Error()})
 	}
 
-	totalPages := int(total) / perPage
-	if int(total)%perPage > 0 {
-		totalPages++
-	}
+	totalPages := calcTotalPages(total, pg.PerPage)
 
 	return c.JSON(models.PaginatedResponse{
 		Success: true,
 		Data:    metrics,
 		Meta: models.PaginationMeta{
-			Page:       page,
-			PerPage:    perPage,
+			Page:       pg.Page,
+			PerPage:    pg.PerPage,
 			Total:      total,
 			TotalPages: totalPages,
 		},

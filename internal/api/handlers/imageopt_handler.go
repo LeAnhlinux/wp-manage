@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"math"
 	"strconv"
 
 	"github.com/gofiber/fiber/v2"
@@ -163,22 +162,21 @@ func (h *ImageOptHandler) GetResults(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "Invalid site ID")
 	}
 
-	page, _ := strconv.Atoi(c.Query("page", "1"))
-	perPage, _ := strconv.Atoi(c.Query("per_page", "20"))
-	if page < 1 { page = 1 }
-	if perPage < 1 { perPage = 20 }
+	pg := parsePage(c)
+	if pg.Page < 1 { pg.Page = 1 }
+	if pg.PerPage < 1 { pg.PerPage = 20 }
 
-	results, total, err := h.svc.GetResults(siteID, page, perPage)
+	results, total, err := h.svc.GetResults(siteID, pg.Page, pg.PerPage)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 	}
 
-	totalPages := int(math.Ceil(float64(total) / float64(perPage)))
+	totalPages := calcTotalPages(total, pg.PerPage)
 	return c.JSON(models.PaginatedResponse{
 		Success: true,
 		Data:    results,
 		Meta: models.PaginationMeta{
-			Page: page, PerPage: perPage, Total: total, TotalPages: totalPages,
+			Page: pg.Page, PerPage: pg.PerPage, Total: total, TotalPages: totalPages,
 		},
 	})
 }

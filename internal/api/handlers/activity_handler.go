@@ -20,8 +20,7 @@ func NewActivityHandler(svc *services.ActivityService) *ActivityHandler {
 }
 
 func (h *ActivityHandler) List(c *fiber.Ctx) error {
-	page, _ := strconv.Atoi(c.Query("page", "1"))
-	perPage, _ := strconv.Atoi(c.Query("per_page", "20"))
+	pg := parsePage(c)
 
 	var userID *uint64
 	if v := c.Query("user_id"); v != "" {
@@ -55,21 +54,18 @@ func (h *ActivityHandler) List(c *fiber.Ctx) error {
 		}
 	}
 
-	logs, total, err := h.svc.List(userID, serverID, siteID, action, from, to, page, perPage)
+	logs, total, err := h.svc.List(userID, serverID, siteID, action, from, to, pg.Page, pg.PerPage)
 	if err != nil {
 		return c.Status(500).JSON(models.APIResponse{Error: "Failed to fetch activity logs"})
 	}
 
-	totalPages := int(total) / perPage
-	if int(total)%perPage > 0 {
-		totalPages++
-	}
+	totalPages := calcTotalPages(total, pg.PerPage)
 
 	return c.JSON(models.PaginatedResponse{
 		Success: true,
 		Data:    logs,
 		Meta: models.PaginationMeta{
-			Page: page, PerPage: perPage, Total: total, TotalPages: totalPages,
+			Page: pg.Page, PerPage: pg.PerPage, Total: total, TotalPages: totalPages,
 		},
 	})
 }

@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"math"
 	"strconv"
 
 	"github.com/gofiber/fiber/v2"
@@ -41,25 +40,18 @@ func (h *TeamHandler) List(c *fiber.Ctx) error {
 	userID, _ := c.Locals("user_id").(uint64)
 	role, _ := c.Locals("role").(string)
 
-	page, _ := strconv.Atoi(c.Query("page", "1"))
-	perPage, _ := strconv.Atoi(c.Query("per_page", "20"))
-	if page < 1 {
-		page = 1
-	}
-	if perPage < 1 {
-		perPage = 20
-	}
+	pg := parsePage(c)
 
-	teams, total, err := h.svc.List(userID, role, page, perPage)
+	teams, total, err := h.svc.List(userID, role, pg.Page, pg.PerPage)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 	}
 
-	totalPages := int(math.Ceil(float64(total) / float64(perPage)))
+	totalPages := calcTotalPages(total, pg.PerPage)
 	return c.JSON(models.PaginatedResponse{
 		Success: true,
 		Data:    teams,
-		Meta:    models.PaginationMeta{Page: page, PerPage: perPage, Total: total, TotalPages: totalPages},
+		Meta:    models.PaginationMeta{Page: pg.Page, PerPage: pg.PerPage, Total: total, TotalPages: totalPages},
 	})
 }
 

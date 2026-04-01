@@ -189,31 +189,27 @@ func (h *WordPressHandler) GetUpdateLogs(c *fiber.Ctx) error {
 		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "invalid site ID"})
 	}
 
-	page, _ := strconv.Atoi(c.Query("page", "1"))
-	perPage, _ := strconv.Atoi(c.Query("per_page", "20"))
-	if page < 1 {
-		page = 1
+	pg := parsePage(c)
+	if pg.Page < 1 {
+		pg.Page = 1
 	}
-	if perPage < 1 || perPage > 100 {
-		perPage = 20
+	if pg.PerPage < 1 || pg.PerPage > 100 {
+		pg.PerPage = 20
 	}
 
-	logs, total, err := h.svc.GetUpdateLogs(siteID, page, perPage)
+	logs, total, err := h.svc.GetUpdateLogs(siteID, pg.Page, pg.PerPage)
 	if err != nil {
 		return c.Status(500).JSON(models.APIResponse{Success: false, Error: err.Error()})
 	}
 
-	totalPages := int(total) / perPage
-	if int(total)%perPage > 0 {
-		totalPages++
-	}
+	totalPages := calcTotalPages(total, pg.PerPage)
 
 	return c.JSON(models.PaginatedResponse{
 		Success: true,
 		Data:    logs,
 		Meta: models.PaginationMeta{
-			Page:       page,
-			PerPage:    perPage,
+			Page:       pg.Page,
+			PerPage:    pg.PerPage,
 			Total:      total,
 			TotalPages: totalPages,
 		},
