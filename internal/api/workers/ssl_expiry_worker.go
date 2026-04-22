@@ -192,12 +192,6 @@ func (w *SSLExpiryWorker) sendNotification(message string) {
 		}
 	}
 
-	if cfg.SlackWebhook != "" {
-		if err := notify.SendSlack(cfg.SlackWebhook, message); err != nil {
-			slog.Error("SSL expiry: slack failed", "error", err)
-		}
-	}
-
 	if cfg.SMTPFrom != "" && cfg.SMTPHost != "" {
 		smtpCfg := notify.SMTPConfig{
 			Host: cfg.SMTPHost, Port: cfg.SMTPPort,

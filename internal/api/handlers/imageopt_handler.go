@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"strconv"
 
 	"github.com/gofiber/fiber/v2"
@@ -153,6 +154,45 @@ func (h *ImageOptHandler) OptimizeComplete(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(models.APIResponse{Success: true, Message: "Updated"})
+}
+
+// GetOriginalsStats returns count and size of .wpmanage-orig backup files on the agent
+func (h *ImageOptHandler) GetOriginalsStats(c *fiber.Ctx) error {
+	siteID, err := strconv.ParseUint(c.Params("siteId"), 10, 64)
+	if err != nil {
+		return c.Status(400).JSON(models.APIResponse{Error: "Invalid site ID"})
+	}
+	stats, err := h.svc.GetOriginalsStats(siteID)
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Error: err.Error()})
+	}
+	return c.JSON(models.APIResponse{Success: true, Data: stats})
+}
+
+// RevertImages restores all backed-up originals and removes optimization markers
+func (h *ImageOptHandler) RevertImages(c *fiber.Ctx) error {
+	siteID, err := strconv.ParseUint(c.Params("siteId"), 10, 64)
+	if err != nil {
+		return c.Status(400).JSON(models.APIResponse{Error: "Invalid site ID"})
+	}
+	res, err := h.svc.RevertImages(siteID)
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Error: err.Error()})
+	}
+	return c.JSON(models.APIResponse{Success: true, Data: res, Message: fmt.Sprintf("Reverted %d images to originals", res.Count)})
+}
+
+// DeleteOriginals removes all .wpmanage-orig backup files to free disk space
+func (h *ImageOptHandler) DeleteOriginals(c *fiber.Ctx) error {
+	siteID, err := strconv.ParseUint(c.Params("siteId"), 10, 64)
+	if err != nil {
+		return c.Status(400).JSON(models.APIResponse{Error: "Invalid site ID"})
+	}
+	res, err := h.svc.DeleteOriginals(siteID)
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Error: err.Error()})
+	}
+	return c.JSON(models.APIResponse{Success: true, Data: res, Message: fmt.Sprintf("Deleted %d original files, freed %d bytes", res.Count, res.SizeBytes)})
 }
 
 // GetResults returns optimization history

@@ -88,12 +88,19 @@ func OptimizeImages(task models.AgentImageOptTask, progressFn func(models.AgentI
 		ext := strings.ToLower(filepath.Ext(imgPath))
 		var optimized bool
 
+		// Backup original before optimizing (skip if backup already exists)
+		origBackup := imgPath + ".wpmanage-orig"
+		if _, err := os.Stat(origBackup); os.IsNotExist(err) {
+			copyFile(imgPath, origBackup)
+		}
+
 		switch ext {
 		case ".jpg", ".jpeg":
 			// Optimize JPEG with jpegoptim
 			cmd := exec.Command("jpegoptim", fmt.Sprintf("--max=%d", task.Quality), "--strip-all", imgPath)
 			if err := cmd.Run(); err != nil {
 				slog.Debug("jpegoptim failed", "file", imgPath, "error", err)
+				os.Remove(origBackup) // cleanup backup on failure
 				result.ErrorCount++
 				continue
 			}
@@ -104,6 +111,7 @@ func OptimizeImages(task models.AgentImageOptTask, progressFn func(models.AgentI
 			cmd := exec.Command("optipng", "-o2", "-quiet", imgPath)
 			if err := cmd.Run(); err != nil {
 				slog.Debug("optipng failed", "file", imgPath, "error", err)
+				os.Remove(origBackup) // cleanup backup on failure
 				result.ErrorCount++
 				continue
 			}
@@ -121,6 +129,7 @@ func OptimizeImages(task models.AgentImageOptTask, progressFn func(models.AgentI
 			}
 
 			siteUser := "wp_" + strings.ReplaceAll(task.Domain, ".", "_")
+			exec.Command("chown", siteUser+":"+siteUser, origBackup).Run()
 
 			// Generate WebP version
 			if task.WebPEnabled {
@@ -187,6 +196,82 @@ func SendProgressUpdate(apiURL, apiKey string, result models.AgentImageOptResult
 	}
 	json.NewDecoder(resp.Body).Decode(&reply)
 	return reply.Cancel
+}
+
+// copyFile copies src to dst, preserving content
+func copyFile(src, dst string) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dst, data, info.Mode())
+}
+
+// GetOriginalsStats returns count and total size of .wpmanage-orig backup files
+func GetOriginalsStats(domain string) (count int, sizeBytes int64) {
+	uploadsDir := fmt.Sprintf("/var/www/%s/public/wp-content/uploads", domain)
+	filepath.Walk(uploadsDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		if strings.HasSuffix(path, ".wpmanage-orig") {
+			count++
+			sizeBytes += info.Size()
+		}
+		return nil
+	})
+	return
+}
+
+// RevertImages restores all .wpmanage-orig backups to the original filenames,
+// removes the .wpmanage-optimized marker and the .webp sidecar so the image
+// can be re-optimized in the future.  Returns the number of files reverted.
+func RevertImages(domain string) (reverted int, errMsg string) {
+	uploadsDir := fmt.Sprintf("/var/www/%s/public/wp-content/uploads", domain)
+	siteUser := "wp_" + strings.ReplaceAll(domain, ".", "_")
+
+	filepath.Walk(uploadsDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		if !strings.HasSuffix(path, ".wpmanage-orig") {
+			return nil
+		}
+		origPath := strings.TrimSuffix(path, ".wpmanage-orig")
+		if copyErr := copyFile(path, origPath); copyErr != nil {
+			slog.Warn("Failed to revert image", "file", origPath, "error", copyErr)
+			return nil
+		}
+		exec.Command("chown", siteUser+":"+siteUser, origPath).Run()
+		os.Remove(path)                                // remove .wpmanage-orig
+		os.Remove(origPath + ".wpmanage-optimized")    // remove marker so it can be re-optimized
+		os.Remove(origPath + ".webp")                  // remove WebP sidecar
+		reverted++
+		return nil
+	})
+	return
+}
+
+// DeleteOriginals removes all .wpmanage-orig backup files to free disk space.
+// Returns the number of files deleted and total bytes freed.
+func DeleteOriginals(domain string) (deleted int, sizeFreed int64) {
+	uploadsDir := fmt.Sprintf("/var/www/%s/public/wp-content/uploads", domain)
+	filepath.Walk(uploadsDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		if strings.HasSuffix(path, ".wpmanage-orig") {
+			sizeFreed += info.Size()
+			os.Remove(path)
+			deleted++
+		}
+		return nil
+	})
+	return
 }
 
 // ensureOptTools ensures optimization tools are installed

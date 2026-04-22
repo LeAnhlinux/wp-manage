@@ -157,11 +157,19 @@ export function useDashboardMetrics(initialServers?: InitialServer[]) {
     return initial
   })
 
-  // Re-sync if REST data arrives after initial render (e.g. slow network)
+  // Re-sync whenever the REST server list changes:
+  // • Add new active servers that aren't in metrics yet
+  // • Remove entries for servers that have been deleted from the panel
   useEffect(() => {
-    if (!initialServers?.length) return
+    if (!initialServers) return
     setMetrics(prev => {
-      const next = { ...prev }
+      const validIds = new Set(initialServers.filter(s => s.status === 'active').map(s => s.id))
+      const next: Record<number, DashboardMetric> = {}
+      // Keep only still-valid entries
+      for (const [idStr, m] of Object.entries(prev)) {
+        if (validIds.has(Number(idStr))) next[Number(idStr)] = m
+      }
+      // Add any newly active servers
       for (const s of initialServers) {
         if (s.status === 'active' && !next[s.id]) {
           next[s.id] = {
@@ -181,15 +189,20 @@ export function useDashboardMetrics(initialServers?: InitialServer[]) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialServers?.length])
 
+  // Build an allow-set of known server IDs so WebSocket pushes from stale/
+  // removed agents (still running on the VPS) are silently dropped.
+  const knownServerIds = new Set(initialServers?.map(s => s.id) ?? [])
+
   const handleMessage = useCallback((data: unknown) => {
     const d = data as { server_id: number; server_name: string; ip_address: string; cpu_usage: number; ram_usage: number; disk_usage: number; uptime: number; status: string }
-    if (d?.server_id) {
+    if (d?.server_id && knownServerIds.has(d.server_id)) {
       setMetrics(prev => ({
         ...prev,
         [d.server_id]: d,
       }))
     }
-  }, [])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialServers?.length])
 
   const { connected } = useWebSocket(['dashboard:metrics'], handleMessage)
 

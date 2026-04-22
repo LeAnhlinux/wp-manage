@@ -197,6 +197,27 @@ func (s *SiteService) UpdateWPVersion(id uint64, version string) error {
 	return s.db.Model(&models.Site{}).Where("id = ?", id).Update("wp_version", version).Error
 }
 
+// QueueGetWPVersionIfNeeded queues a get_wp_version task for the site if no such
+// task is already pending/processing. Called on site access when wp_version is empty.
+func (s *SiteService) QueueGetWPVersionIfNeeded(site *models.Site) {
+	var count int64
+	s.db.Model(&models.TaskQueue{}).
+		Where("server_id = ? AND site_id = ? AND task_type = ? AND status IN ('pending','processing')",
+			site.ServerID, site.ID, "get_wp_version").
+		Count(&count)
+	if count > 0 {
+		return // already queued
+	}
+	task := models.TaskQueue{
+		ServerID: site.ServerID,
+		SiteID:   site.ID,
+		TaskType: "get_wp_version",
+		Data:     fmt.Sprintf(`{"site_id":%d,"domain":"%s","php_version":"%s"}`, site.ID, site.Domain, site.PHPVersion),
+		Status:   "pending",
+	}
+	s.db.Create(&task)
+}
+
 func (s *SiteService) UpdateAutologinSecret(id uint64, secret string) error {
 	return s.db.Model(&models.Site{}).Where("id = ?", id).Update("autologin_secret", secret).Error
 }

@@ -92,6 +92,10 @@ func (h *ServerHandler) Delete(c *fiber.Ctx) error {
 	if err := h.svc.Delete(id); err != nil {
 		return c.Status(400).JSON(models.APIResponse{Error: err.Error()})
 	}
+	// Purge stale cached metrics so deleted server is not pushed to new WS clients
+	if h.hub != nil {
+		h.hub.EvictServerMetrics(id)
+	}
 	return c.JSON(models.APIResponse{Success: true, Message: "Server deleted"})
 }
 

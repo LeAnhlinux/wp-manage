@@ -958,11 +958,15 @@ export interface NotificationConfig {
   id: number
   telegram_token: string
   telegram_chat: string
-  slack_webhook: string
   smtp_host: string
   smtp_port: number
   smtp_user: string
   smtp_from: string
+}
+
+export interface IntegrationConfig {
+  id: number
+  google_pagespeed_key: string
 }
 
 // ==================== Batch 6: WP-CLI, Cache, Import, DNS ====================

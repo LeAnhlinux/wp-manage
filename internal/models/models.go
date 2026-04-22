@@ -42,7 +42,7 @@ type Site struct {
 	ID           uint64    `json:"id" gorm:"primaryKey;autoIncrement"`
 	ServerID     uint64    `json:"server_id" gorm:"index;not null"`
 	Domain       string    `json:"domain" gorm:"uniqueIndex;size:255;not null"`
-	PHPVersion   string    `json:"php_version" gorm:"size:10;default:'8.2'"`
+	PHPVersion   string    `json:"php_version" gorm:"size:10;default:'8.3'"`
 	SSLEnabled   bool       `json:"ssl_enabled" gorm:"default:false"`
 	SSLExpiresAt *time.Time `json:"ssl_expires_at"`
 	ForceHTTPS   bool       `json:"force_https" gorm:"column:force_https;default:false"`
@@ -560,6 +560,14 @@ type NotificationConfig struct {
 	UpdatedAt     time.Time `json:"updated_at"`
 }
 
+// IntegrationConfig stores third-party API keys and integration settings
+type IntegrationConfig struct {
+	ID                  uint64    `json:"id" gorm:"primaryKey;autoIncrement"`
+	GooglePageSpeedKey  string    `json:"google_pagespeed_key,omitempty" gorm:"size:255"`
+	CreatedAt           time.Time `json:"created_at"`
+	UpdatedAt           time.Time `json:"updated_at"`
+}
+
 // WPCLIHistory stores WP-CLI command execution history
 type WPCLIHistory struct {
 	ID        uint64    `json:"id" gorm:"primaryKey;autoIncrement"`
@@ -635,6 +643,8 @@ type PanelRelease struct {
 	Version      string    `json:"version" gorm:"uniqueIndex;size:50"`
 	DownloadURL  string    `json:"download_url" gorm:"size:500"`
 	Checksum     string    `json:"checksum" gorm:"size:64"`
+	WebURL       string    `json:"web_url" gorm:"size:500"`     // frontend archive URL
+	WebChecksum  string    `json:"web_checksum" gorm:"size:64"` // frontend archive SHA-256
 	ReleaseNotes string    `json:"release_notes" gorm:"type:text"`
 	FileSize     int64     `json:"file_size"`
 	CreatedAt    time.Time `json:"created_at"`

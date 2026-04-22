@@ -96,6 +96,26 @@ func (h *AlertHandler) UpdateNotificationConfig(c *fiber.Ctx) error {
 	return c.JSON(models.APIResponse{Success: true, Data: cfg})
 }
 
+func (h *AlertHandler) GetIntegrationConfig(c *fiber.Ctx) error {
+	cfg, err := h.svc.GetIntegrationConfig()
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Error: err.Error()})
+	}
+	return c.JSON(models.APIResponse{Success: true, Data: cfg})
+}
+
+func (h *AlertHandler) UpdateIntegrationConfig(c *fiber.Ctx) error {
+	var req models.UpdateIntegrationConfigRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(models.APIResponse{Error: "invalid request"})
+	}
+	cfg, err := h.svc.UpdateIntegrationConfig(req)
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Error: err.Error()})
+	}
+	return c.JSON(models.APIResponse{Success: true, Data: cfg})
+}
+
 func (h *AlertHandler) PHPFPMAutotune(c *fiber.Ctx) error {
 	serverID, _ := strconv.ParseUint(c.Params("id"), 10, 64)
 

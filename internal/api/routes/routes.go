@@ -353,6 +353,9 @@ func Setup(
 	siteImages.Post("/run", middleware.PermissionRequired("sites", "manage"), imageOptHandler.RunOptimization)
 	siteImages.Post("/cancel", middleware.PermissionRequired("sites", "manage"), imageOptHandler.CancelOptimization)
 	siteImages.Get("/results", imageOptHandler.GetResults)
+	siteImages.Get("/originals-stats", imageOptHandler.GetOriginalsStats)
+	siteImages.Post("/revert", middleware.PermissionRequired("sites", "manage"), imageOptHandler.RevertImages)
+	siteImages.Post("/delete-originals", middleware.PermissionRequired("sites", "manage"), imageOptHandler.DeleteOriginals)
 
 	// Multisite routes
 	siteMultisite := sites.Group("/:siteId/multisite")
@@ -533,6 +536,10 @@ func Setup(
 	notifications := protected.Group("/settings/notifications", middleware.PermissionRequired("settings", "manage"))
 	notifications.Get("/", alertHandler.GetNotificationConfig)
 	notifications.Put("/", alertHandler.UpdateNotificationConfig)
+
+	integrations := protected.Group("/settings/integrations", middleware.PermissionRequired("settings", "manage"))
+	integrations.Get("/", alertHandler.GetIntegrationConfig)
+	integrations.Put("/", alertHandler.UpdateIntegrationConfig)
 
 	// WP-CLI routes (site-scoped)
 	siteWPCLI := sites.Group("/:siteId/wpcli")

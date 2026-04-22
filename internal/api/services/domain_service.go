@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -199,15 +200,58 @@ func (s *DomainService) CheckDNSByServer(serverID uint64, domain string) (*model
 	return s.checkDNSByIP(server.IPAddress, domain), nil
 }
 
+// lookupHostPublic queries multiple public DNS servers (Google + Cloudflare) via UDP
+// to avoid local resolver cache or /etc/hosts interference.
+// lookupHostPublic queries multiple public DNS servers (Google + Cloudflare) via UDP
+// to avoid local resolver cache or /etc/hosts interference.
+func lookupHostPublic(domain string) []string {
+	publicDNS := []string{"8.8.8.8:53", "1.1.1.1:53", "8.8.4.4:53"}
+	seen := map[string]bool{}
+	var result []string
+
+	for _, ns := range publicDNS {
+		nsAddr := ns // capture for closure
+		r := &net.Resolver{
+			PreferGo: true,
+			Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+				return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "udp", nsAddr)
+			},
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		addrs, err := r.LookupHost(ctx, domain)
+		cancel()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			if ip := net.ParseIP(a); ip != nil {
+				if v4 := ip.To4(); v4 != nil {
+					a = v4.String()
+				}
+			}
+			if !seen[a] {
+				seen[a] = true
+				result = append(result, a)
+			}
+		}
+		if len(result) > 0 {
+			break // got results from first successful resolver
+		}
+	}
+	return result
+}
+
 // checkDNSByIP is the core DNS lookup logic shared by CheckDNS and CheckDNSByServer.
+// Uses public DNS resolvers (8.8.8.8, 1.1.1.1) to avoid local cache or /etc/hosts bias.
 func (s *DomainService) checkDNSByIP(serverIP, domain string) *models.DNSCheckResult {
 	res := &models.DNSCheckResult{
 		Domain:   domain,
 		ServerIP: serverIP,
 	}
-	addrs, err := net.LookupHost(domain)
-	if err != nil {
-		res.Message = fmt.Sprintf("DNS lookup failed: %s", err.Error())
+
+	addrs := lookupHostPublic(domain)
+	if len(addrs) == 0 {
+		res.Message = fmt.Sprintf("DNS lookup failed: không tìm thấy bản ghi A cho %s", domain)
 	} else {
 		res.ResolvedIPs = addrs
 		for _, a := range addrs {

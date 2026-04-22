@@ -48,9 +48,14 @@ func (s *PerformanceService) RunPageSpeed(siteID uint64, deviceType string) (*mo
 	apiURL := fmt.Sprintf("https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=%s&strategy=%s&category=performance&category=accessibility",
 		url.QueryEscape(siteURL), deviceType)
 
-	// Add API key if configured
-	if s.cfg.Google.PageSpeedAPIKey != "" {
-		apiURL += "&key=" + s.cfg.Google.PageSpeedAPIKey
+	// Use API key from DB first, fallback to env
+	apiKey := s.cfg.Google.PageSpeedAPIKey
+	var intCfg models.IntegrationConfig
+	if err := s.db.First(&intCfg).Error; err == nil && intCfg.GooglePageSpeedKey != "" {
+		apiKey = intCfg.GooglePageSpeedKey
+	}
+	if apiKey != "" {
+		apiURL += "&key=" + apiKey
 	}
 
 	// Call Google PageSpeed API with 90s timeout

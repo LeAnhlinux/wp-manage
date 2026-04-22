@@ -1,10 +1,10 @@
-import { useState } from 'react'
+import React, { useState } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, Globe, Lock, LockOpen, ExternalLink,
   Code, Clock, Database, Settings,
   FolderOpen, LayoutDashboard, Layers, Download, HardDrive,
-  Network, ImageIcon, Zap, Archive, Shield, Key
+  Network, ImageIcon, Zap, Archive, Shield, Key, Gauge, ServerCrash
 } from 'lucide-react'
 import { useSite, useAutologin } from '@/hooks/useSites'
 import { usePermissions } from '@/hooks/usePermissions'
@@ -12,7 +12,7 @@ import { StatusBadge } from '@/components/ui/Badge'
 import { formatDate } from '@/lib/utils'
 import FileBrowser from '@/components/files/FileBrowser'
 
-import { StatCard, TabButton } from './site-tabs/shared'
+import { StatCard } from './site-tabs/shared'
 import { OverviewTab } from './site-tabs/OverviewTab'
 import { StagingPanel } from './site-tabs/StagingPanel'
 import { UpdatesPanel } from './site-tabs/UpdatesPanel'
@@ -146,123 +146,103 @@ export default function SiteDetailPage() {
           sub={site.ssl_expires_at ? `Expires: ${formatDate(site.ssl_expires_at)}` : undefined}
         />
         <StatCard icon={<Database size={20} />} label="Database" value={site.db_name || '-'} />
-        <StatCard icon={<Clock size={20} />} label="WP Version" value={site.wp_version || 'Updating...'} />
-      </div>
-
-      {/* Tabs */}
-      <div className="flex items-center gap-1 mb-6 border-b border-gray-200 overflow-x-auto">
-        <TabButton active={activeTab === 'overview'} onClick={() => setActiveTab('overview')}
-          icon={<LayoutDashboard size={16} />} label="Overview" />
-        <TabButton active={activeTab === 'files'} onClick={() => setActiveTab('files')}
-          icon={<FolderOpen size={16} />} label="Files" />
-        <TabButton active={activeTab === 'staging'} onClick={() => setActiveTab('staging')}
-          icon={<Layers size={16} />} label="Staging" />
-        <TabButton active={activeTab === 'updates'} onClick={() => setActiveTab('updates')}
-          icon={<Download size={16} />} label="Updates" />
-        <TabButton active={activeTab === 'database'} onClick={() => setActiveTab('database')}
-          icon={<HardDrive size={16} />} label="Database" />
-        <TabButton active={activeTab === 'performance'} onClick={() => setActiveTab('performance')}
-          icon={<Globe size={16} />} label="Performance" />
-        <TabButton active={activeTab === 'images'} onClick={() => setActiveTab('images')}
-          icon={<ImageIcon size={16} />} label="Images" />
-        <TabButton active={activeTab === 'multisite'} onClick={() => setActiveTab('multisite')}
-          icon={<Network size={16} />} label="Multisite" />
-        <TabButton active={activeTab === 'domains'} onClick={() => setActiveTab('domains')}
-          icon={<Globe size={16} />} label="Domains" />
-        <TabButton active={activeTab === 'redis'} onClick={() => setActiveTab('redis')}
-          icon={<Database size={16} />} label="Redis" />
-        <TabButton active={activeTab === 'cron'} onClick={() => setActiveTab('cron')}
-          icon={<Clock size={16} />} label="Cron Jobs" />
-        <TabButton active={activeTab === 'ssl'} onClick={() => setActiveTab('ssl')}
-          icon={<Lock size={16} />} label="SSL" />
-        <TabButton active={activeTab === 'wpcli'} onClick={() => setActiveTab('wpcli')}
-          icon={<Code size={16} />} label="WP-CLI" />
-        <TabButton active={activeTab === 'cache'} onClick={() => setActiveTab('cache')}
-          icon={<Zap size={16} />} label="Cache" />
-        <TabButton active={activeTab === 'sftp'} onClick={() => setActiveTab('sftp')}
-          icon={<Key size={16} />} label="SFTP" />
-        <TabButton active={activeTab === 'backup'} onClick={() => setActiveTab('backup')}
-          icon={<Archive size={16} />} label="Backups" />
-        <TabButton active={activeTab === 'security'} onClick={() => setActiveTab('security')}
-          icon={<Shield size={16} />} label="Security" />
-      </div>
-
-      {/* Tab Content */}
-      {activeTab === 'overview' && (
-        <OverviewTab
-          site={site}
-          onDeleted={() => navigate('/sites')}
-          onMessage={showMsg}
-          canManage={can('sites', 'manage')}
+        <StatCard
+          icon={<Clock size={20} />}
+          label="WP Version"
+          value={site.wp_version || ''}
+          sub={!site.wp_version ? 'Đang xác định...' : undefined}
         />
-      )}
+      </div>
 
-      {activeTab === 'files' && (
-        <FileBrowser siteId={site.id} />
-      )}
+      {/* Sidebar + Content layout */}
+      <div className="flex gap-6 items-start">
 
-      {activeTab === 'staging' && (
-        <StagingPanel siteId={site.id} canManage={can('sites', 'manage')} siteDomain={site.domain} />
-      )}
+        {/* Left sidebar nav */}
+        <nav className="w-48 flex-shrink-0 bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden sticky top-4">
+          {([
+            { group: 'Site', items: [
+              { id: 'overview', icon: <LayoutDashboard size={15} />, label: 'Overview' },
+              { id: 'files',    icon: <FolderOpen size={15} />,      label: 'Files' },
+            ]},
+            { group: 'Deploy', items: [
+              { id: 'staging', icon: <Layers size={15} />,  label: 'Staging' },
+              { id: 'updates', icon: <Download size={15} />, label: 'Updates' },
+              { id: 'backup',  icon: <Archive size={15} />,  label: 'Backups' },
+            ]},
+            { group: 'Config', items: [
+              { id: 'database', icon: <HardDrive size={15} />, label: 'Database' },
+              { id: 'domains',  icon: <Globe size={15} />,     label: 'Domains' },
+              { id: 'ssl',      icon: <Lock size={15} />,      label: 'SSL' },
+              { id: 'sftp',     icon: <Key size={15} />,       label: 'SFTP' },
+              { id: 'cron',     icon: <Clock size={15} />,     label: 'Cron Jobs' },
+            ]},
+            { group: 'Performance', items: [
+              { id: 'performance', icon: <Gauge size={15} />,      label: 'Performance' },
+              { id: 'cache',       icon: <Zap size={15} />,        label: 'Cache' },
+              { id: 'redis',       icon: <ServerCrash size={15} />, label: 'Redis' },
+              { id: 'images',      icon: <ImageIcon size={15} />,  label: 'Images' },
+            ]},
+            { group: 'Advanced', items: [
+              { id: 'multisite', icon: <Network size={15} />, label: 'Multisite' },
+              { id: 'wpcli',     icon: <Code size={15} />,    label: 'WP-CLI' },
+              { id: 'security',  icon: <Shield size={15} />,  label: 'Security' },
+            ]},
+          ] as { group: string; items: { id: TabId; icon: React.ReactNode; label: string }[] }[]).map(({ group, items }, gi) => (
+            <div key={group} className={gi > 0 ? 'border-t border-gray-100' : ''}>
+              <p className="px-3 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400">
+                {group}
+              </p>
+              {items.map(({ id, icon, label }) => (
+                <button
+                  key={id}
+                  onClick={() => setActiveTab(id)}
+                  className={`w-full flex items-center gap-2.5 px-3 py-2 text-sm transition-colors ${
+                    activeTab === id
+                      ? 'bg-blue-50 text-blue-700 font-medium'
+                      : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                  }`}
+                >
+                  <span className={activeTab === id ? 'text-blue-600' : 'text-gray-400'}>{icon}</span>
+                  {label}
+                  {activeTab === id && (
+                    <span className="ml-auto w-1 h-4 rounded-full bg-blue-600" />
+                  )}
+                </button>
+              ))}
+              {gi === 4 && <div className="pb-2" />}
+            </div>
+          ))}
+        </nav>
 
-      {activeTab === 'updates' && (
-        <UpdatesPanel siteId={site.id} canManage={can('sites', 'manage')} />
-      )}
-
-      {activeTab === 'database' && (
-        <DatabasePanel siteId={site.id} canManage={can('sites', 'manage')} />
-      )}
-
-      {activeTab === 'performance' && (
-        <PerformancePanel siteId={site.id} canManage={can('sites', 'manage')} />
-      )}
-
-      {activeTab === 'images' && (
-        <ImagesPanel siteId={site.id} canManage={can('sites', 'manage')} />
-      )}
-
-      {activeTab === 'multisite' && (
-        <MultisitePanel siteId={site.id} isMultisite={site.is_multisite} canManage={can('sites', 'manage')} />
-      )}
-
-      {activeTab === 'domains' && (
-        <DomainsPanel siteId={site.id} canManage={can('sites', 'manage')} />
-      )}
-
-      {activeTab === 'redis' && (
-        <RedisPanel siteId={site.id} canManage={can('sites', 'manage')} />
-      )}
-
-      {activeTab === 'cron' && (
-        <CronPanel siteId={site.id} />
-      )}
-
-      {activeTab === 'ssl' && (
-        <SSLPanel siteId={site.id} domain={site.domain} canManage={can('sites', 'manage')} />
-      )}
-
-      {activeTab === 'sftp' && (
-        <SFTPPanel siteId={site.id} canManage={can('sites', 'manage')} />
-      )}
-
-      {activeTab === 'backup' && (
-        <BackupPanel siteId={site.id} domain={site.domain} canManage={can('sites', 'manage')} />
-      )}
-
-      {activeTab === 'security' && (
-        <div className="space-y-6">
-          <WAFPanel siteId={site.id} canManage={can('sites', 'manage')} />
-          <SecurityPanel siteId={site.id} canManage={can('sites', 'manage')} />
+        {/* Right content */}
+        <div className="flex-1 min-w-0">
+          {activeTab === 'overview' && (
+            <OverviewTab site={site} onDeleted={() => navigate('/sites')} onMessage={showMsg} canManage={can('sites', 'manage')} />
+          )}
+          {activeTab === 'files' && <FileBrowser siteId={site.id} />}
+          {activeTab === 'staging' && <StagingPanel siteId={site.id} canManage={can('sites', 'manage')} siteDomain={site.domain} />}
+          {activeTab === 'updates' && <UpdatesPanel siteId={site.id} canManage={can('sites', 'manage')} />}
+          {activeTab === 'database' && <DatabasePanel siteId={site.id} canManage={can('sites', 'manage')} />}
+          {activeTab === 'performance' && <PerformancePanel siteId={site.id} canManage={can('sites', 'manage')} />}
+          {activeTab === 'images' && <ImagesPanel siteId={site.id} canManage={can('sites', 'manage')} />}
+          {activeTab === 'multisite' && <MultisitePanel siteId={site.id} isMultisite={site.is_multisite} canManage={can('sites', 'manage')} />}
+          {activeTab === 'domains' && <DomainsPanel siteId={site.id} canManage={can('sites', 'manage')} />}
+          {activeTab === 'redis' && <RedisPanel siteId={site.id} canManage={can('sites', 'manage')} />}
+          {activeTab === 'cron' && <CronPanel siteId={site.id} />}
+          {activeTab === 'ssl' && <SSLPanel siteId={site.id} domain={site.domain} canManage={can('sites', 'manage')} />}
+          {activeTab === 'sftp' && <SFTPPanel siteId={site.id} canManage={can('sites', 'manage')} />}
+          {activeTab === 'backup' && <BackupPanel siteId={site.id} domain={site.domain} canManage={can('sites', 'manage')} />}
+          {activeTab === 'security' && (
+            <div className="space-y-6">
+              <WAFPanel siteId={site.id} canManage={can('sites', 'manage')} />
+              <SecurityPanel siteId={site.id} canManage={can('sites', 'manage')} />
+            </div>
+          )}
+          {activeTab === 'wpcli' && <WPCLIPanel siteId={site.id} canManage={can('sites', 'manage')} />}
+          {activeTab === 'cache' && <CachePanel siteId={site.id} canManage={can('sites', 'manage')} domain={site.domain} />}
         </div>
-      )}
 
-      {activeTab === 'wpcli' && (
-        <WPCLIPanel siteId={site.id} canManage={can('sites', 'manage')} />
-      )}
-
-      {activeTab === 'cache' && (
-        <CachePanel siteId={site.id} canManage={can('sites', 'manage')} domain={site.domain} />
-      )}
+      </div>
     </div>
   )
 }

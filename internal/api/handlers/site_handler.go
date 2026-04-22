@@ -90,6 +90,10 @@ func (h *SiteHandler) Get(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(404).JSON(models.APIResponse{Error: "Site not found"})
 	}
+	// Auto-detect WP version on access if not yet known
+	if site.WPVersion == "" {
+		h.svc.QueueGetWPVersionIfNeeded(site)
+	}
 	return c.JSON(models.APIResponse{Success: true, Data: site})
 }
 
@@ -297,6 +301,7 @@ func (h *SiteHandler) ImportDB(c *fiber.Ctx) error {
 
 	// Queue agent task and wait synchronously (up to 300s for large files)
 	taskData := map[string]interface{}{
+		"site_id":      id,
 		"domain":       site.Domain,
 		"db_name":      site.DBName,
 		"download_url": fmt.Sprintf("/api/v1/agent/files/tmp/%s", token),
@@ -310,19 +315,26 @@ func (h *SiteHandler) ImportDB(c *fiber.Ctx) error {
 		os.Remove(tmpPath)
 		return c.Status(500).JSON(models.APIResponse{Error: "Failed to queue import task"})
 	}
-	result, err := services.WaitForTaskCompleteWithTimeout(h.svc.DB(), task.ID, 300*1000000000)
+	completed, err := services.WaitForTaskCompleteWithTimeout(h.svc.DB(), task.ID, 300*1000000000)
 	os.Remove(tmpPath)
 	if err != nil {
 		return c.Status(500).JSON(models.APIResponse{Error: "Import timed out or failed: " + err.Error()})
 	}
-	if result.Error != "" {
-		return c.Status(500).JSON(models.APIResponse{Error: result.Error})
+	if completed.Error != "" {
+		return c.Status(500).JSON(models.APIResponse{Error: completed.Error})
+	}
+
+	// Re-fetch site to get updated wp_version (set by agent via reportTaskResult after import)
+	updatedSite, _ := h.svc.GetByID(id)
+	wpVersion := ""
+	if updatedSite != nil {
+		wpVersion = updatedSite.WPVersion
 	}
 
 	return c.JSON(models.APIResponse{
 		Success: true,
 		Message: "Database imported successfully",
-		Data:    fiber.Map{"domain": site.Domain, "db_name": site.DBName, "file_size": file.Size},
+		Data:    fiber.Map{"domain": site.Domain, "db_name": site.DBName, "file_size": file.Size, "wp_version": wpVersion},
 	})
 }
 

@@ -107,6 +107,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&models.AlertRule{},
 		&models.AlertHistory{},
 		&models.NotificationConfig{},
+		&models.IntegrationConfig{},
 		&models.WPCLIHistory{},
 		&models.CacheConfig{},
 		&models.ExternalImport{},

@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/lib/api'
-import type { APIResponse, AlertRule, AlertHistory, CreateAlertRuleRequest, NotificationConfig } from '@/types'
+import type { APIResponse, AlertRule, AlertHistory, CreateAlertRuleRequest, NotificationConfig, IntegrationConfig } from '@/types'
 
 export function useAlertRules(serverId: number) {
   return useQuery({
@@ -79,6 +79,29 @@ export function useUpdateNotificationConfig() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['notification-config'] })
+    },
+  })
+}
+
+export function useIntegrationConfig() {
+  return useQuery({
+    queryKey: ['integration-config'],
+    queryFn: async () => {
+      const { data } = await api.get<APIResponse<IntegrationConfig>>('/settings/integrations')
+      return data.data!
+    },
+  })
+}
+
+export function useUpdateIntegrationConfig() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (req: { google_pagespeed_key: string }) => {
+      const { data } = await api.put<APIResponse<IntegrationConfig>>('/settings/integrations', req)
+      return data.data!
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['integration-config'] })
     },
   })
 }

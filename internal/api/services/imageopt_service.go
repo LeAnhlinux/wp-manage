@@ -300,6 +300,74 @@ func (s *ImageOptService) OptimizeComplete(result models.AgentImageOptResult) er
 	return s.db.Model(&models.ImageOptResult{}).Where("id = ?", result.ResultID).Updates(updates).Error
 }
 
+// queueOriginalsTask queues a task for originals management and returns the task ID
+func (s *ImageOptService) queueOriginalsTask(siteID uint64, taskType string) (uint64, error) {
+	var site models.Site
+	if err := s.db.First(&site, siteID).Error; err != nil {
+		return 0, fmt.Errorf("site not found")
+	}
+	data, _ := json.Marshal(models.AgentImageOriginalsTask{SiteID: siteID, Domain: site.Domain})
+	task := models.TaskQueue{
+		ServerID: site.ServerID,
+		SiteID:   siteID,
+		TaskType: taskType,
+		Data:     string(data),
+		Status:   "pending",
+	}
+	if err := s.db.Create(&task).Error; err != nil {
+		return 0, err
+	}
+	return task.ID, nil
+}
+
+// GetOriginalsStats returns count and size of backup originals for a site
+func (s *ImageOptService) GetOriginalsStats(siteID uint64) (*models.AgentImageOriginalsResult, error) {
+	taskID, err := s.queueOriginalsTask(siteID, "image_originals_stats")
+	if err != nil {
+		return nil, err
+	}
+	result, err := WaitForTaskCompleteWithTimeout(s.db, taskID, 60*time.Second)
+	if err != nil {
+		return &models.AgentImageOriginalsResult{}, nil // timeout — return empty
+	}
+	var stats models.AgentImageOriginalsResult
+	json.Unmarshal([]byte(result.Output), &stats)
+	return &stats, nil
+}
+
+// RevertImages restores all backed-up originals on the agent
+func (s *ImageOptService) RevertImages(siteID uint64) (*models.AgentImageOriginalsResult, error) {
+	taskID, err := s.queueOriginalsTask(siteID, "revert_images")
+	if err != nil {
+		return nil, err
+	}
+	result, err := WaitForTaskCompleteWithTimeout(s.db, taskID, 10*time.Minute)
+	if err != nil {
+		return nil, fmt.Errorf("revert timed out")
+	}
+	if result.Status == "failed" {
+		return nil, fmt.Errorf("%s", result.Output)
+	}
+	var res models.AgentImageOriginalsResult
+	json.Unmarshal([]byte(result.Output), &res)
+	return &res, nil
+}
+
+// DeleteOriginals removes all .wpmanage-orig backup files on the agent
+func (s *ImageOptService) DeleteOriginals(siteID uint64) (*models.AgentImageOriginalsResult, error) {
+	taskID, err := s.queueOriginalsTask(siteID, "delete_image_originals")
+	if err != nil {
+		return nil, err
+	}
+	result, err := WaitForTaskCompleteWithTimeout(s.db, taskID, 10*time.Minute)
+	if err != nil {
+		return nil, fmt.Errorf("delete timed out")
+	}
+	var res models.AgentImageOriginalsResult
+	json.Unmarshal([]byte(result.Output), &res)
+	return &res, nil
+}
+
 // GetResults returns optimization history for a site
 func (s *ImageOptService) GetResults(siteID uint64, page, perPage int) ([]models.ImageOptResult, int64, error) {
 	var results []models.ImageOptResult

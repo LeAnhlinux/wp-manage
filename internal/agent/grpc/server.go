@@ -364,6 +364,21 @@ func (s *AgentServer) pollTasks() {
 			json.Unmarshal(task.Data, &webpTask)
 			go s.executeToggleNginxWebP(task.TaskID, webpTask)
 
+		case "image_originals_stats":
+			var t models.AgentImageOriginalsTask
+			json.Unmarshal(task.Data, &t)
+			go s.executeImageOriginalsStats(task.TaskID, t)
+
+		case "revert_images":
+			var t models.AgentImageOriginalsTask
+			json.Unmarshal(task.Data, &t)
+			go s.executeRevertImages(task.TaskID, t)
+
+		case "delete_image_originals":
+			var t models.AgentImageOriginalsTask
+			json.Unmarshal(task.Data, &t)
+			go s.executeDeleteImageOriginals(task.TaskID, t)
+
 		case "enable_multisite":
 			var msTask models.AgentEnableMultisiteTask
 			json.Unmarshal(task.Data, &msTask)
@@ -425,10 +440,26 @@ func (s *AgentServer) pollTasks() {
 		case "check_services":
 			go s.executeCheckServices(task.TaskID)
 
+		case "get_wp_version":
+			var data struct {
+				SiteID     uint64 `json:"site_id"`
+				Domain     string `json:"domain"`
+				PHPVersion string `json:"php_version"`
+			}
+			json.Unmarshal(task.Data, &data)
+			go func(taskID uint64, siteID uint64, domain string) {
+				result := models.AgentTaskResult{TaskID: taskID, SiteID: siteID}
+				result.WPVersion = site.GetWPVersion(domain)
+				s.reportTaskResult(result)
+				s.completeTask(taskID, "completed", "")
+			}(task.TaskID, data.SiteID, data.Domain)
+
 		case "install_service":
 			var data map[string]string
 			json.Unmarshal(task.Data, &data)
-			go s.executeInstallService(task.TaskID, data["service"])
+			// Chạy đồng bộ (không goroutine) để tránh dpkg lock conflict
+			// khi nhiều install_service tasks được queue cùng lúc
+			s.executeInstallService(task.TaskID, data["service"])
 
 		case "add_authorized_key":
 			var data map[string]string
@@ -638,6 +669,22 @@ func (s *AgentServer) executeCreateSite(taskID uint64, siteID uint64, task model
 		} else {
 			slog.Info("Create site (manual) infrastructure ready", "domain", task.Domain, "linux_user", result.LinuxUser)
 		}
+
+		// If SSL was requested, extract the cert expiry so the API can store it in the DB.
+		// Without this, ssl_expires_at stays NULL and the panel shows SSL as broken even
+		// though the certificate is valid — requiring the user to disable+re-enable SSL.
+		if task.SSLEnabled {
+			if expiry, err2 := ssl.GetCertExpiry(task.Domain); err2 == nil {
+				result.SSLExpiresAt = expiry
+				enabled := true
+				result.SSLEnabled = &enabled
+				slog.Info("SSL certificate ready after site creation", "domain", task.Domain, "expires_at", expiry)
+			} else {
+				// Non-fatal: certbot may have failed during creation (DNS not pointed yet).
+				// User can issue SSL from the panel once DNS is ready.
+				slog.Warn("SSL requested but cert not found after creation (DNS may not be ready)", "domain", task.Domain, "error", err2)
+			}
+		}
 	}
 
 	s.reportTaskResult(result)
@@ -714,7 +761,7 @@ func (s *AgentServer) executeUploadSource(taskID uint64, task models.AgentUpload
 
 func (s *AgentServer) executeImportDB(taskID uint64, task models.AgentImportDBTask) {
 	slog.Info("Importing database", "domain", task.Domain, "db_name", task.DBName)
-	result := models.AgentTaskResult{TaskID: taskID}
+	result := models.AgentTaskResult{TaskID: taskID, SiteID: task.SiteID}
 
 	// Determine file extension from URL or FileExt field
 	ext := ".sql"
@@ -794,7 +841,7 @@ func (s *AgentServer) executeRestartSite(taskID uint64, domain, phpVersion strin
 
 	// Restart PHP-FPM
 	if phpVersion == "" {
-		phpVersion = "8.2"
+		phpVersion = "8.3"
 	}
 	cmd := exec.Command("systemctl", "restart", fmt.Sprintf("php%s-fpm", phpVersion))
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -1126,7 +1173,7 @@ func (s *AgentServer) RebuildConfig(configType, domain string, configData map[st
 	case "php_fpm_pool":
 		phpVer := configData["php_version"]
 		if phpVer == "" {
-			phpVer = "8.2"
+			phpVer = "8.3"
 		}
 		return agentconfig.RebuildPHPFPMPool(domain, phpVer, configData)
 	default:
@@ -1719,6 +1766,31 @@ func (s *AgentServer) executeToggleNginxWebP(taskID uint64, task models.AgentNgi
 	s.completeTask(taskID, status, errMsg)
 }
 
+func (s *AgentServer) executeImageOriginalsStats(taskID uint64, task models.AgentImageOriginalsTask) {
+	slog.Info("Getting image originals stats", "domain", task.Domain)
+	count, sizeBytes := agentwp.GetOriginalsStats(task.Domain)
+	out, _ := json.Marshal(models.AgentImageOriginalsResult{Count: count, SizeBytes: sizeBytes})
+	s.completeTaskWithOutput(taskID, "completed", "", string(out))
+}
+
+func (s *AgentServer) executeRevertImages(taskID uint64, task models.AgentImageOriginalsTask) {
+	slog.Info("Reverting images to originals", "domain", task.Domain)
+	reverted, errMsg := agentwp.RevertImages(task.Domain)
+	out, _ := json.Marshal(models.AgentImageOriginalsResult{Count: reverted})
+	status := "completed"
+	if errMsg != "" {
+		status = "failed"
+	}
+	s.completeTaskWithOutput(taskID, status, errMsg, string(out))
+}
+
+func (s *AgentServer) executeDeleteImageOriginals(taskID uint64, task models.AgentImageOriginalsTask) {
+	slog.Info("Deleting image originals", "domain", task.Domain)
+	deleted, sizeFreed := agentwp.DeleteOriginals(task.Domain)
+	out, _ := json.Marshal(models.AgentImageOriginalsResult{Count: deleted, SizeBytes: sizeFreed})
+	s.completeTaskWithOutput(taskID, "completed", "", string(out))
+}
+
 // Multisite task executors
 
 func (s *AgentServer) executeEnableMultisite(taskID uint64, task models.AgentEnableMultisiteTask) {
@@ -1974,7 +2046,7 @@ func (s *AgentServer) executeRebuildConfig(taskID uint64, task models.AgentRebui
 		domain := e.domain
 		phpVersion := e.phpVersion
 		if phpVersion == "" {
-			phpVersion = "8.2"
+			phpVersion = "8.3"
 		}
 		openBasedirVal := "true"
 		if !e.openBasedirEnabled {
@@ -2060,13 +2132,22 @@ func (s *AgentServer) executeCheckServices(taskID uint64) {
 			// Also check nginx plugin installed
 			out, _ := exec.Command("python3", "-c", "import certbot_nginx").CombinedOutput()
 			return len(out) == 0 // no output = import success
+		case "php8.3-fpm":
+			// Check bất kỳ PHP-FPM version nào đang active
+			for _, ver := range []string{"8.3", "8.2", "8.1", "8.0", "7.4"} {
+				out, _ := exec.Command("systemctl", "is-active", fmt.Sprintf("php%s-fpm", ver)).Output()
+				if strings.TrimSpace(string(out)) == "active" {
+					return true
+				}
+			}
+			return false
 		default:
 			out, _ := exec.Command("systemctl", "is-active", svc).Output()
 			return strings.TrimSpace(string(out)) == "active"
 		}
 	}
 
-	services := []string{"nginx", "php8.2-fpm", "mariadb", "redis-server", "fail2ban", "ufw", "cron", "wpcli", "certbot"}
+	services := []string{"nginx", "php8.3-fpm", "mariadb", "redis-server", "fail2ban", "ufw", "cron", "wpcli", "certbot"}
 	var statuses []ServiceStatus
 	for _, svc := range services {
 		statuses = append(statuses, ServiceStatus{Service: svc, Active: checkActive(svc)})
@@ -2081,16 +2162,36 @@ func (s *AgentServer) executeCheckServices(taskID uint64) {
 func (s *AgentServer) executeInstallService(taskID uint64, service string) {
 	slog.Info("Installing service", "service", service)
 	result := models.AgentTaskResult{TaskID: taskID}
+
+	// PHP install cần tải nhiều package — timeout 20 phút
+	// Các service khác timeout 10 phút
+	timeout := 10 * time.Minute
+	if service == "php" || service == "php8.3-fpm" {
+		timeout = 20 * time.Minute
+	}
+
+	done := make(chan error, 1)
 	p := provisioning.New(func(step string, progress int, message string) {
 		slog.Info("Install service progress", "service", service, "step", step, "message", message)
 	})
-	if err := p.InstallService(service); err != nil {
-		slog.Error("Install service failed", "service", service, "error", err)
-		result.Error = err.Error()
-	} else {
-		result.Output = "installed"
-		slog.Info("Service installed successfully", "service", service)
+	go func() {
+		done <- p.InstallService(service)
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			slog.Error("Install service failed", "service", service, "error", err)
+			result.Error = err.Error()
+		} else {
+			result.Output = "installed"
+			slog.Info("Service installed successfully", "service", service)
+		}
+	case <-time.After(timeout):
+		slog.Error("Install service timeout", "service", service, "timeout", timeout)
+		result.Error = fmt.Sprintf("timeout after %s — installation may still be running in background", timeout)
 	}
+
 	s.reportTaskResult(result)
 }
 
@@ -2727,7 +2828,7 @@ func (s *AgentServer) executeTailLogs(taskID uint64, logType string, lines int) 
 	// Try common alternative paths
 	if _, err := os.Stat(logPath); os.IsNotExist(err) {
 		altPaths := map[string][]string{
-			"php_error":   {"/var/log/php8.2-fpm.log", "/var/log/php8.1-fpm.log", "/var/log/php8.0-fpm.log"},
+			"php_error":   {"/var/log/php8.3-fpm.log", "/var/log/php8.2-fpm.log", "/var/log/php8.1-fpm.log"},
 			"mysql_error": {"/var/log/mariadb/mariadb.log", "/var/log/mysqld.log"},
 		}
 		if alts, ok := altPaths[logType]; ok {
@@ -2871,6 +2972,14 @@ func (s *AgentServer) callbackAPI(endpoint string, result interface{}) {
 
 func (s *AgentServer) completeTask(taskID uint64, status, errMsg string) {
 	result := models.AgentTaskResult{TaskID: taskID}
+	if errMsg != "" {
+		result.Error = errMsg
+	}
+	s.reportTaskResult(result)
+}
+
+func (s *AgentServer) completeTaskWithOutput(taskID uint64, status, errMsg, output string) {
+	result := models.AgentTaskResult{TaskID: taskID, Output: output}
 	if errMsg != "" {
 		result.Error = errMsg
 	}

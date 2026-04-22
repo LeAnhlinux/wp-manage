@@ -2,6 +2,7 @@ package services
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gofiber-team/wp-manage/internal/models"
@@ -32,6 +33,9 @@ func (s *ServerService) Create(userID uint64, req models.CreateServerRequest) (*
 	}
 
 	if err := s.db.Create(&server).Error; err != nil {
+		if strings.Contains(err.Error(), "Duplicate entry") && strings.Contains(err.Error(), "ip_address") {
+			return nil, "", fmt.Errorf("IP address %s đã được đăng ký. Mỗi server chỉ được thêm một lần", req.IPAddress)
+		}
 		return nil, "", err
 	}
 
@@ -79,6 +83,29 @@ func (s *ServerService) Delete(id uint64) error {
 	if count > 0 {
 		return fmt.Errorf("cannot delete server with %d active sites", count)
 	}
+
+	// Cascade delete all dependent records to avoid FK constraint errors
+	tables := []interface{}{
+		&models.TaskQueue{},
+		&models.Backup{},
+		&models.ServerConfig{},
+		&models.ActivityLog{},
+		&models.CronJob{},
+		&models.SSHKey{},
+		&models.FirewallRule{},
+		&models.NginxConfig{},
+		&models.AlertRule{},
+		&models.AlertHistory{},
+		&models.StorageCredential{},
+		&models.DNSProvider{},
+		&models.RolloutServer{},
+		&models.UserServer{},
+		&models.TeamServer{},
+	}
+	for _, model := range tables {
+		s.db.Where("server_id = ?", id).Delete(model)
+	}
+
 	return s.db.Where("id = ?", id).Delete(&models.Server{}).Error
 }
 

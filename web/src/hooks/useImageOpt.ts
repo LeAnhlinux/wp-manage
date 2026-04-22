@@ -99,3 +99,46 @@ export function useCancelImageOpt(siteId: number) {
     },
   })
 }
+
+export interface OriginalsStats {
+  count: number
+  size_bytes: number
+}
+
+export function useOriginalsStats(siteId: number) {
+  return useQuery({
+    queryKey: ['imageopt-originals-stats', siteId],
+    queryFn: async () => {
+      const { data } = await api.get<APIResponse<OriginalsStats>>(`/sites/${siteId}/image-optimization/originals-stats`)
+      return data.data!
+    },
+    staleTime: 30_000,
+  })
+}
+
+export function useRevertImages(siteId: number) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async () => {
+      const { data } = await api.post<APIResponse<OriginalsStats>>(`/sites/${siteId}/image-optimization/revert`)
+      return data.data!
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['imageopt-originals-stats', siteId] })
+      qc.invalidateQueries({ queryKey: ['imageopt-results', siteId] })
+    },
+  })
+}
+
+export function useDeleteOriginals(siteId: number) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async () => {
+      const { data } = await api.post<APIResponse<OriginalsStats>>(`/sites/${siteId}/image-optimization/delete-originals`)
+      return data.data!
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['imageopt-originals-stats', siteId] })
+    },
+  })
+}

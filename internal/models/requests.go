@@ -428,6 +428,7 @@ type AgentUploadSourceTask struct {
 // AgentImportDBTask carries info for the agent to download and import a SQL file.
 // OldDomain is optional: if set, wp search-replace is run to rewrite URLs after import.
 type AgentImportDBTask struct {
+	SiteID      uint64 `json:"site_id"`
 	Domain      string `json:"domain"`
 	DBName      string `json:"db_name"`
 	DownloadURL string `json:"download_url"`
@@ -602,6 +603,22 @@ type AgentToggleImageOptTask struct {
 type AgentNginxWebPTask struct {
 	Domain  string `json:"domain"`
 	Enabled bool   `json:"enabled"`
+}
+
+// AgentImageOriginalsTask is used for revert/delete/stats on backed-up originals
+type AgentImageOriginalsTask struct {
+	SiteID uint64 `json:"site_id"`
+	Domain string `json:"domain"`
+}
+
+type AgentImageOriginalsStats struct {
+	Count     int   `json:"count"`
+	SizeBytes int64 `json:"size_bytes"`
+}
+
+type AgentImageOriginalsResult struct {
+	Count     int   `json:"count"`
+	SizeBytes int64 `json:"size_bytes"`
 }
 
 type AgentImageOptResult struct {
@@ -962,12 +979,15 @@ type UpdateAlertRuleRequest struct {
 type UpdateNotificationConfigRequest struct {
 	TelegramToken string `json:"telegram_token"`
 	TelegramChat  string `json:"telegram_chat"`
-	SlackWebhook  string `json:"slack_webhook"`
 	SMTPHost      string `json:"smtp_host"`
 	SMTPPort      int    `json:"smtp_port"`
 	SMTPUser      string `json:"smtp_user"`
 	SMTPPass      string `json:"smtp_pass"`
 	SMTPFrom      string `json:"smtp_from"`
+}
+
+type UpdateIntegrationConfigRequest struct {
+	GooglePageSpeedKey string `json:"google_pagespeed_key"`
 }
 
 type AgentAutotuneTask struct {
@@ -1217,6 +1237,8 @@ type CreatePanelReleaseRequest struct {
 	Version      string `json:"version" validate:"required"`
 	DownloadURL  string `json:"download_url" validate:"required,url"`
 	Checksum     string `json:"checksum" validate:"required"`
+	WebURL       string `json:"web_url"`      // frontend archive URL
+	WebChecksum  string `json:"web_checksum"` // frontend archive SHA-256
 	ReleaseNotes string `json:"release_notes"`
 	FileSize     int64  `json:"file_size"`
 }

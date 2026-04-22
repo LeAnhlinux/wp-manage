@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
+import { QRCodeSVG } from 'qrcode.react'
 import { Key, Plus, Trash2, Copy, Check, ShieldCheck, ShieldOff, Bell, Save, Settings, Loader2, Download, RefreshCw, CheckCircle, XCircle, AlertTriangle, Server } from 'lucide-react'
 import { useAPIKeys, useCreateAPIKey, useDeleteAPIKey } from '@/hooks/useAPIKeys'
 import { useEnable2FA, useVerify2FA, useDisable2FA } from '@/hooks/useTwoFactor'
-import { useNotificationConfig, useUpdateNotificationConfig } from '@/hooks/useAlerts'
+import { useNotificationConfig, useUpdateNotificationConfig, useIntegrationConfig, useUpdateIntegrationConfig } from '@/hooks/useAlerts'
 import { useLastUpdateResult, useCheckUpdate, useApplyPanelUpdate, useApplyAgentUpdate, type CheckUpdateResult } from '@/hooks/usePanelUpdate'
 import { useRollout } from '@/hooks/useRollouts'
 import { useQueryClient } from '@tanstack/react-query'
@@ -18,6 +19,7 @@ export default function SettingsPage() {
       <div className="space-y-6">
         <TwoFactorSection />
         <NotificationSection />
+        {isAdmin && <IntegrationsSection />}
         <APIKeysSection />
         {isAdmin && <UpdatesSection />}
       </div>
@@ -113,11 +115,9 @@ function TwoFactorSection() {
               Open your authenticator app (Google Authenticator, Authy, etc.) and scan this QR code, or enter the secret key manually.
             </p>
             <div className="flex items-center gap-4">
-              <img
-                src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(setupData.qr_code_uri)}`}
-                alt="QR Code"
-                className="w-48 h-48 border rounded-lg bg-white p-2"
-              />
+              <div className="w-48 h-48 border rounded-lg bg-white p-2 flex items-center justify-center">
+                <QRCodeSVG value={setupData.qr_code_uri} size={176} />
+              </div>
               <div>
                 <p className="text-xs text-gray-500 mb-1">Secret Key:</p>
                 <code className="text-sm font-mono bg-white px-3 py-1.5 rounded border break-all block">{setupData.secret}</code>
@@ -189,7 +189,6 @@ function NotificationSection() {
   const updateConfig = useUpdateNotificationConfig()
   const [form, setForm] = useState({
     telegram_token: '', telegram_chat: '',
-    slack_webhook: '',
     smtp_host: '', smtp_port: 587, smtp_user: '', smtp_pass: '', smtp_from: '',
   })
   const [initialized, setInitialized] = useState(false)
@@ -198,7 +197,6 @@ function NotificationSection() {
     setForm({
       telegram_token: config.telegram_token || '',
       telegram_chat: config.telegram_chat || '',
-      slack_webhook: config.slack_webhook || '',
       smtp_host: config.smtp_host || '',
       smtp_port: config.smtp_port || 587,
       smtp_user: config.smtp_user || '',
@@ -233,13 +231,6 @@ function NotificationSection() {
           </div>
         </div>
 
-        {/* Slack */}
-        <div>
-          <h3 className="text-sm font-medium text-gray-700 mb-2">Slack</h3>
-          <input value={form.slack_webhook} onChange={e => setForm({ ...form, slack_webhook: e.target.value })}
-            className="w-full px-3 py-2 border rounded-lg text-sm" placeholder="Webhook URL" />
-        </div>
-
         {/* Email SMTP */}
         <div>
           <h3 className="text-sm font-medium text-gray-700 mb-2">Email (SMTP)</h3>
@@ -267,6 +258,91 @@ function NotificationSection() {
       {updateConfig.isSuccess && (
         <p className="mt-2 text-sm text-green-600">Notification settings saved successfully.</p>
       )}
+    </div>
+  )
+}
+
+function IntegrationsSection() {
+  const { data: config, isLoading } = useIntegrationConfig()
+  const update = useUpdateIntegrationConfig()
+  const [key, setKey] = useState('')
+  const [saved, setSaved] = useState(false)
+  const [showKey, setShowKey] = useState(false)
+
+  useEffect(() => {
+    if (config) setKey(config.google_pagespeed_key || '')
+  }, [config])
+
+  const handleSave = async () => {
+    await update.mutateAsync({ google_pagespeed_key: key })
+    setSaved(true)
+    setTimeout(() => setSaved(false), 2500)
+  }
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+      <div className="flex items-center gap-3 mb-1">
+        <div className="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center">
+          <Key size={18} className="text-blue-600" />
+        </div>
+        <div>
+          <h2 className="text-base font-semibold text-gray-900">Integrations</h2>
+          <p className="text-xs text-gray-500">Third-party API keys</p>
+        </div>
+      </div>
+
+      <div className="mt-5 border-t border-gray-50 pt-5">
+        <div className="flex items-start gap-3">
+          <div className="flex-1">
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Google PageSpeed API Key
+            </label>
+            <p className="text-xs text-gray-400 mb-2">
+              Required for Performance Metrics. Free key at{' '}
+              <a href="https://console.cloud.google.com" target="_blank" rel="noopener"
+                className="text-blue-500 hover:underline">console.cloud.google.com</a>
+              {' '}→ PageSpeed Insights API (25,000 req/day free).
+            </p>
+            <div className="flex gap-2">
+              <div className="relative flex-1">
+                <input
+                  type={showKey ? 'text' : 'password'}
+                  value={isLoading ? '' : key}
+                  onChange={(e) => setKey(e.target.value)}
+                  placeholder={isLoading ? 'Loading...' : 'AIzaSy...'}
+                  disabled={isLoading}
+                  className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm font-mono bg-gray-50 focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-colors pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowKey(v => !v)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-xs"
+                >
+                  {showKey ? 'Hide' : 'Show'}
+                </button>
+              </div>
+              <button
+                onClick={handleSave}
+                disabled={update.isPending || isLoading}
+                className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:opacity-50 text-sm font-semibold transition-colors"
+              >
+                {update.isPending ? <Loader2 size={14} className="animate-spin" /> : saved ? <Check size={14} /> : <Save size={14} />}
+                {saved ? 'Saved!' : 'Save'}
+              </button>
+            </div>
+            {key && (
+              <div className="mt-2 flex items-center gap-1.5 text-xs text-emerald-600">
+                <Check size={12} /> API key configured
+              </div>
+            )}
+            {!key && !isLoading && (
+              <div className="mt-2 flex items-center gap-1.5 text-xs text-amber-500">
+                <AlertTriangle size={12} /> No key set — limited to ~25 audits/day
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
@@ -489,6 +565,8 @@ function UpdatesSection() {
         version: result.latest.version,
         download_url: result.latest.panel.download_url,
         checksum: result.latest.panel.checksum,
+        web_url: result.latest.web?.download_url,
+        web_checksum: result.latest.web?.checksum,
       })
       setPanelRestarting(true)
     } catch (e: any) {
@@ -693,10 +771,27 @@ function UpdatesSection() {
           </div>
 
           {result.latest && (
-            <p className="text-xs text-gray-400 text-right">
-              Latest: <span className="font-mono">{result.latest.version}</span>
-              {' · '}{new Date(result.latest.released_at).toLocaleDateString()}
-            </p>
+            <div className="bg-gray-50 border border-gray-100 rounded-xl p-4">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
+                  What's new in {result.latest.version}
+                </span>
+                <span className="text-xs text-gray-400">
+                  {new Date(result.latest.released_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}
+                </span>
+              </div>
+              {result.latest.release_notes ? (
+                <ul className="space-y-1">
+                  {result.latest.release_notes.split('\\n').filter(Boolean).map((line, i) => (
+                    <li key={i} className="text-xs text-gray-600 leading-relaxed">
+                      {line.startsWith('•') ? line : `• ${line}`}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-xs text-gray-400 italic">No release notes available.</p>
+              )}
+            </div>
           )}
         </div>
       ) : (

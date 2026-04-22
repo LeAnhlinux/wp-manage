@@ -144,9 +144,6 @@ func (s *AlertService) UpdateNotificationConfig(req models.UpdateNotificationCon
 	if req.TelegramChat != "" {
 		cfg.TelegramChat = req.TelegramChat
 	}
-	if req.SlackWebhook != "" {
-		cfg.SlackWebhook = req.SlackWebhook
-	}
 	if req.SMTPHost != "" {
 		cfg.SMTPHost = req.SMTPHost
 	}
@@ -163,6 +160,31 @@ func (s *AlertService) UpdateNotificationConfig(req models.UpdateNotificationCon
 		cfg.SMTPFrom = req.SMTPFrom
 	}
 
+	err = s.db.Save(&cfg).Error
+	return &cfg, err
+}
+
+// GetIntegrationConfig returns the global integration config
+func (s *AlertService) GetIntegrationConfig() (*models.IntegrationConfig, error) {
+	var cfg models.IntegrationConfig
+	err := s.db.First(&cfg).Error
+	if err == gorm.ErrRecordNotFound {
+		cfg = models.IntegrationConfig{}
+		s.db.Create(&cfg)
+		return &cfg, nil
+	}
+	return &cfg, err
+}
+
+// UpdateIntegrationConfig updates or creates the integration config
+func (s *AlertService) UpdateIntegrationConfig(req models.UpdateIntegrationConfigRequest) (*models.IntegrationConfig, error) {
+	var cfg models.IntegrationConfig
+	err := s.db.First(&cfg).Error
+	if err == gorm.ErrRecordNotFound {
+		cfg = models.IntegrationConfig{}
+		s.db.Create(&cfg)
+	}
+	cfg.GooglePageSpeedKey = req.GooglePageSpeedKey
 	err = s.db.Save(&cfg).Error
 	return &cfg, err
 }

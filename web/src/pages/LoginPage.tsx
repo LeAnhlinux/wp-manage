@@ -187,8 +187,8 @@ export default function LoginPage() {
                 <div className="w-14 h-14 rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center mx-auto mb-4">
                   <ShieldCheck size={28} className="text-blue-600" />
                 </div>
-                <h1 className="text-2xl font-bold text-gray-900">Xác thực 2 bước</h1>
-                <p className="text-gray-500 text-sm mt-1">Nhập mã 6 chữ số từ ứng dụng xác thực của bạn</p>
+                <h1 className="text-2xl font-bold text-gray-900">Two-Factor Authentication</h1>
+                <p className="text-gray-500 text-sm mt-1">Enter the 6-digit code from your authenticator app</p>
               </div>
 
               {error && (
@@ -199,7 +199,7 @@ export default function LoginPage() {
 
               <form onSubmit={handle2FASubmit} className="space-y-5">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Mã xác thực</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Verification Code</label>
                   <input
                     type="text"
                     value={otpCode}
@@ -210,7 +210,7 @@ export default function LoginPage() {
                     autoFocus
                     required
                   />
-                  <p className="text-xs text-gray-400 mt-1.5 text-center">Bạn cũng có thể dùng recovery code</p>
+                  <p className="text-xs text-gray-400 mt-1.5 text-center">You can also use a recovery code</p>
                 </div>
 
                 <button
@@ -218,7 +218,7 @@ export default function LoginPage() {
                   disabled={loading || otpCode.length < 6}
                   className="w-full py-2.5 bg-blue-600 text-white rounded-xl font-semibold hover:bg-blue-700 disabled:opacity-60 transition-colors text-sm"
                 >
-                  {loading ? 'Đang xác thực...' : 'Xác nhận'}
+                  {loading ? 'Verifying...' : 'Verify'}
                 </button>
 
                 <button
@@ -226,7 +226,7 @@ export default function LoginPage() {
                   onClick={() => { setRequires2FA(false); setOtpCode(''); setError('') }}
                   className="w-full py-2 text-gray-500 text-sm hover:text-gray-700 transition-colors"
                 >
-                  ← Quay lại đăng nhập
+                  ← Back to login
                 </button>
               </form>
             </div>

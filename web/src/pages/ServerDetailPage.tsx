@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import React, { useState, useEffect } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, Server, Globe, HardDrive, Cpu, MemoryStick, Clock, Wifi, WifiOff,
@@ -129,40 +129,68 @@ export default function ServerDetailPage() {
         <InfoCard icon={<HardDrive size={20} />} label="Disk" value={server.disk_gb ? `${server.disk_gb} GB` : '-'} />
       </div>
 
-      {/* Tabs */}
-      <div className="border-b border-gray-200 mb-6">
-        <nav className="flex gap-1 -mb-px overflow-x-auto">
-          {[
-            { id: 'overview', label: 'Overview', icon: Server },
-            { id: 'firewall', label: 'Firewall', icon: Shield },
-            { id: 'nginx', label: 'Nginx', icon: Settings },
-            { id: 'opcache', label: 'OPcache', icon: Zap },
-            { id: 'ioncube', label: 'ionCube', icon: Zap },
-            { id: 'phpfpm', label: 'PHP-FPM', icon: Settings },
-            { id: 'mariadb', label: 'MariaDB', icon: Database },
-            { id: 'redis', label: 'Redis', icon: Database },
-            { id: 'cron', label: 'Cron Jobs', icon: Terminal },
-            { id: 'ssh-keys', label: 'SSH Keys', icon: Key },
-            { id: 'alerts', label: 'Alerts', icon: Bell },
-            { id: 'logs', label: 'Logs', icon: FileText },
-            { id: 'config', label: 'Config', icon: Wrench },
-            { id: 'storage', label: 'Storage', icon: HardDrive },
-            { id: 'fail2ban', label: 'Fail2Ban', icon: Shield },
-            { id: 'backups', label: 'Backups', icon: Archive },
-          ].map(tab => (
-            <button key={tab.id} onClick={() => setActiveTab(tab.id)}
-              className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 whitespace-nowrap transition-colors ${
-                activeTab === tab.id
-                  ? 'border-blue-600 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              }`}>
-              <tab.icon size={15} /> {tab.label}
-            </button>
+      {/* Sidebar + Content */}
+      <div className="flex gap-6 items-start">
+
+        {/* Left sidebar nav */}
+        <nav className="w-48 flex-shrink-0 bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden sticky top-4">
+          {([
+            { group: 'Server', items: [
+              { id: 'overview', icon: <Server size={15} />,    label: 'Overview' },
+              { id: 'logs',     icon: <FileText size={15} />,  label: 'Logs' },
+            ]},
+            { group: 'Security', items: [
+              { id: 'firewall',  icon: <Shield size={15} />,   label: 'Firewall' },
+              { id: 'fail2ban',  icon: <Shield size={15} />,   label: 'Fail2Ban' },
+              { id: 'ssh-keys',  icon: <Key size={15} />,      label: 'SSH Keys' },
+            ]},
+            { group: 'Web Server', items: [
+              { id: 'nginx',    icon: <Settings size={15} />,  label: 'Nginx' },
+              { id: 'opcache',  icon: <Zap size={15} />,       label: 'OPcache' },
+              { id: 'phpfpm',   icon: <Settings size={15} />,  label: 'PHP-FPM' },
+              { id: 'ioncube',  icon: <Zap size={15} />,       label: 'ionCube' },
+            ]},
+            { group: 'Database', items: [
+              { id: 'mariadb',  icon: <Database size={15} />,  label: 'MariaDB' },
+              { id: 'redis',    icon: <Database size={15} />,  label: 'Redis' },
+            ]},
+            { group: 'System', items: [
+              { id: 'cron',     icon: <Terminal size={15} />,  label: 'Cron Jobs' },
+              { id: 'alerts',   icon: <Bell size={15} />,      label: 'Alerts' },
+              { id: 'storage',  icon: <HardDrive size={15} />, label: 'Storage' },
+              { id: 'backups',  icon: <Archive size={15} />,   label: 'Backups' },
+              { id: 'config',   icon: <Wrench size={15} />,    label: 'Config' },
+            ]},
+          ] as { group: string; items: { id: string; icon: React.ReactNode; label: string }[] }[]).map(({ group, items }, gi) => (
+            <div key={group} className={gi > 0 ? 'border-t border-gray-100' : ''}>
+              <p className="px-3 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400">
+                {group}
+              </p>
+              {items.map(({ id, icon, label }) => (
+                <button
+                  key={id}
+                  onClick={() => setActiveTab(id)}
+                  className={`w-full flex items-center gap-2.5 px-3 py-2 text-sm transition-colors ${
+                    activeTab === id
+                      ? 'bg-blue-50 text-blue-700 font-medium'
+                      : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                  }`}
+                >
+                  <span className={activeTab === id ? 'text-blue-600' : 'text-gray-400'}>{icon}</span>
+                  {label}
+                  {activeTab === id && (
+                    <span className="ml-auto w-1 h-4 rounded-full bg-blue-600" />
+                  )}
+                </button>
+              ))}
+              {gi === 4 && <div className="pb-2" />}
+            </div>
           ))}
         </nav>
-      </div>
 
-      {/* Tab Content */}
+        {/* Right content */}
+        <div className="flex-1 min-w-0">
+        {/* Tab Content */}
       {activeTab === 'overview' && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Server Details */}
@@ -207,7 +235,7 @@ export default function ServerDetailPage() {
                 {(() => {
                   const SERVICES = [
                     { key: 'nginx',        installKey: 'nginx',     label: 'Nginx' },
-                    { key: 'php8.2-fpm',   installKey: 'php',       label: 'PHP-FPM' },
+                    { key: 'php8.3-fpm',   installKey: 'php',       label: 'PHP-FPM' },
                     { key: 'mariadb',      installKey: 'mariadb',   label: 'MariaDB' },
                     { key: 'redis-server', installKey: 'redis',     label: 'Redis' },
                     { key: 'certbot',      installKey: 'certbot',   label: 'Certbot (SSL)' },
@@ -329,6 +357,8 @@ export default function ServerDetailPage() {
       {activeTab === 'fail2ban' && <Fail2BanTab serverId={serverId} />}
       {activeTab === 'redis' && <RedisServerTab serverId={serverId} canManage={canManage} />}
       {activeTab === 'backups' && <BackupArchivesTab serverId={serverId} canManage={canManage} />}
+        </div> {/* end right content */}
+      </div> {/* end flex layout */}
     </div>
   )
 }
@@ -2075,7 +2105,7 @@ function AlertsTab({ serverId }: { serverId: number }) {
   }
 
   const metricLabels: Record<string, string> = { cpu: 'CPU', ram: 'RAM', disk: 'Disk' }
-  const channelLabels: Record<string, string> = { telegram: 'Telegram', slack: 'Slack', email: 'Email' }
+  const channelLabels: Record<string, string> = { telegram: 'Telegram', email: 'Email' }
 
   return (
     <div className="space-y-6">
@@ -2114,7 +2144,6 @@ function AlertsTab({ serverId }: { serverId: number }) {
                 <select value={form.channel} onChange={e => setForm({ ...form, channel: e.target.value })}
                   className="w-full px-3 py-2 border rounded-lg text-sm">
                   <option value="telegram">Telegram</option>
-                  <option value="slack">Slack</option>
                   <option value="email">Email</option>
                 </select>
               </div>
@@ -2128,11 +2157,6 @@ function AlertsTab({ serverId }: { serverId: number }) {
             {form.channel === 'email' && (
               <input type="email" placeholder="Email address" value={form.email || ''}
                 onChange={e => setForm({ ...form, email: e.target.value })}
-                className="w-full px-3 py-2 border rounded-lg text-sm" />
-            )}
-            {form.channel === 'slack' && (
-              <input type="url" placeholder="Slack Webhook URL" value={form.webhook_url || ''}
-                onChange={e => setForm({ ...form, webhook_url: e.target.value })}
                 className="w-full px-3 py-2 border rounded-lg text-sm" />
             )}
             <div className="flex gap-2">

@@ -61,8 +61,10 @@ export interface CheckUpdateResult {
   latest: {
     version: string
     released_at: string
+    release_notes: string
     panel: { download_url: string; checksum: string }
     agent: { download_url: string; checksum: string }
+    web: { download_url: string; checksum: string }
   } | null
   panel_newer: boolean
   agent_newer: boolean
@@ -80,7 +82,7 @@ export function useCheckUpdate() {
 
 export function useApplyPanelUpdate() {
   return useMutation({
-    mutationFn: async (req: { version: string; download_url: string; checksum: string }) => {
+    mutationFn: async (req: { version: string; download_url: string; checksum: string; web_url?: string; web_checksum?: string }) => {
       await api.post('/settings/update/apply-panel', req)
     },
   })

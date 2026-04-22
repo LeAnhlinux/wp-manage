@@ -1,6 +1,8 @@
 package services
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,6 +10,8 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 
 	agentUpdater "github.com/gofiber-team/wp-manage/internal/agent/updater"
 	"github.com/gofiber-team/wp-manage/internal/models"
@@ -41,6 +45,8 @@ func (s *PanelUpdateService) CreateRelease(req models.CreatePanelReleaseRequest)
 		Version:      req.Version,
 		DownloadURL:  req.DownloadURL,
 		Checksum:     req.Checksum,
+		WebURL:       req.WebURL,
+		WebChecksum:  req.WebChecksum,
 		ReleaseNotes: req.ReleaseNotes,
 		FileSize:     req.FileSize,
 	}
@@ -49,6 +55,8 @@ func (s *PanelUpdateService) CreateRelease(req models.CreatePanelReleaseRequest)
 		Assign(models.PanelRelease{
 			DownloadURL:  req.DownloadURL,
 			Checksum:     req.Checksum,
+			WebURL:       req.WebURL,
+			WebChecksum:  req.WebChecksum,
 			ReleaseNotes: req.ReleaseNotes,
 		}).
 		FirstOrCreate(&release).Error; err != nil {
@@ -63,15 +71,18 @@ func (s *PanelUpdateService) ListReleases() ([]models.PanelRelease, error) {
 	return releases, err
 }
 
-// TriggerUpdate stages the new API binary and hands off to wp-manage-updater.
+// TriggerUpdate stages the new API binary, applies the web archive, then hands
+// off to wp-manage-updater.
 //
 // Flow:
-//  1. Download binary from release.DownloadURL → /var/lib/wp-manage/api-staged
-//  2. Verify SHA-256 checksum
-//  3. Write PendingUpdate metadata (target=wp-manage-api, write_result_file=true)
-//  4. systemctl start wp-manage-updater  → returns immediately (202)
-//  5. Updater stops this API, swaps binary, starts API, writes ResultFilePath
-//  6. Frontend polls /settings/panel-update until API responds, then shows result
+//  1. Download API binary from release.DownloadURL → /var/lib/wp-manage/api-staged
+//  2. Verify SHA-256 checksum of API binary
+//  3. Download web archive from release.WebURL, verify checksum, extract to /opt/wp-manage/web/
+//  4. (step 3 only runs when WebURL is set)
+//  5. Write PendingUpdate metadata (target=wp-manage-api, write_result_file=true)
+//  6. systemctl start wp-manage-updater  → returns immediately (202)
+//  7. Updater stops this API, swaps binary, starts API, writes ResultFilePath
+//  8. Frontend polls /settings/panel-update until API responds, then shows result
 func (s *PanelUpdateService) TriggerUpdate(releaseID uint64) error {
 	var release models.PanelRelease
 	if err := s.db.First(&release, releaseID).Error; err != nil {
@@ -112,7 +123,48 @@ func (s *PanelUpdateService) TriggerUpdate(releaseID uint64) error {
 		slog.Info("Checksum verified", "sha256", actual)
 	}
 
-	// ── 3. Write updater metadata ─────────────────────────────────────────────
+	// ── 3. Download and apply web archive (if provided) ──────────────────────
+	if release.WebURL != "" {
+		webDir := "/opt/wp-manage/web"
+		webStaged := "/var/lib/wp-manage/web-staged.tar.gz"
+
+		slog.Info("Downloading web archive", "url", release.WebURL)
+		if err := downloadFile(release.WebURL, webStaged); err != nil {
+			os.Remove(stagedPath)
+			return fmt.Errorf("web archive download failed: %w", err)
+		}
+
+		// Verify web archive checksum (if provided)
+		if release.WebChecksum != "" {
+			out, err := exec.Command("sha256sum", webStaged).Output()
+			if err != nil {
+				os.Remove(stagedPath)
+				os.Remove(webStaged)
+				return fmt.Errorf("sha256sum web failed: %w", err)
+			}
+			actual := ""
+			if len(out) >= 64 {
+				actual = string(out[:64])
+			}
+			if actual != release.WebChecksum {
+				os.Remove(stagedPath)
+				os.Remove(webStaged)
+				return fmt.Errorf("web checksum mismatch: expected %s, got %s", release.WebChecksum, actual)
+			}
+			slog.Info("Web archive checksum verified", "sha256", actual)
+		}
+
+		// Extract web archive to /opt/wp-manage/web/
+		if err := extractTarGz(webStaged, webDir); err != nil {
+			os.Remove(stagedPath)
+			os.Remove(webStaged)
+			return fmt.Errorf("web archive extraction failed: %w", err)
+		}
+		os.Remove(webStaged)
+		slog.Info("Web archive extracted", "dst", webDir)
+	}
+
+	// ── 4. Write updater metadata ─────────────────────────────────────────────
 	meta := agentUpdater.PendingUpdate{
 		StagedPath:      stagedPath,
 		TargetBinary:    agentUpdater.APIBinaryPath,
@@ -128,7 +180,7 @@ func (s *PanelUpdateService) TriggerUpdate(releaseID uint64) error {
 		return fmt.Errorf("write metadata: %w", err)
 	}
 
-	// ── 4. Start wp-manage-updater (one-shot service) ─────────────────────────
+	// ── 5. Start wp-manage-updater (one-shot service) ─────────────────────────
 	// This returns immediately. The updater will stop THIS process shortly.
 	slog.Info("Starting wp-manage-updater — API will restart shortly", "version", release.Version)
 	if out, err := exec.Command("systemctl", "start", "wp-manage-updater").CombinedOutput(); err != nil {
@@ -171,4 +223,61 @@ func downloadFile(url, dst string) error {
 	defer f.Close()
 	_, err = io.Copy(f, resp.Body)
 	return err
+}
+
+// extractTarGz extracts a .tar.gz archive into dst directory.
+// Existing files in dst are overwritten; dst is created if it does not exist.
+func extractTarGz(src, dst string) error {
+	if err := os.MkdirAll(dst, 0755); err != nil {
+		return err
+	}
+	f, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return fmt.Errorf("gzip: %w", err)
+	}
+	defer gz.Close()
+
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("tar: %w", err)
+		}
+
+		// Security: reject paths that escape dst
+		target := filepath.Join(dst, hdr.Name)
+		if !strings.HasPrefix(target, filepath.Clean(dst)+string(os.PathSeparator)) && target != filepath.Clean(dst) {
+			return fmt.Errorf("tar: illegal file path %s", hdr.Name)
+		}
+
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, 0755); err != nil {
+				return err
+			}
+		case tar.TypeReg:
+			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+				return err
+			}
+			out, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.FileMode(hdr.Mode))
+			if err != nil {
+				return err
+			}
+			if _, err := io.Copy(out, tr); err != nil {
+				out.Close()
+				return err
+			}
+			out.Close()
+		}
+	}
+	return nil
 }

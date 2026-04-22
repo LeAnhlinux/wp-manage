@@ -13,7 +13,7 @@ import (
 	"github.com/gofiber-team/wp-manage/internal/models"
 )
 
-const mirrorBaseURL = "https://mirrors.tino.org/wppanel"
+const mirrorBaseURL = "https://mirrors.bucloud.com"
 
 type UpdateCheckHandler struct {
 	panelSvc   *services.PanelUpdateService
@@ -26,10 +26,12 @@ func NewUpdateCheckHandler(panelSvc *services.PanelUpdateService, rolloutSvc *se
 }
 
 type VersionManifest struct {
-	Version    string     `json:"version"`
-	ReleasedAt string     `json:"released_at"`
-	Panel      BinaryInfo `json:"panel"`
-	Agent      BinaryInfo `json:"agent"`
+	Version      string     `json:"version"`
+	ReleasedAt   string     `json:"released_at"`
+	ReleaseNotes string     `json:"release_notes"`
+	Panel        BinaryInfo `json:"panel"`
+	Agent        BinaryInfo `json:"agent"`
+	Web          BinaryInfo `json:"web"`
 }
 
 type BinaryInfo struct {
@@ -124,14 +126,16 @@ func (h *UpdateCheckHandler) CheckUpdate(c *fiber.Ctx) error {
 	})
 }
 
-// ApplyPanelUpdate creates a release record and triggers panel binary swap via updater.
+// ApplyPanelUpdate creates a release record and triggers panel binary + web archive swap.
 // POST /settings/update/apply-panel
-// Body: {version, download_url, checksum}
+// Body: {version, download_url, checksum, web_url, web_checksum}
 func (h *UpdateCheckHandler) ApplyPanelUpdate(c *fiber.Ctx) error {
 	var req struct {
 		Version     string `json:"version"`
 		DownloadURL string `json:"download_url"`
 		Checksum    string `json:"checksum"`
+		WebURL      string `json:"web_url"`
+		WebChecksum string `json:"web_checksum"`
 	}
 	if err := c.BodyParser(&req); err != nil || req.Version == "" || req.DownloadURL == "" {
 		return c.Status(400).JSON(models.APIResponse{Error: "version and download_url are required"})
@@ -141,6 +145,8 @@ func (h *UpdateCheckHandler) ApplyPanelUpdate(c *fiber.Ctx) error {
 		Version:      req.Version,
 		DownloadURL:  req.DownloadURL,
 		Checksum:     req.Checksum,
+		WebURL:       req.WebURL,
+		WebChecksum:  req.WebChecksum,
 		ReleaseNotes: "Applied via panel auto-update",
 	})
 	if err != nil {

@@ -97,10 +97,4 @@ func (w *UptimeWorker) sendDownNotification(url string, statusCode int, errMsg s
 		}
 	}
 
-	if cfg.SlackWebhook != "" {
-		slackMsg := fmt.Sprintf("🔴 *Site Down Alert*\nURL: %s\nStatus: %d\nError: %s", url, statusCode, errMsg)
-		if err := notify.SendSlack(cfg.SlackWebhook, slackMsg); err != nil {
-			slog.Error("Uptime: slack notification failed", "error", err)
-		}
-	}
 }

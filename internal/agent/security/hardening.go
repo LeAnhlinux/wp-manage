@@ -214,11 +214,11 @@ add_filter('the_generator', '__return_empty_string');
 func secureFilePermissions(wpPath string) error {
 	slog.Info("Securing file permissions", "path", wpPath)
 
-	// Set directory permissions to 755
-	exec.Command("find", wpPath, "-type", "d", "-exec", "chmod", "755", "{}", ";").Run()
+	// Set directory permissions to 755 (batched — much faster than per-file)
+	exec.Command("find", wpPath, "-type", "d", "-exec", "chmod", "755", "{}", "+").Run()
 
-	// Set file permissions to 644
-	exec.Command("find", wpPath, "-type", "f", "-exec", "chmod", "644", "{}", ";").Run()
+	// Set file permissions to 644 (batched)
+	exec.Command("find", wpPath, "-type", "f", "-exec", "chmod", "644", "{}", "+").Run()
 
 	// wp-config.php should be 600
 	exec.Command("chmod", "600", wpPath+"/wp-config.php").Run()

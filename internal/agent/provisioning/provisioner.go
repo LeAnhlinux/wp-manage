@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"strings"
+	"time"
 
 	agentfail2ban "github.com/gofiber-team/wp-manage/internal/agent/fail2ban"
 )
@@ -65,11 +67,11 @@ func (p *Provisioner) installPHP() error {
 	runCmd("apt-get", "update", "-y")
 
 	packages := []string{
-		"php8.2-fpm", "php8.2-cli", "php8.2-common",
-		"php8.2-mysql", "php8.2-xml", "php8.2-curl",
-		"php8.2-gd", "php8.2-mbstring", "php8.2-zip",
-		"php8.2-bcmath", "php8.2-intl", "php8.2-soap",
-		"php8.2-redis", "php8.2-imagick", "php8.2-opcache",
+		"php8.3-fpm", "php8.3-cli", "php8.3-common",
+		"php8.3-mysql", "php8.3-xml", "php8.3-curl",
+		"php8.3-gd", "php8.3-mbstring", "php8.3-zip",
+		"php8.3-bcmath", "php8.3-intl", "php8.3-soap",
+		"php8.3-redis", "php8.3-imagick", "php8.3-opcache",
 	}
 	args := append([]string{"install", "-y"}, packages...)
 	return runCmd("apt-get", args...)
@@ -134,7 +136,7 @@ func (p *Provisioner) configureNginx() error {
 }
 
 func (p *Provisioner) configurePHP() error {
-	return runCmd("systemctl", "restart", "php8.2-fpm")
+	return runCmd("systemctl", "restart", "php8.3-fpm")
 }
 
 func (p *Provisioner) configureMariaDB() error {
@@ -149,7 +151,7 @@ func (p *Provisioner) configureMariaDB() error {
 }
 
 func (p *Provisioner) finalize() error {
-	services := []string{"nginx", "php8.2-fpm", "mariadb", "redis-server", "fail2ban"}
+	services := []string{"nginx", "php8.3-fpm", "mariadb", "redis-server", "fail2ban"}
 	for _, svc := range services {
 		runCmd("systemctl", "enable", svc)
 	}
@@ -159,8 +161,10 @@ func (p *Provisioner) finalize() error {
 // InstallService installs and configures a single named service.
 // Valid names: nginx, php, mariadb, redis, certbot, fail2ban, ufw
 func (p *Provisioner) InstallService(name string) error {
-	// Always update apt cache first
-	runCmd("apt-get", "update", "-y")
+	// wpcli không cần apt
+	if name != "wpcli" {
+		runCmd("apt-get", "update", "-y")
+	}
 
 	switch name {
 	case "nginx":
@@ -176,11 +180,11 @@ func (p *Provisioner) InstallService(name string) error {
 		if err := p.installPHP(); err != nil {
 			return err
 		}
-		runCmd("systemctl", "enable", "php8.2-fpm")
+		runCmd("systemctl", "enable", "php8.3-fpm")
 		if err := p.configurePHP(); err != nil {
 			return err
 		}
-		return runCmd("systemctl", "restart", "php8.2-fpm")
+		return runCmd("systemctl", "restart", "php8.3-fpm")
 	case "mariadb":
 		if err := p.installMariaDB(); err != nil {
 			return err
@@ -205,6 +209,13 @@ func (p *Provisioner) InstallService(name string) error {
 		runCmd("systemctl", "enable", "fail2ban")
 		return runCmd("systemctl", "restart", "fail2ban")
 	case "ufw":
+		// Install UFW trước nếu chưa có
+		if _, err := exec.LookPath("ufw"); err != nil {
+			out, err := exec.Command("apt-get", "install", "-y", "ufw").CombinedOutput()
+			if err != nil {
+				return fmt.Errorf("failed to install ufw: %s: %w", string(out), err)
+			}
+		}
 		if err := p.configureUFW(); err != nil {
 			return err
 		}
@@ -223,7 +234,38 @@ func (p *Provisioner) InstallService(name string) error {
 	}
 }
 
+// waitDPKG waits until the dpkg/apt lock is free (max 5 minutes).
+// Ubuntu mới thường chạy unattended-upgrades ngay sau boot.
+func waitDPKG() {
+	locks := []string{
+		"/var/lib/dpkg/lock-frontend",
+		"/var/lib/dpkg/lock",
+		"/var/cache/apt/archives/lock",
+	}
+	deadline := time.Now().Add(5 * time.Minute)
+	for time.Now().Before(deadline) {
+		locked := false
+		for _, f := range locks {
+			out, _ := exec.Command("fuser", f).Output()
+			if len(strings.TrimSpace(string(out))) > 0 {
+				locked = true
+				break
+			}
+		}
+		if !locked {
+			return
+		}
+		slog.Info("Waiting for dpkg lock to be released...")
+		time.Sleep(5 * time.Second)
+	}
+	slog.Warn("dpkg lock wait timed out after 5 minutes, proceeding anyway")
+}
+
 func runCmd(name string, args ...string) error {
+	// Nếu là apt-get hoặc apt, đợi dpkg lock được giải phóng trước
+	if name == "apt-get" || name == "apt" || name == "add-apt-repository" {
+		waitDPKG()
+	}
 	cmd := exec.Command(name, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {

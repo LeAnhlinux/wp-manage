@@ -22,6 +22,12 @@ export function useSite(id: number) {
       return data.data!
     },
     enabled: !!id,
+    // Auto-poll mỗi 4s khi wp_version chưa có (agent đang detect)
+    refetchInterval: (query) => {
+      const site = query.state.data
+      return site && !site.wp_version ? 4000 : false
+    },
+    refetchIntervalInBackground: false,
   })
 }
 

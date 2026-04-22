@@ -160,7 +160,23 @@ WantedBy=multi-user.target
 		"os":     osVersion,
 	})
 
-	progress(models.DeployProgress{Step: 7, Total: totalSteps, Message: "Deploy agent thành công! Tiếp theo: cài Nginx, PHP-FPM, MariaDB trong Server Detail.", Status: "success"})
+	// Auto-queue install tasks cho tất cả service sau khi agent sẵn sàng
+	// Thứ tự quan trọng: ufw trước, php sau cùng vì lâu nhất
+	autoInstallServices := []string{"ufw", "nginx", "mariadb", "redis", "certbot", "fail2ban", "cron", "wpcli", "php"}
+	for _, svc := range autoInstallServices {
+		task := models.TaskQueue{
+			ServerID: server.ID,
+			TaskType: "install_service",
+			Data:     fmt.Sprintf(`{"service":"%s"}`, svc),
+			Status:   "pending",
+		}
+		if err := s.db.Create(&task).Error; err != nil {
+			slog.Warn("Failed to queue auto-install task", "service", svc, "error", err)
+		}
+	}
+	slog.Info("Queued auto-install tasks", "server_id", server.ID, "services", autoInstallServices)
+
+	progress(models.DeployProgress{Step: 7, Total: totalSteps, Message: "Deploy agent thành công! Đang tự động cài tất cả service (Nginx, PHP, MariaDB, Redis...)...", Status: "success"})
 
 	slog.Info("Auto deploy completed", "server_id", server.ID, "ip", server.IPAddress)
 	return nil

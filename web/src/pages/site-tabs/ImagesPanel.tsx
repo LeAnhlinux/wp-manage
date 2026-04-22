@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { Loader2, ImageIcon, Zap, CheckCircle2, X } from 'lucide-react'
-import { useImageOptConfig, useUpdateImageOptConfig, useToggleImageOpt, useRunImageOpt, useImageOptResults, useRunningImageOpt, useCancelImageOpt, useToggleNginxWebP } from '@/hooks/useImageOpt'
+import { Loader2, ImageIcon, Zap, CheckCircle2, X, RotateCcw, Trash2, HardDrive } from 'lucide-react'
+import { useImageOptConfig, useUpdateImageOptConfig, useToggleImageOpt, useRunImageOpt, useImageOptResults, useRunningImageOpt, useCancelImageOpt, useToggleNginxWebP, useOriginalsStats, useRevertImages, useDeleteOriginals } from '@/hooks/useImageOpt'
 import { formatDate } from '@/lib/utils'
 import type { ImageOptResult } from '@/types'
 
@@ -13,6 +13,9 @@ export function ImagesPanel({ siteId, canManage }: { siteId: number; canManage: 
   const toggleNginxWebP = useToggleNginxWebP(siteId)
   const { data: resultsData } = useImageOptResults(siteId)
   const runningResult = useRunningImageOpt(siteId)
+  const { data: originalsStats, isLoading: statsLoading } = useOriginalsStats(siteId)
+  const revertImages = useRevertImages(siteId)
+  const deleteOriginals = useDeleteOriginals(siteId)
   const [quality, setQuality] = useState<number | null>(null)
 
   const results = ((resultsData?.data as unknown) ?? []) as ImageOptResult[]
@@ -46,8 +49,8 @@ export function ImagesPanel({ siteId, canManage }: { siteId: number; canManage: 
               <h3 className="text-base font-semibold text-gray-900">Image Optimization</h3>
               <p className="text-sm text-gray-500">
                 {config?.enabled
-                  ? 'Auto-compress bật — ảnh sẽ được nén khi upload lên WordPress'
-                  : 'Tắt — ảnh upload sẽ không được tự động nén'}
+                  ? 'Auto-compress enabled — images will be compressed on WordPress upload'
+                  : 'Disabled — uploaded images will not be auto-compressed'}
               </p>
             </div>
           </div>
@@ -68,9 +71,9 @@ export function ImagesPanel({ siteId, canManage }: { siteId: number; canManage: 
         {totalImages > 0 && (
           <div className="mt-5 grid grid-cols-3 gap-3">
             {[
-              { label: 'Tổng ảnh đã xử lý', value: totalImages.toLocaleString(), color: 'text-gray-900' },
-              { label: 'Đã tối ưu', value: totalOptimized.toLocaleString(), color: 'text-emerald-600' },
-              { label: 'Dung lượng tiết kiệm', value: formatBytes(totalSaved), color: 'text-blue-600' },
+              { label: 'Images processed', value: totalImages.toLocaleString(), color: 'text-gray-900' },
+              { label: 'Optimized', value: totalOptimized.toLocaleString(), color: 'text-emerald-600' },
+              { label: 'Space saved', value: formatBytes(totalSaved), color: 'text-blue-600' },
             ].map(stat => (
               <div key={stat.label} className="bg-gray-50 rounded-xl p-3 text-center">
                 <p className={`text-xl font-bold ${stat.color}`}>{stat.value}</p>
@@ -84,13 +87,13 @@ export function ImagesPanel({ siteId, canManage }: { siteId: number; canManage: 
       {/* Settings card */}
       {canManage && config && (
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
-          <h4 className="text-sm font-semibold text-gray-700 mb-4">Cài đặt nén ảnh</h4>
+          <h4 className="text-sm font-semibold text-gray-700 mb-4">Compression Settings</h4>
           <div className="space-y-4">
             {/* WebP toggle */}
             <div className="flex items-center justify-between py-3 border-b border-gray-100">
               <div>
-                <p className="text-sm font-medium text-gray-800">Tạo file WebP</p>
-                <p className="text-xs text-gray-500 mt-0.5">Tự động tạo phiên bản .webp bên cạnh ảnh gốc khi optimize</p>
+                <p className="text-sm font-medium text-gray-800">Generate WebP files</p>
+                <p className="text-xs text-gray-500 mt-0.5">Automatically create a .webp version alongside the original image during optimization</p>
               </div>
               <button onClick={() => updateConfig.mutate({ webp_enabled: !config.webp_enabled })}
                 disabled={updateConfig.isPending}
@@ -102,13 +105,13 @@ export function ImagesPanel({ siteId, canManage }: { siteId: number; canManage: 
             {/* Nginx WebP serving toggle */}
             <div className="flex items-center justify-between py-3 border-b border-gray-100">
               <div>
-                <p className="text-sm font-medium text-gray-800">Nginx tự serve WebP</p>
+                <p className="text-sm font-medium text-gray-800">Nginx WebP serving</p>
                 <p className="text-xs text-gray-500 mt-0.5">
-                  Browser hỗ trợ WebP → tự nhận <code className="bg-gray-100 px-1 rounded text-xs">.webp</code> thay vì <code className="bg-gray-100 px-1 rounded text-xs">.jpg/.png</code> — giảm ~40% dung lượng
+                  WebP-capable browsers automatically receive <code className="bg-gray-100 px-1 rounded text-xs">.webp</code> instead of <code className="bg-gray-100 px-1 rounded text-xs">.jpg/.png</code> — ~40% smaller
                 </p>
                 {config.nginx_webp && (
                   <span className="inline-flex items-center gap-1 mt-1 text-xs text-emerald-600 font-medium">
-                    <CheckCircle2 size={11} /> Đang hoạt động
+                    <CheckCircle2 size={11} /> Active
                   </span>
                 )}
               </div>
@@ -128,8 +131,8 @@ export function ImagesPanel({ siteId, canManage }: { siteId: number; canManage: 
             <div className="py-3 border-b border-gray-100">
               <div className="flex items-center justify-between mb-2">
                 <div>
-                  <p className="text-sm font-medium text-gray-800">Chất lượng nén</p>
-                  <p className="text-xs text-gray-500 mt-0.5">Thấp hơn = file nhỏ hơn, ảnh mờ hơn</p>
+                  <p className="text-sm font-medium text-gray-800">Compression Quality</p>
+                  <p className="text-xs text-gray-500 mt-0.5">Lower = smaller file, slightly less sharp</p>
                 </div>
                 <span className="text-sm font-bold text-blue-600 bg-blue-50 px-2.5 py-1 rounded-lg">{q}%</span>
               </div>
@@ -139,15 +142,15 @@ export function ImagesPanel({ siteId, canManage }: { siteId: number; canManage: 
                 onTouchEnd={() => { if (quality !== null) { updateConfig.mutate({ quality }); setQuality(null) } }}
                 className="w-full accent-blue-600" />
               <div className="flex justify-between text-xs text-gray-400 mt-1">
-                <span>30% (nhỏ nhất)</span><span>80% (khuyến nghị)</span><span>100% (lossless)</span>
+                <span>30% (smallest)</span><span>80% (recommended)</span><span>100% (lossless)</span>
               </div>
             </div>
 
             {/* Max width */}
             <div className="flex items-center justify-between py-3">
               <div>
-                <p className="text-sm font-medium text-gray-800">Chiều rộng tối đa</p>
-                <p className="text-xs text-gray-500 mt-0.5">Resize ảnh nếu lớn hơn giá trị này</p>
+                <p className="text-sm font-medium text-gray-800">Max Width</p>
+                <p className="text-xs text-gray-500 mt-0.5">Resize image if wider than this value</p>
               </div>
               <select value={config.max_width}
                 onChange={(e) => updateConfig.mutate({ max_width: parseInt(e.target.value) })}
@@ -166,14 +169,14 @@ export function ImagesPanel({ siteId, canManage }: { siteId: number; canManage: 
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
         <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
           <div>
-            <h4 className="text-sm font-semibold text-gray-700">Lịch sử tối ưu</h4>
-            <p className="text-xs text-gray-500 mt-0.5">Optimize thủ công tất cả ảnh đã upload</p>
+            <h4 className="text-sm font-semibold text-gray-700">Optimization History</h4>
+            <p className="text-xs text-gray-500 mt-0.5">Manually optimize all uploaded images</p>
           </div>
           {canManage && (
             <button onClick={() => runOpt.mutate()} disabled={runOpt.isPending || hasRunning}
               className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-semibold rounded-xl hover:bg-blue-700 disabled:opacity-50 transition-colors">
               {(runOpt.isPending || hasRunning) ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} />}
-              {hasRunning ? 'Đang chạy...' : 'Optimize tất cả ảnh'}
+              {hasRunning ? 'Running...' : 'Optimize All Images'}
             </button>
           )}
         </div>
@@ -184,7 +187,7 @@ export function ImagesPanel({ siteId, canManage }: { siteId: number; canManage: 
             <div className="flex items-center justify-between mb-2">
               <div className="flex items-center gap-2 text-blue-700 text-sm font-semibold">
                 <Loader2 size={14} className="animate-spin" />
-                Đang tối ưu ảnh...
+                Optimizing images...
               </div>
               <div className="flex items-center gap-3">
                 <span className="text-xs text-blue-500">
@@ -197,7 +200,7 @@ export function ImagesPanel({ siteId, canManage }: { siteId: number; canManage: 
                     className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-red-600 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 disabled:opacity-50 transition-colors"
                   >
                     {cancelOpt.isPending ? <Loader2 size={10} className="animate-spin" /> : <X size={10} />}
-                    Hủy
+                    Cancel
                   </button>
                 )}
               </div>
@@ -212,9 +215,9 @@ export function ImagesPanel({ siteId, canManage }: { siteId: number; canManage: 
               </div>
             )}
             <div className="flex gap-4 text-xs text-blue-600">
-              <span>✓ Tối ưu: <strong>{runningResult.optimized_count}</strong></span>
-              <span>⏭ Bỏ qua: <strong>{runningResult.skipped_count}</strong></span>
-              <span>💾 Tiết kiệm: <strong>{formatBytes(runningResult.bytes_saved)}</strong></span>
+              <span>✓ Optimized: <strong>{runningResult.optimized_count}</strong></span>
+              <span>⏭ Skipped: <strong>{runningResult.skipped_count}</strong></span>
+              <span>💾 Saved: <strong>{formatBytes(runningResult.bytes_saved)}</strong></span>
             </div>
           </div>
         )}
@@ -222,8 +225,8 @@ export function ImagesPanel({ siteId, canManage }: { siteId: number; canManage: 
         {results.length === 0 ? (
           <div className="text-center py-12 text-gray-500">
             <ImageIcon size={32} className="mx-auto mb-2 text-gray-200" />
-            <p className="text-sm font-medium">Chưa có lần optimize nào</p>
-            <p className="text-xs text-gray-400 mt-1">Bấm "Optimize tất cả ảnh" để bắt đầu</p>
+            <p className="text-sm font-medium">No optimization runs yet</p>
+            <p className="text-xs text-gray-400 mt-1">Click "Optimize All Images" to get started</p>
           </div>
         ) : (
           <>
@@ -232,12 +235,12 @@ export function ImagesPanel({ siteId, canManage }: { siteId: number; canManage: 
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b bg-gray-50/80">
-                    <th className="text-left px-5 py-3 font-medium text-gray-500 text-xs uppercase tracking-wide">Thời gian</th>
-                    <th className="text-right px-4 py-3 font-medium text-gray-500 text-xs uppercase tracking-wide">Tổng</th>
-                    <th className="text-right px-4 py-3 font-medium text-gray-500 text-xs uppercase tracking-wide">Tối ưu</th>
-                    <th className="text-right px-4 py-3 font-medium text-gray-500 text-xs uppercase tracking-wide">Bỏ qua</th>
-                    <th className="text-right px-4 py-3 font-medium text-gray-500 text-xs uppercase tracking-wide">Tiết kiệm</th>
-                    <th className="text-center px-4 py-3 font-medium text-gray-500 text-xs uppercase tracking-wide">Trạng thái</th>
+                    <th className="text-left px-5 py-3 font-medium text-gray-500 text-xs uppercase tracking-wide">Time</th>
+                    <th className="text-right px-4 py-3 font-medium text-gray-500 text-xs uppercase tracking-wide">Total</th>
+                    <th className="text-right px-4 py-3 font-medium text-gray-500 text-xs uppercase tracking-wide">Optimized</th>
+                    <th className="text-right px-4 py-3 font-medium text-gray-500 text-xs uppercase tracking-wide">Skipped</th>
+                    <th className="text-right px-4 py-3 font-medium text-gray-500 text-xs uppercase tracking-wide">Saved</th>
+                    <th className="text-center px-4 py-3 font-medium text-gray-500 text-xs uppercase tracking-wide">Status</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-50">
@@ -256,7 +259,7 @@ export function ImagesPanel({ siteId, canManage }: { siteId: number; canManage: 
                           'bg-red-100 text-red-700'
                         }`}>
                           {r.status === 'running' && <Loader2 size={10} className="animate-spin" />}
-                          {r.status === 'completed' ? 'Hoàn tất' : r.status === 'running' ? 'Đang chạy' : r.status === 'cancelled' ? 'Đã hủy' : 'Lỗi'}
+                          {r.status === 'completed' ? 'Completed' : r.status === 'running' ? 'Running' : r.status === 'cancelled' ? 'Cancelled' : 'Failed'}
                         </span>
                       </td>
                     </tr>
@@ -282,14 +285,99 @@ export function ImagesPanel({ siteId, canManage }: { siteId: number; canManage: 
                     </span>
                   </div>
                   <div className="flex gap-4 text-xs text-gray-600">
-                    <span>{r.total_images} ảnh</span>
-                    <span className="text-emerald-600">✓ {r.optimized_count}</span>
-                    <span className="text-blue-600 font-medium">{formatBytes(r.bytes_saved)} tiết kiệm</span>
+                    <span>{r.total_images} images</span>
+                    <span className="text-emerald-600">✓ {r.optimized_count} optimized</span>
+                    <span className="text-blue-600 font-medium">{formatBytes(r.bytes_saved)} saved</span>
                   </div>
                 </div>
               ))}
             </div>
           </>
+        )}
+      </div>
+
+      {/* Originals Backup */}
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="p-2.5 rounded-xl bg-amber-50">
+            <HardDrive size={20} className="text-amber-600" />
+          </div>
+          <div>
+            <h3 className="text-base font-semibold text-gray-900">Original Backups</h3>
+            <p className="text-sm text-gray-500">Files backed up before optimization — stored alongside optimized images</p>
+          </div>
+        </div>
+
+        {statsLoading ? (
+          <div className="flex items-center gap-2 text-sm text-gray-400 py-2">
+            <Loader2 size={14} className="animate-spin" /> Scanning originals...
+          </div>
+        ) : originalsStats && originalsStats.count > 0 ? (
+          <div className="space-y-4">
+            {/* Stats */}
+            <div className="flex items-center gap-6 p-4 bg-amber-50 border border-amber-100 rounded-xl">
+              <div className="text-center">
+                <p className="text-2xl font-bold text-amber-700">{originalsStats.count}</p>
+                <p className="text-xs text-amber-600 mt-0.5">Original files</p>
+              </div>
+              <div className="text-center">
+                <p className="text-2xl font-bold text-amber-700">{formatBytes(originalsStats.size_bytes)}</p>
+                <p className="text-xs text-amber-600 mt-0.5">Disk space used</p>
+              </div>
+              <p className="text-xs text-amber-600 ml-auto max-w-xs">
+                Originals stored as <code className="font-mono bg-amber-100 px-1 rounded">.wpmanage-orig</code> next to each image
+              </p>
+            </div>
+
+            {canManage && (
+              <div className="flex flex-col sm:flex-row gap-3">
+                {/* Revert */}
+                <button
+                  onClick={() => {
+                    if (confirm(`Revert all ${originalsStats.count} images back to originals? Optimized versions and WebP files will be removed.`))
+                      revertImages.mutate()
+                  }}
+                  disabled={revertImages.isPending || deleteOriginals.isPending}
+                  className="flex items-center gap-2 px-4 py-2.5 border border-amber-300 text-amber-700 bg-amber-50 hover:bg-amber-100 rounded-xl text-sm font-medium transition-colors disabled:opacity-50"
+                >
+                  {revertImages.isPending
+                    ? <><Loader2 size={14} className="animate-spin" /> Reverting...</>
+                    : <><RotateCcw size={14} /> Revert to Originals</>}
+                </button>
+
+                {/* Delete originals */}
+                <button
+                  onClick={() => {
+                    if (confirm(`Delete all ${originalsStats.count} backup files? This frees ${formatBytes(originalsStats.size_bytes)} but you won't be able to revert.`))
+                      deleteOriginals.mutate()
+                  }}
+                  disabled={revertImages.isPending || deleteOriginals.isPending}
+                  className="flex items-center gap-2 px-4 py-2.5 border border-red-200 text-red-600 bg-red-50 hover:bg-red-100 rounded-xl text-sm font-medium transition-colors disabled:opacity-50"
+                >
+                  {deleteOriginals.isPending
+                    ? <><Loader2 size={14} className="animate-spin" /> Deleting...</>
+                    : <><Trash2 size={14} /> Delete Originals (free {formatBytes(originalsStats.size_bytes)})</>}
+                </button>
+              </div>
+            )}
+
+            {revertImages.isSuccess && (
+              <p className="text-sm text-emerald-600 flex items-center gap-1.5">
+                <CheckCircle2 size={14} /> Reverted {(revertImages.data as any)?.count ?? 0} images to originals
+              </p>
+            )}
+            {deleteOriginals.isSuccess && (
+              <p className="text-sm text-emerald-600 flex items-center gap-1.5">
+                <CheckCircle2 size={14} /> Deleted {(deleteOriginals.data as any)?.count ?? 0} backup files
+              </p>
+            )}
+          </div>
+        ) : (
+          <div className="text-center py-6 text-gray-400">
+            <HardDrive size={32} className="mx-auto mb-2 text-gray-200" />
+            <p className="text-sm">No backup files found</p>
+            <p className="text-xs mt-1">Run "Bulk Optimize" to compress existing images — originals will be saved automatically</p>
+          </div>
         )}
       </div>
     </div>

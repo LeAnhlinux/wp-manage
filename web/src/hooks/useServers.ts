@@ -48,6 +48,10 @@ export function useDeleteServer() {
       await api.delete(`/servers/${id}`)
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['servers'] }),
+    onError: (err: any) => {
+      const msg = err?.response?.data?.error || 'Xoá server thất bại'
+      alert(`Lỗi: ${msg}`)
+    },
   })
 }
 

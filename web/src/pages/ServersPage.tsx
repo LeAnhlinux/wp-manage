@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import {
   Plus, Trash2, ExternalLink, Copy, Upload, Terminal, Key, Lock,
   CheckCircle, XCircle, Loader2, Server, Cpu, HardDrive, X, ChevronRight,
+  Search, Filter,
 } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useServers, useCreateServer, useDeleteServer, useAutoDeploy } from '@/hooks/useServers'
@@ -26,8 +27,11 @@ export default function ServersPage() {
   const [sshKey, setSSHKey] = useState('')
   const [deployLogs, setDeployLogs] = useState<DeployProgress[]>([])
   const [isDeploying, setIsDeploying] = useState(false)
-  const [deployServerId, setDeployServerId] = useState<number | null>(null)
   const [cmdCopied, setCmdCopied] = useState(false)
+  const [createError, setCreateError] = useState('')
+
+  const [searchTerm, setSearchTerm] = useState('')
+  const [statusFilter, setStatusFilter] = useState<string>('all')
 
   const wsRef = useRef<WebSocket | null>(null)
   const logsEndRef = useRef<HTMLDivElement>(null)
@@ -56,9 +60,9 @@ export default function ServersPage() {
       if (msg.type === 'deploy_progress') {
         const progress = msg.data as DeployProgress
         setDeployLogs(prev => {
-          // When a new step starts (running), mark the previous step as success
           const updated = prev.map((p, i) =>
-            i === prev.length - 1 && p.status === 'running' && progress.status === 'running'
+            i === prev.length - 1 && p.status === 'running' &&
+              (progress.status === 'running' || progress.status === 'success')
               ? { ...p, status: 'success' as const }
               : p
           )
@@ -67,7 +71,6 @@ export default function ServersPage() {
         if (progress.status === 'success' || progress.status === 'error') {
           setIsDeploying(false)
           ws.close()
-          // Refresh server list so status/specs update immediately after deploy
           qc.invalidateQueries({ queryKey: ['servers'] })
         }
       }
@@ -77,6 +80,7 @@ export default function ServersPage() {
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault()
+    setCreateError('')
     try {
       const result = await createServer.mutateAsync({ name, ip_address: ip })
       const serverId = result.data?.server?.id
@@ -85,7 +89,6 @@ export default function ServersPage() {
         setName('')
         setIP('')
       } else if (serverId) {
-        setDeployServerId(serverId)
         setDeployLogs([])
         setIsDeploying(true)
         setInstallCmd('')
@@ -104,8 +107,10 @@ export default function ServersPage() {
         setName('')
         setIP('')
       }
-    } catch {
+    } catch (err: any) {
       setIsDeploying(false)
+      const msg = err?.response?.data?.error || err?.message || 'Something went wrong. Please try again.'
+      setCreateError(msg)
     }
   }
 
@@ -122,9 +127,18 @@ export default function ServersPage() {
   }
 
   const servers = data?.data || []
-
   const lastLog = deployLogs[deployLogs.length - 1]
   const deployProgress = lastLog ? (lastLog.step / lastLog.total) * 100 : 0
+
+  const filteredServers = servers.filter(server => {
+    const matchesSearch = searchTerm === '' ||
+      server.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      server.ip_address.includes(searchTerm)
+    const matchesStatus = statusFilter === 'all' || server.status === statusFilter
+    return matchesSearch && matchesStatus
+  })
+
+  const inputCls = 'w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none text-sm bg-gray-50 focus:bg-white transition-colors'
 
   return (
     <div>
@@ -132,18 +146,18 @@ export default function ServersPage() {
       <div className="flex items-center justify-between mb-7">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 leading-none">Servers</h1>
-          <p className="text-gray-500 text-sm mt-1">{servers.length} server{servers.length !== 1 ? 's' : ''} được quản lý</p>
+          <p className="text-gray-500 text-sm mt-1">{servers.length} server{servers.length !== 1 ? 's' : ''} managed</p>
         </div>
         <button
           onClick={() => {
             setShowCreate(!showCreate)
             setInstallCmd('')
             setDeployLogs([])
-            setDeployServerId(null)
+            setCreateError('')
           }}
           className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-colors text-sm font-semibold shadow-sm shadow-blue-200"
         >
-          <Plus size={16} /> Thêm Server
+          <Plus size={16} /> Add Server
         </button>
       </div>
 
@@ -151,29 +165,27 @@ export default function ServersPage() {
       {showCreate && (
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 mb-6">
           <div className="flex items-center justify-between mb-5">
-            <h2 className="text-base font-semibold text-gray-900">Thêm Server Mới</h2>
-            <button onClick={() => setShowCreate(false)} className="text-gray-400 hover:text-gray-600">
+            <h2 className="text-base font-semibold text-gray-900">Add New Server</h2>
+            <button onClick={() => { setShowCreate(false); setCreateError('') }} className="text-gray-400 hover:text-gray-600">
               <X size={18} />
             </button>
           </div>
 
-          {/* Deploy Method Tabs */}
-          <div className="flex gap-2 mb-6 p-1 bg-gray-100 rounded-xl w-fit">
+          {/* Deploy Method Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-5">
             {([
-              { value: 'auto', icon: Upload, label: 'Auto Deploy' },
-              { value: 'manual', icon: Terminal, label: 'Manual Install' },
-            ] as const).map(({ value, icon: Icon, label }) => (
-              <button
-                key={value}
-                type="button"
-                onClick={() => setDeployMethod(value)}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                  deployMethod === value
-                    ? 'bg-white text-blue-700 shadow-sm'
-                    : 'text-gray-500 hover:text-gray-700'
-                }`}
-              >
-                <Icon size={15} /> {label}
+              { value: 'auto' as const, icon: Upload, label: '⚡ Auto Deploy', desc: 'Connect via SSH and deploy automatically' },
+              { value: 'manual' as const, icon: Terminal, label: '📋 Manual Install', desc: 'Get a one-line install command to run on your VPS' },
+            ]).map(opt => (
+              <button key={opt.value} type="button"
+                onClick={() => setDeployMethod(opt.value)}
+                className={`p-4 rounded-xl border-2 text-left transition-all ${
+                  deployMethod === opt.value
+                    ? 'border-blue-500 bg-blue-50'
+                    : 'border-gray-100 hover:border-gray-200 bg-gray-50'
+                }`}>
+                <div className="font-semibold text-sm text-gray-800">{opt.label}</div>
+                <div className="text-xs text-gray-500 mt-1">{opt.desc}</div>
               </button>
             ))}
           </div>
@@ -181,10 +193,10 @@ export default function ServersPage() {
           <form onSubmit={handleCreate} className="space-y-5">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">Tên Server</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Server Name</label>
                 <input
                   value={name} onChange={(e) => setName(e.target.value)}
-                  className="w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none text-sm bg-gray-50 focus:bg-white transition-colors"
+                  className={inputCls}
                   placeholder="Production VPS 1" required
                 />
               </div>
@@ -192,7 +204,7 @@ export default function ServersPage() {
                 <label className="block text-sm font-medium text-gray-700 mb-1.5">IP Address</label>
                 <input
                   value={ip} onChange={(e) => setIP(e.target.value)}
-                  className="w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none text-sm font-mono bg-gray-50 focus:bg-white transition-colors"
+                  className={inputCls + ' font-mono'}
                   placeholder="103.xxx.xxx.xxx" required
                 />
               </div>
@@ -203,7 +215,7 @@ export default function ServersPage() {
                 <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
                   <Lock size={14} className="text-gray-400" />
                   SSH Credentials
-                  <span className="text-xs font-normal text-gray-400 ml-1">(Chỉ dùng một lần — không lưu vào DB)</span>
+                  <span className="text-xs font-normal text-gray-400 ml-1">(Used once — not stored in DB)</span>
                 </h3>
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -265,6 +277,12 @@ export default function ServersPage() {
               </div>
             )}
 
+            {createError && (
+              <div className="p-4 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
+                {createError}
+              </div>
+            )}
+
             <div className="flex items-center gap-3">
               <button
                 type="submit"
@@ -272,18 +290,18 @@ export default function ServersPage() {
                 className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:opacity-50 text-sm font-semibold transition-colors"
               >
                 {(createServer.isPending || autoDeploy.isPending) ? (
-                  <><Loader2 size={15} className="animate-spin" /> Đang xử lý...</>
+                  <><Loader2 size={15} className="animate-spin" /> Processing...</>
                 ) : deployMethod === 'auto' ? (
-                  <><Upload size={15} /> Tạo & Auto Deploy</>
+                  <><Upload size={15} /> Create & Deploy</>
                 ) : (
-                  'Tạo Connection'
+                  'Create Server'
                 )}
               </button>
               <button
-                type="button" onClick={() => setShowCreate(false)}
+                type="button" onClick={() => { setShowCreate(false); setCreateError('') }}
                 className="px-5 py-2.5 text-gray-500 rounded-xl hover:bg-gray-100 text-sm transition-colors"
               >
-                Huỷ
+                Cancel
               </button>
             </div>
           </form>
@@ -291,7 +309,7 @@ export default function ServersPage() {
           {/* Manual: Install Command */}
           {installCmd && deployMethod === 'manual' && (
             <div className="mt-5 rounded-xl bg-[#0F172A] p-4">
-              <p className="text-sm text-emerald-400 mb-2.5 font-medium">Chạy lệnh sau trên VPS của bạn:</p>
+              <p className="text-sm text-emerald-400 mb-2.5 font-medium">Run this command on your VPS:</p>
               <div className="flex items-start gap-3">
                 <code className="text-sm text-white flex-1 break-all leading-relaxed">{installCmd}</code>
                 <button
@@ -357,6 +375,34 @@ export default function ServersPage() {
         </div>
       )}
 
+      {/* Search + Filter */}
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 mb-5">
+        <div className="flex-1 relative">
+          <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
+          <input
+            type="text"
+            placeholder="Search by name or IP address..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="w-full pl-9 pr-4 py-2.5 border border-gray-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-colors"
+          />
+        </div>
+        <div className="relative flex-shrink-0">
+          <Filter size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="pl-8 pr-4 py-2.5 border border-gray-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 cursor-pointer appearance-none"
+          >
+            <option value="all">All Status</option>
+            <option value="active">Active</option>
+            <option value="inactive">Inactive</option>
+            <option value="deploying">Deploying</option>
+            <option value="error">Error</option>
+          </select>
+        </div>
+      </div>
+
       {/* Desktop Table */}
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden hidden md:block">
         <table className="w-full">
@@ -376,7 +422,7 @@ export default function ServersPage() {
                 <Loader2 size={22} className="animate-spin text-gray-300 mx-auto" />
               </td></tr>
             )}
-            {servers.map((server) => (
+            {filteredServers.map((server) => (
               <tr key={server.id} className="hover:bg-gray-50/60 transition-colors group">
                 <td className="px-6 py-4">
                   <div className="flex items-center gap-3">
@@ -432,7 +478,7 @@ export default function ServersPage() {
                       <ExternalLink size={15} />
                     </Link>
                     <button
-                      onClick={() => { if (confirm(`Xoá server "${server.name}"?`)) deleteServer.mutate(server.id) }}
+                      onClick={() => { if (confirm(`Delete server "${server.name}"? This cannot be undone.`)) deleteServer.mutate(server.id) }}
                       className="p-1.5 text-gray-300 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
                       title="Delete"
                     >
@@ -442,12 +488,16 @@ export default function ServersPage() {
                 </td>
               </tr>
             ))}
-            {!isLoading && servers.length === 0 && (
+            {!isLoading && filteredServers.length === 0 && (
               <tr>
                 <td colSpan={6} className="px-6 py-14 text-center">
                   <Server size={32} className="text-gray-200 mx-auto mb-3" />
-                  <p className="text-gray-400 text-sm">Chưa có server nào.</p>
-                  <p className="text-gray-300 text-xs mt-1">Nhấn "Thêm Server" để bắt đầu.</p>
+                  <p className="text-gray-400 text-sm">
+                    {servers.length === 0 ? 'No servers yet.' : 'No servers match your search.'}
+                  </p>
+                  {servers.length === 0 && (
+                    <p className="text-gray-300 text-xs mt-1">Click "Add Server" to get started.</p>
+                  )}
                 </td>
               </tr>
             )}
@@ -462,14 +512,14 @@ export default function ServersPage() {
             <Loader2 size={22} className="animate-spin text-gray-300 mx-auto" />
           </div>
         )}
-        {servers.map((server) => (
-          <div key={server.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm">
+        {filteredServers.map((server) => (
+          <div key={server.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
             <div className="flex items-center gap-3 p-4">
               <div className="w-10 h-10 rounded-xl bg-[#0F172A] flex items-center justify-center flex-shrink-0">
                 <Server size={18} className="text-blue-400" />
               </div>
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <p className="font-semibold text-gray-900 truncate">{server.name}</p>
                   <StatusBadge status={server.status} />
                 </div>
@@ -485,7 +535,7 @@ export default function ServersPage() {
               {server.disk_gb && <span>{server.disk_gb}GB Disk</span>}
               <span className="ml-auto">{server.sites?.length || 0} sites</span>
               <button
-                onClick={() => { if (confirm(`Xoá server "${server.name}"?`)) deleteServer.mutate(server.id) }}
+                onClick={() => { if (confirm(`Delete server "${server.name}"?`)) deleteServer.mutate(server.id) }}
                 className="p-1 text-gray-300 hover:text-red-600 transition-colors"
               >
                 <Trash2 size={14} />
@@ -493,10 +543,12 @@ export default function ServersPage() {
             </div>
           </div>
         ))}
-        {!isLoading && servers.length === 0 && (
+        {!isLoading && filteredServers.length === 0 && (
           <div className="bg-white rounded-2xl border border-gray-100 p-10 text-center">
             <Server size={32} className="text-gray-200 mx-auto mb-3" />
-            <p className="text-gray-400 text-sm">Chưa có server nào.</p>
+            <p className="text-gray-400 text-sm">
+              {servers.length === 0 ? 'No servers yet.' : 'No servers match your search.'}
+            </p>
           </div>
         )}
       </div>

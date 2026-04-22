@@ -99,17 +99,6 @@ func (w *AlertWorker) sendNotification(rule models.AlertRule, message string) bo
 		}
 		return true
 
-	case "slack":
-		webhookURL := rule.WebhookURL
-		if webhookURL == "" {
-			webhookURL = cfg.SlackWebhook
-		}
-		if err := notify.SendSlack(webhookURL, message); err != nil {
-			slog.Error("Alert slack failed", "error", err)
-			return false
-		}
-		return true
-
 	case "email":
 		if rule.Email == "" {
 			return false

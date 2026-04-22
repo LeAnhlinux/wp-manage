@@ -48,19 +48,26 @@ export function CredRow({ label, value, field, copiedField, onCopy, isLink }: {
   )
 }
 
-export function TabButton({ active, onClick, icon, label }: {
-  active: boolean; onClick: () => void; icon: React.ReactNode; label: string
+export function TabButton({ active, onClick, icon, label, 'data-tab': dataTab }: {
+  active: boolean; onClick: () => void; icon: React.ReactNode; label: string; 'data-tab'?: string
 }) {
   return (
-    <button onClick={onClick}
-      className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
+    <button
+      onClick={onClick}
+      data-tab={dataTab}
+      className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg whitespace-nowrap flex-shrink-0 transition-all duration-150 ${
         active
-          ? 'text-blue-600 border-blue-600'
-          : 'text-gray-500 border-transparent hover:text-gray-700 hover:border-gray-300'
-      }`}>
+          ? 'bg-blue-600 text-white shadow-sm'
+          : 'text-gray-500 hover:text-gray-800 hover:bg-gray-100'
+      }`}
+    >
       {icon} {label}
     </button>
   )
+}
+
+export function TabDivider() {
+  return <div className="w-px h-5 bg-gray-200 mx-0.5 flex-shrink-0" />
 }
 
 export function CopyButton({ value }: { value: string }) {

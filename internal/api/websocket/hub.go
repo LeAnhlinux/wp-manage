@@ -111,6 +111,17 @@ func (h *Hub) Subscribe(client *Client, channel string) {
 	}
 }
 
+// EvictServerMetrics removes a server's cached dashboard metric entry.
+// Call this when a server is deleted so stale data is not pushed to new WS clients.
+func (h *Hub) EvictServerMetrics(serverID uint64) {
+	h.metricsCacheMu.Lock()
+	// metricsCache key is interface{} stored as the JSON-decoded server_id value,
+	// which comes through as float64 from JSON. Try both uint64 and float64 forms.
+	delete(h.metricsCache, serverID)
+	delete(h.metricsCache, float64(serverID))
+	h.metricsCacheMu.Unlock()
+}
+
 func (h *Hub) Broadcast(channel string, msgType string, data interface{}) {
 	msg := Message{Type: msgType, Channel: channel, Data: data}
 	// Cache dashboard metrics per server_id for instant delivery to new subscribers
