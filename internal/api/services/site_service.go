@@ -137,6 +137,13 @@ func (s *SiteService) Delete(id uint64) error {
 		// The domain field on backups was populated at creation time, so we retain that info.
 		tx.Exec("UPDATE backups SET site_id = NULL WHERE site_id = ?", id)
 
+		// Delete transfer_site_results for this site.
+		// These rows carry a unique index on (target_domain, target_server_id), so
+		// keeping them (even with site_id = NULL) would block the user from
+		// transferring the same domain to the same server again after deletion.
+		// History at the job level (transfer_jobs) is preserved regardless.
+		tx.Exec("DELETE FROM transfer_site_results WHERE site_id = ?", id)
+
 		// Delete all other child records that FK-reference sites.id
 		// NOTE: "backups" is intentionally excluded — handled above via orphan.
 		tables := []string{
@@ -339,6 +346,15 @@ func (s *SiteService) CreateJSONTaskReturn(serverID, siteID uint64, taskType str
 }
 
 func (s *SiteService) GetPendingTasks(serverID uint64) ([]models.TaskQueue, error) {
+	// Reset tasks that got stuck in 'processing' (agent crashed mid-task) after 5 minutes.
+	// This is safe because any legitimately running task completes well within 5 minutes
+	// for lightweight tasks; long-running tasks (transfer, backup) are handled in goroutines
+	// and update their own status via callbacks.
+	staleThreshold := time.Now().Add(-5 * time.Minute)
+	s.db.Model(&models.TaskQueue{}).
+		Where("server_id = ? AND status = ? AND updated_at < ?", serverID, "processing", staleThreshold).
+		Update("status", "pending")
+
 	var tasks []models.TaskQueue
 	err := s.db.Where("server_id = ? AND status = ?", serverID, "pending").
 		Order("created_at ASC").Find(&tasks).Error

@@ -109,7 +109,9 @@ func (h *MonitoringHandler) CreateUptimeCheck(c *fiber.Ctx) error {
 	}
 
 	var siteID uint64
-	if sid := c.QueryInt("site_id", 0); sid > 0 {
+	if req.SiteID > 0 {
+		siteID = req.SiteID
+	} else if sid := c.QueryInt("site_id", 0); sid > 0 {
 		siteID = uint64(sid)
 	}
 	check, err := h.uptimeSvc.Create(siteID, req)
@@ -182,7 +184,7 @@ func (h *MonitoringHandler) AlertRulesAll(c *fiber.Ctx) error {
 		models.AlertRule
 		ServerName string `json:"server_name"`
 	}
-	var allRules []ruleItem
+	allRules := make([]ruleItem, 0)
 	for _, sv := range servers {
 		rules, _ := h.alertSvc.ListRules(sv.ID)
 		for _, r := range rules {

@@ -62,3 +62,24 @@ ziotWqsH
 # Sensitive server lists
 # ===========================
 scripts/agent-servers.txt
+
+# ===========================
+# Local-only — infra details, not for GitHub
+# ===========================
+# Operational scripts contain production IPs / SSH users
+/scripts/
+# Internal docs (deploy creds, infra topology)
+/docs/
+# Claude project memory — contains server IPs, admin email
+/memory/
+CLAUDE.md
+wppanel-gioithieu/CLAUDE.md
+# Per-deployment config sourced by scripts (never commit)
+scripts/.deploy.env
+
+# Planning docs & API collections (internal — not for GitHub)
+*.postman_collection.json
+WP-Manage-*.xlsx
+WP-Manage-*.docx
+# Marketing landing page (internal source)
+/wppanel-gioithieu/

@@ -62,6 +62,33 @@ func (h *InfrastructureHandler) GetFirewallStatus(c *fiber.Ctx) error {
 	return c.JSON(models.APIResponse{Success: true, Data: map[string]string{"status": status}})
 }
 
+// ==================== Cloudflare Firewall ====================
+
+func (h *InfrastructureHandler) GetCloudflareConfig(c *fiber.Ctx) error {
+	serverID, _ := strconv.ParseUint(c.Params("id"), 10, 64)
+	cfg, err := h.svc.GetCloudflareConfig(serverID)
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Error: err.Error()})
+	}
+	return c.JSON(models.APIResponse{Success: true, Data: cfg})
+}
+
+func (h *InfrastructureHandler) EnableCloudflareFirewall(c *fiber.Ctx) error {
+	serverID, _ := strconv.ParseUint(c.Params("id"), 10, 64)
+	if err := h.svc.EnableCloudflareFirewall(serverID); err != nil {
+		return c.Status(500).JSON(models.APIResponse{Error: err.Error()})
+	}
+	return c.JSON(models.APIResponse{Success: true, Message: "Cloudflare-only firewall enabled for ports 80 and 443"})
+}
+
+func (h *InfrastructureHandler) DisableCloudflareFirewall(c *fiber.Ctx) error {
+	serverID, _ := strconv.ParseUint(c.Params("id"), 10, 64)
+	if err := h.svc.DisableCloudflareFirewall(serverID); err != nil {
+		return c.Status(500).JSON(models.APIResponse{Error: err.Error()})
+	}
+	return c.JSON(models.APIResponse{Success: true, Message: "Cloudflare-only firewall disabled, ports 80 and 443 restored to open access"})
+}
+
 // ==================== Nginx Configs ====================
 
 func (h *InfrastructureHandler) ListNginxConfigs(c *fiber.Ctx) error {
@@ -338,6 +365,9 @@ func (h *InfrastructureHandler) ListMariaDBUsers(c *fiber.Ctx) error {
 	users, err := h.svc.ListMariaDBUsers(serverID)
 	if err != nil {
 		return c.Status(500).JSON(models.APIResponse{Error: "Failed to list MariaDB users"})
+	}
+	if users == nil {
+		users = []models.MariaDBUser{}
 	}
 	return c.JSON(models.APIResponse{Success: true, Data: users})
 }

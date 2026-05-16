@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	agentconfig "github.com/gofiber-team/wp-manage/internal/agent/config"
@@ -39,6 +40,7 @@ import (
 	"github.com/gofiber-team/wp-manage/internal/agent/site"
 	"github.com/gofiber-team/wp-manage/internal/agent/ssl"
 	"github.com/gofiber-team/wp-manage/internal/agent/system"
+	agenttransfer "github.com/gofiber-team/wp-manage/internal/agent/transfer"
 	"github.com/gofiber-team/wp-manage/internal/models"
 	"github.com/gofiber-team/wp-manage/pkg/utils"
 )
@@ -51,6 +53,7 @@ type AgentServer struct {
 	apiKey          string
 	siteMu          sync.Map // per-domain mutexes to prevent concurrent site operations
 	activeCreations sync.Map // tracks siteIDs currently being created to prevent double-dispatch
+	activeLongRunning int32  // atomic counter: transfer + backup goroutines in-flight
 }
 
 func NewAgentServer(apiURL, apiKey string) *AgentServer {
@@ -74,11 +77,50 @@ func (s *AgentServer) lockDomain(domain string) func() {
 	return mu.Unlock
 }
 
+// ensureUFWPorts checks that UFW allows inbound TCP on every port in the list.
+// Safe to call when UFW is inactive or not installed — exits silently.
+// Idempotent: skips ports already present in `ufw status` output.
+func ensureUFWPorts(ports []int) {
+	out, err := exec.Command("ufw", "status").CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "Status: active") {
+		return // UFW not installed or inactive — nothing to do
+	}
+	status := string(out)
+	for _, port := range ports {
+		portStr := fmt.Sprintf("%d/tcp", port)
+		if strings.Contains(status, portStr) {
+			continue // rule already present
+		}
+		if result, err := exec.Command("ufw", "allow", portStr, "comment", "wp-manage-agent").CombinedOutput(); err != nil {
+			slog.Warn("UFW: failed to allow port", "port", port, "error", err, "output", string(result))
+		} else {
+			slog.Info("UFW: allowed port", "port", port)
+		}
+	}
+}
+
+// StartFirewallWatcher periodically ensures required agent ports remain open in UFW.
+// Runs once immediately, then repeats on the given interval.
+// This self-heals the firewall in case rules are reset (e.g. after ufw reset or OS reboot
+// with a policy that doesn't persist rules).
+func StartFirewallWatcher(ports []int, interval time.Duration) {
+	ensureUFWPorts(ports) // run immediately on startup
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for range ticker.C {
+			ensureUFWPorts(ports)
+		}
+	}()
+}
+
 // StartHTTPServer starts the agent's HTTPS server for file manager and other direct operations.
 // A self-signed TLS certificate is generated in memory on every startup — no key material
 // is written to disk.  The API server connects with InsecureSkipVerify (traffic is still
 // encrypted; this prevents passive eavesdropping over the internal network).
 func (s *AgentServer) StartHTTPServer(port int) {
+	// Firewall watcher is started separately via StartFirewallWatcher in main.go.
+
 	mux := http.NewServeMux()
 
 	// Register file manager routes
@@ -263,12 +305,20 @@ func (s *AgentServer) pollTasks() {
 		case "create_backup":
 			var backupTask models.AgentBackupTask
 			json.Unmarshal(task.Data, &backupTask)
-			go s.executeCreateBackup(task.TaskID, task.SiteID, backupTask)
+			atomic.AddInt32(&s.activeLongRunning, 1)
+			go func(tID, sID uint64, t models.AgentBackupTask) {
+				defer atomic.AddInt32(&s.activeLongRunning, -1)
+				s.executeCreateBackup(tID, sID, t)
+			}(task.TaskID, task.SiteID, backupTask)
 
 		case "restore_backup":
 			var restoreTask models.AgentRestoreTask
 			json.Unmarshal(task.Data, &restoreTask)
-			go s.executeRestoreBackup(task.TaskID, task.SiteID, restoreTask)
+			atomic.AddInt32(&s.activeLongRunning, 1)
+			go func(tID, sID uint64, t models.AgentRestoreTask) {
+				defer atomic.AddInt32(&s.activeLongRunning, -1)
+				s.executeRestoreBackup(tID, sID, t)
+			}(task.TaskID, task.SiteID, restoreTask)
 
 		case "migrate_site":
 			var migrateTask models.AgentMigrateTask
@@ -345,6 +395,13 @@ func (s *AgentServer) pollTasks() {
 			go s.executeStagingDelete(task.TaskID, data)
 
 		case "agent_update":
+			// Defer self-update while a long-running task (transfer/backup/restore)
+			// is in-flight — restarting mid-transfer would orphan the goroutine and
+			// leave the task stuck in "processing" forever.
+			if atomic.LoadInt32(&s.activeLongRunning) > 0 {
+				slog.Info("Deferring agent_update: long-running task in progress", "task_id", task.TaskID)
+				continue
+			}
 			var updateTask models.AgentUpdateTask
 			json.Unmarshal(task.Data, &updateTask)
 			go s.executeAgentUpdate(task.TaskID, updateTask)
@@ -403,6 +460,11 @@ func (s *AgentServer) pollTasks() {
 			var fwTask models.AgentFirewallTask
 			json.Unmarshal(task.Data, &fwTask)
 			go s.executeManageFirewall(task.TaskID, fwTask)
+
+		case "cloudflare_firewall":
+			var cfTask models.AgentCloudflareFirewallTask
+			json.Unmarshal(task.Data, &cfTask)
+			go s.executeCloudflareFirewall(task.TaskID, cfTask)
 
 		case "manage_nginx_config":
 			var ngxTask models.AgentNginxConfigTask
@@ -611,6 +673,21 @@ func (s *AgentServer) pollTasks() {
 			var importTask models.AgentImportDBTask
 			json.Unmarshal(task.Data, &importTask)
 			go s.executeImportDB(task.TaskID, importTask)
+
+		// ── Transfer Tool tasks ────────────────────────────────────────────────
+		case "transfer_discover":
+			var discoverTask models.AgentTransferDiscoverTask
+			json.Unmarshal(task.Data, &discoverTask)
+			go s.executeTransferDiscover(task.TaskID, discoverTask)
+
+		case "transfer_import_site":
+			var importTask models.AgentTransferImportTask
+			json.Unmarshal(task.Data, &importTask)
+			atomic.AddInt32(&s.activeLongRunning, 1)
+			go func(tID uint64, t models.AgentTransferImportTask) {
+				defer atomic.AddInt32(&s.activeLongRunning, -1)
+				s.executeTransferImport(tID, t)
+			}(task.TaskID, importTask)
 
 		default:
 			slog.Warn("Unknown task type", "type", task.TaskType)
@@ -1064,6 +1141,13 @@ func (s *AgentServer) executeAgentUpdate(taskID uint64, task models.AgentUpdateT
 	// ── Step 4: Start wp-manage-updater (one-shot, takes over from here) ─────
 	// The updater will: stop agent → swap binary → start agent → verify → report.
 	// We do NOT wait for it (it will stop us anyway).
+	// Mark task completed BEFORE starting the updater.
+	// The updater will immediately stop this agent process (via systemctl stop),
+	// which kills all goroutines — so completeTask() would never be reached after
+	// the systemctl call. Marking it now ensures the task_queue row is updated
+	// and the API doesn't leave it stuck in "processing" forever.
+	s.completeTask(taskID, "completed", "")
+
 	slog.Info("Handing off to wp-manage-updater service — agent will be restarted by updater")
 	if out, err := exec.Command("systemctl", "start", "wp-manage-updater").CombinedOutput(); err != nil {
 		// Updater service not installed — fall back to old self-update (legacy servers)
@@ -1875,6 +1959,35 @@ func (s *AgentServer) executeManageFirewall(taskID uint64, task models.AgentFire
 		}
 	}
 	s.reportTaskResult(result)
+}
+
+func (s *AgentServer) executeCloudflareFirewall(taskID uint64, task models.AgentCloudflareFirewallTask) {
+	slog.Info("CloudflareFirewall: executing", "action", task.Action)
+	var errMsg string
+
+	switch task.Action {
+	case "enable":
+		if err := agentfirewall.EnableCloudflareOnly(task.IPv4s, task.IPv6s); err != nil {
+			errMsg = err.Error()
+		}
+	case "disable":
+		if err := agentfirewall.DisableCloudflareOnly(); err != nil {
+			errMsg = err.Error()
+		}
+	case "sync":
+		if err := agentfirewall.SyncCloudflareIPs(task.IPv4s, task.IPv6s); err != nil {
+			errMsg = err.Error()
+		}
+	default:
+		errMsg = fmt.Sprintf("unknown cloudflare_firewall action: %s", task.Action)
+	}
+
+	status := "completed"
+	if errMsg != "" {
+		status = "failed"
+		slog.Error("CloudflareFirewall: action failed", "action", task.Action, "error", errMsg)
+	}
+	s.completeTask(taskID, status, errMsg)
 }
 
 func (s *AgentServer) executeManageNginxConfig(taskID uint64, task models.AgentNginxConfigTask) {
@@ -3296,4 +3409,64 @@ func (s *AgentServer) executeRemoveAuthorizedKey(taskID uint64, comment string) 
 	slog.Info("Removed temporary SSH key", "comment", comment)
 	result.Output = "ok"
 	s.reportTaskResult(result)
+}
+
+// ── Transfer Tool handlers ────────────────────────────────────────────────────
+
+// executeTransferDiscover connects to the source server via SSH, detects the panel,
+// discovers all WordPress sites, and POSTs the result back to the API.
+func (s *AgentServer) executeTransferDiscover(taskID uint64, task models.AgentTransferDiscoverTask) {
+	slog.Info("Transfer discover started", "job_id", task.JobID, "source", task.SourceHost, "panel", task.PanelType)
+
+	// Get list of PHP versions installed on THIS (target) server
+	targetPHP := listInstalledPHPVersionsLocal()
+
+	// Run discovery in the runner package
+	agenttransfer.RunDiscovery(task, s.apiURL, s.apiKey, targetPHP)
+
+	// Mark task complete
+	s.reportTaskResult(models.AgentTaskResult{
+		TaskID: taskID,
+		Status: "completed",
+		Output: "discovery done",
+	})
+}
+
+// executeTransferImport pulls one WordPress site from the source server and imports it.
+func (s *AgentServer) executeTransferImport(taskID uint64, task models.AgentTransferImportTask) {
+	slog.Info("Transfer import started",
+		"job_id", task.JobID, "result_id", task.ResultID,
+		"source_domain", task.Site.PrimaryDomain, "target_domain", task.TargetDomain)
+
+	// Use per-domain mutex to prevent concurrent operations on the same site
+	unlock := s.lockDomain(task.TargetDomain)
+	defer unlock()
+
+	runner, err := agenttransfer.NewRunner(task, s.apiURL, s.apiKey)
+	if err != nil {
+		slog.Error("Transfer runner init failed", "error", err)
+		s.reportTaskResult(models.AgentTaskResult{TaskID: taskID, Status: "failed", Error: err.Error()})
+		return
+	}
+
+	runner.Run()
+
+	s.reportTaskResult(models.AgentTaskResult{
+		TaskID: taskID,
+		Status: "completed",
+		Output: "import done",
+	})
+}
+
+// listInstalledPHPVersionsLocal returns PHP version strings installed on the local agent VPS.
+func listInstalledPHPVersionsLocal() []string {
+	versions := []string{"7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5"}
+	var installed []string
+	for _, v := range versions {
+		fpmDir := fmt.Sprintf("/etc/php/%s/fpm", v)
+		if _, err := os.Stat(fpmDir); err == nil {
+			installed = append(installed, v)
+		}
+	}
+	return installed
 }

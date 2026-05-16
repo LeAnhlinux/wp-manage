@@ -521,6 +521,24 @@ function UpdatesSection() {
   const { data: rolloutData } = useRollout(agentRolloutId ?? 0)
   const rollout = rolloutData?.data
 
+  // Auto-refresh server_agents when rollout finishes.
+  // Without this, the "X server(s) need update" badge stays stale because
+  // result.server_agents is set once by checkUpdate and never updated by
+  // useRollout polling — UI shows old needs_update=true even when servers
+  // already upgraded successfully.
+  const prevRolloutStatusRef = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    const cur = rollout?.status
+    const prev = prevRolloutStatusRef.current
+    prevRolloutStatusRef.current = cur
+    if (!cur) return
+    const wasActive = prev === 'running' || prev === 'pending'
+    const isTerminal = cur === 'completed' || cur === 'failed'
+    if (wasActive && isTerminal) {
+      checkUpdate.mutate(undefined, { onSuccess: setResult })
+    }
+  }, [rollout?.status])
+
   // Panel restart polling
   const [panelRestarting, setPanelRestarting] = useState(false)
   const [panelDone, setPanelDone] = useState<'success' | 'timeout' | null>(null)

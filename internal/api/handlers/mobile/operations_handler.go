@@ -402,7 +402,7 @@ func (h *OperationsHandler) FileContent(c *fiber.Ctx) error {
 	}
 
 	params := services.BuildFileQueryParams(site.Domain, path)
-	resp, status, err := h.fileSvc.ProxyToAgent(site, "GET", "/files/read", params, nil)
+	resp, status, err := h.fileSvc.ProxyToAgent(site, "GET", "/files/content", params, nil)
 	if err != nil {
 		return c.Status(500).JSON(models.MobileErr("SERVER_ERROR", err.Error()))
 	}

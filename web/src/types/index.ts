@@ -36,7 +36,7 @@ export interface Site {
   wp_admin_email: string
   is_multisite: boolean
   multisite_type: string
-  install_type: 'auto' | 'manual'
+  install_type: 'auto' | 'manual' | 'transfer'
   linux_user?: string
   open_basedir_enabled?: boolean
   status: 'active' | 'suspended' | 'creating' | 'error' | 'deleting'
@@ -590,6 +590,15 @@ export interface CreateFirewallRuleRequest {
   port: string
   source?: string
   comment?: string
+}
+
+export interface CloudflareFirewallConfig {
+  id?: number
+  server_id: number
+  enabled: boolean
+  last_sync_at: string | null
+  created_at?: string
+  updated_at?: string
 }
 
 export interface NginxConfig {
@@ -1150,4 +1159,114 @@ export interface CreatePanelReleaseRequest {
   checksum: string
   release_notes?: string
   file_size?: number
+}
+
+// ── Transfer Tool Types ───────────────────────────────────────────────────────
+
+export interface TransferSSLInfo {
+  issuer: 'letsencrypt' | 'zerossl' | 'paid' | 'selfsigned'
+  not_after: string
+  sans: string[]
+  is_wildcard: boolean
+}
+
+export interface DiscoveredSiteInfo {
+  site_name: string
+  doc_root: string
+  primary_domain: string
+  aliases: string[] | null
+  wp_site_url: string
+  wp_home_url: string
+  db_name: string
+  db_user: string
+  db_host: string
+  size_bytes: number
+  php_version: string
+  php_detect_method: 'panel_db' | 'vhost_config' | 'http_header' | 'manual' | 'unknown'
+  web_server_type: string
+  ssl_info?: TransferSSLInfo
+}
+
+export interface SiteImportOption {
+  source_domain: string
+  target_domain: string
+  ssl_mode: 'reissue' | 'copy' | 'paid_ca' | 'skip'
+  php_override?: string
+  include_aliases: string[]
+}
+
+export interface TransferSiteResult {
+  id: number
+  job_id: number
+  source_domain: string
+  target_domain: string
+  target_server_id: number
+  site_id: number | null
+  phase: string
+  progress: number
+  status: 'pending' | 'running' | 'done' | 'failed' | 'rolled_back' | 'ssl_pending_reissue'
+  ssl_mode: string
+  php_version: string
+  error?: string
+  log_excerpt?: string
+  started_at: string | null
+  completed_at: string | null
+}
+
+export interface TransferJob {
+  id: number
+  user_id: number
+  target_server_id: number
+  panel_type: 'aapanel' | 'cpanel' | 'plesk' | 'cyberpanel' | 'directadmin'
+  source_host: string
+  source_port: number
+  source_user: string
+  status: 'pending' | 'discovering' | 'awaiting_selection' | 'transferring' | 'completed' | 'failed' | 'cancelled'
+  total_sites: number
+  done_sites: number
+  error?: string
+  started_at: string | null
+  completed_at: string | null
+  created_at: string
+  target_server?: Server
+  results?: TransferSiteResult[]
+  // Parsed JSON columns
+  discovered_sites_parsed?: DiscoveredSiteInfo[]
+  target_php_versions_parsed?: string[]
+}
+
+export interface ConflictCheckResult {
+  available: boolean
+  conflict_type?: 'existing_site' | 'existing_alias' | 'pending_transfer' | 'orphaned_vhost'
+  conflict_detail?: string
+  conflict_site_id?: number
+}
+
+export interface TransferConnectRequest {
+  target_server_id: number
+  panel_type: string
+  host: string
+  port?: number
+  user?: string
+  ssh_key?: string
+  password?: string
+}
+
+export interface TransferStartRequest {
+  sites: SiteImportOption[]
+}
+
+export interface TransferTestConnectionRequest {
+  host: string
+  port?: number
+  user?: string
+  ssh_key?: string
+  password?: string
+}
+
+export interface TransferTestConnectionResult {
+  success: boolean
+  latency_ms?: number
+  hostname?: string
+  error?: string
 }

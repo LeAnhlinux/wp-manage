@@ -4,6 +4,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
 
 	"github.com/gofiber-team/wp-manage/internal/models"
 	"gorm.io/gorm"
@@ -88,6 +92,134 @@ func (s *InfrastructureService) GetFirewallStatus(serverID uint64) (string, erro
 		return "", fmt.Errorf("%s", result.Error)
 	}
 	return result.Output, nil
+}
+
+// ==================== Cloudflare Firewall ====================
+
+// GetCloudflareConfig returns the Cloudflare firewall config for a server.
+// Returns a default (disabled) config if none exists yet.
+func (s *InfrastructureService) GetCloudflareConfig(serverID uint64) (*models.CloudflareFirewallConfig, error) {
+	var cfg models.CloudflareFirewallConfig
+	err := s.db.Where("server_id = ?", serverID).First(&cfg).Error
+	if err != nil {
+		return &models.CloudflareFirewallConfig{ServerID: serverID, Enabled: false}, nil
+	}
+	return &cfg, nil
+}
+
+// EnableCloudflareFirewall fetches the latest Cloudflare IPs, queues an enable
+// task on the agent, and persists the enabled state in DB.
+func (s *InfrastructureService) EnableCloudflareFirewall(serverID uint64) error {
+	ipv4s, ipv6s, err := fetchCloudflareIPs()
+	if err != nil {
+		return fmt.Errorf("failed to fetch Cloudflare IPs: %w", err)
+	}
+
+	taskData := models.AgentCloudflareFirewallTask{
+		Action: "enable",
+		IPv4s:  ipv4s,
+		IPv6s:  ipv6s,
+	}
+	task := s.queueTaskReturn(serverID, 0, "cloudflare_firewall", taskData)
+	result, err := WaitForTaskCompleteWithTimeout(s.db, task.ID, 120*1000000000) // 120s
+	if err != nil {
+		return err
+	}
+	if result.Error != "" {
+		return fmt.Errorf("%s", result.Error)
+	}
+
+	now := time.Now()
+	var cfg models.CloudflareFirewallConfig
+	s.db.Where("server_id = ?", serverID).FirstOrInit(&cfg)
+	cfg.ServerID = serverID
+	cfg.Enabled = true
+	cfg.LastSyncAt = &now
+	s.db.Save(&cfg)
+	return nil
+}
+
+// DisableCloudflareFirewall queues a disable task and updates DB state.
+func (s *InfrastructureService) DisableCloudflareFirewall(serverID uint64) error {
+	taskData := models.AgentCloudflareFirewallTask{Action: "disable"}
+	task := s.queueTaskReturn(serverID, 0, "cloudflare_firewall", taskData)
+	result, err := WaitForTaskComplete(s.db, task.ID)
+	if err != nil {
+		return err
+	}
+	if result.Error != "" {
+		return fmt.Errorf("%s", result.Error)
+	}
+
+	s.db.Model(&models.CloudflareFirewallConfig{}).
+		Where("server_id = ?", serverID).
+		Update("enabled", false)
+	return nil
+}
+
+// SyncCloudflareFirewall fetches latest Cloudflare IPs and applies them
+// to a server that already has Cloudflare-only mode enabled.
+// Called by CloudflareIPWorker weekly.
+func (s *InfrastructureService) SyncCloudflareFirewall(serverID uint64) error {
+	ipv4s, ipv6s, err := fetchCloudflareIPs()
+	if err != nil {
+		return fmt.Errorf("failed to fetch Cloudflare IPs: %w", err)
+	}
+
+	taskData := models.AgentCloudflareFirewallTask{
+		Action: "sync",
+		IPv4s:  ipv4s,
+		IPv6s:  ipv6s,
+	}
+	task := s.queueTaskReturn(serverID, 0, "cloudflare_firewall", taskData)
+	result, err := WaitForTaskCompleteWithTimeout(s.db, task.ID, 120*1000000000) // 120s
+	if err != nil {
+		return err
+	}
+	if result.Error != "" {
+		return fmt.Errorf("%s", result.Error)
+	}
+
+	now := time.Now()
+	s.db.Model(&models.CloudflareFirewallConfig{}).
+		Where("server_id = ?", serverID).
+		Update("last_sync_at", now)
+	return nil
+}
+
+// fetchCloudflareIPs downloads the current Cloudflare IP ranges from the
+// official endpoints. Returns IPv4 and IPv6 CIDR lists.
+func fetchCloudflareIPs() (ipv4s, ipv6s []string, err error) {
+	fetch := func(url string) ([]string, error) {
+		client := &http.Client{Timeout: 15 * time.Second}
+		resp, err := client.Get(url)
+		if err != nil {
+			return nil, err
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, err
+		}
+		var ips []string
+		for _, line := range strings.Split(strings.TrimSpace(string(body)), "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				ips = append(ips, line)
+			}
+		}
+		return ips, nil
+	}
+
+	ipv4s, err = fetch("https://www.cloudflare.com/ips-v4")
+	if err != nil {
+		return nil, nil, fmt.Errorf("IPv4: %w", err)
+	}
+	ipv6s, err = fetch("https://www.cloudflare.com/ips-v6")
+	if err != nil {
+		return nil, nil, fmt.Errorf("IPv6: %w", err)
+	}
+	return ipv4s, ipv6s, nil
 }
 
 // ==================== Nginx Configs ====================

@@ -18,6 +18,8 @@ import TeamsPage from '@/pages/TeamsPage'
 import ActivityLogPage from '@/pages/ActivityLogPage'
 import UptimeMonitoringPage from '@/pages/UptimeMonitoringPage'
 import DNSProvidersPage from '@/pages/DNSProvidersPage'
+import TransferPage from '@/pages/TransferPage'
+import TransferWizardPage from '@/pages/TransferWizardPage'
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
@@ -56,6 +58,9 @@ function AppRoutes() {
         <Route path="monitoring" element={<UptimeMonitoringPage />} />
         <Route path="dns" element={<DNSProvidersPage />} />
         <Route path="settings" element={<SettingsPage />} />
+        <Route path="transfer" element={<TransferPage />} />
+        <Route path="transfer/new" element={<TransferWizardPage />} />
+        <Route path="transfer/:id" element={<TransferWizardPage />} />
       </Route>
     </Routes>
   )

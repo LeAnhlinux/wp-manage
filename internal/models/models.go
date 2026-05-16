@@ -423,6 +423,18 @@ type FirewallRule struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// CloudflareFirewallConfig stores Cloudflare-only firewall state per server.
+// When enabled, ports 80/443 are restricted to Cloudflare IP ranges only.
+// IPs are synced weekly by CloudflareIPWorker every Monday at 02:00.
+type CloudflareFirewallConfig struct {
+	ID         uint64     `json:"id" gorm:"primaryKey;autoIncrement"`
+	ServerID   uint64     `json:"server_id" gorm:"uniqueIndex;not null"`
+	Enabled    bool       `json:"enabled" gorm:"default:false"`
+	LastSyncAt *time.Time `json:"last_sync_at"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+}
+
 // NginxConfig stores custom Nginx configurations per server/site
 type NginxConfig struct {
 	ID         uint64    `json:"id" gorm:"primaryKey;autoIncrement"`
@@ -662,4 +674,121 @@ type APIKeyModel struct {
 	LastUsedAt *time.Time `json:"last_used_at"`
 	CreatedAt  time.Time  `json:"created_at"`
 	User       *User      `json:"user,omitempty" gorm:"foreignKey:UserID"`
+}
+
+// ServerMetric stores per-minute CPU/RAM/Disk samples pushed by each agent heartbeat.
+// Used by the mobile API /servers/:id/metrics/history endpoint.
+type ServerMetric struct {
+	ID         uint64    `json:"id" gorm:"primaryKey;autoIncrement"`
+	ServerID   uint64    `json:"server_id" gorm:"index;not null"`
+	CPUUsage   float64   `json:"cpu_usage"`
+	RAMUsage   float64   `json:"ram_usage"`
+	DiskUsage  float64   `json:"disk_usage"`
+	UptimeSec  int64     `json:"uptime_sec"`
+	RecordedAt time.Time `json:"recorded_at" gorm:"index"`
+}
+
+// ─── Transfer Tool ────────────────────────────────────────────────────────────
+
+// TransferJob represents a transfer session: one source server → one target server.
+// It may import multiple WordPress sites (stored in DiscoveredSites / Results).
+type TransferJob struct {
+	ID                uint64     `json:"id" gorm:"primaryKey;autoIncrement"`
+	UserID            uint64     `json:"user_id" gorm:"index;not null"`
+	TargetServerID    uint64     `json:"target_server_id" gorm:"index;not null"`
+	PanelType         string     `json:"panel_type" gorm:"type:enum('aapanel','cpanel','plesk','cyberpanel','directadmin');not null"`
+	SourceHost        string     `json:"source_host" gorm:"size:255;not null"`
+	SourcePort        int        `json:"source_port" gorm:"default:22"`
+	SourceUser        string     `json:"source_user" gorm:"size:50;default:'root'"`
+	Status            string     `json:"status" gorm:"type:enum('pending','discovering','awaiting_selection','transferring','completed','failed','cancelled');default:'pending';not null"`
+	// DiscoveredSites: JSON array of DiscoveredSiteInfo (set by agent after discover task)
+	// NOTE: longtext instead of json to avoid MariaDB's implicit JSON_VALID() CHECK constraint
+	// which rejects empty string on INSERT. Content is always valid JSON or "null".
+	DiscoveredSites   string     `json:"discovered_sites,omitempty" gorm:"type:longtext"`
+	// TargetPHPVersions: JSON []string of PHP versions installed on target server
+	TargetPHPVersions string     `json:"target_php_versions,omitempty" gorm:"type:longtext"`
+	// SelectedSites: JSON array of SiteImportOption (set by user in Step 2)
+	SelectedSites     string     `json:"selected_sites,omitempty" gorm:"type:longtext"`
+	TotalSites        int        `json:"total_sites" gorm:"default:0"`
+	DoneSites         int        `json:"done_sites" gorm:"default:0"`
+	Error             string     `json:"error,omitempty" gorm:"type:text"`
+	StartedAt         *time.Time `json:"started_at"`
+	CompletedAt       *time.Time `json:"completed_at"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+	User              *User      `json:"user,omitempty" gorm:"foreignKey:UserID"`
+	TargetServer      *Server    `json:"target_server,omitempty" gorm:"foreignKey:TargetServerID"`
+	Results           []TransferSiteResult `json:"results,omitempty" gorm:"foreignKey:JobID"`
+}
+
+// TransferSiteResult tracks the import status of a single site within a TransferJob.
+// The unique index on (target_domain, target_server_id) prevents race conditions when
+// two jobs try to claim the same target domain on the same server simultaneously.
+type TransferSiteResult struct {
+	ID             uint64     `json:"id" gorm:"primaryKey;autoIncrement"`
+	JobID          uint64     `json:"job_id" gorm:"index;not null"`
+	SourceDomain   string     `json:"source_domain" gorm:"size:255;not null"`
+	TargetDomain   string     `json:"target_domain" gorm:"uniqueIndex:uidx_transfer_domain_server;size:255;not null"`
+	TargetServerID uint64     `json:"target_server_id" gorm:"uniqueIndex:uidx_transfer_domain_server;not null"`
+	SiteID         *uint64    `json:"site_id"` // filled when wp-manage Site row is created
+	Phase          string     `json:"phase" gorm:"size:40"` // files|db|create_site|search_replace|ssl|verify
+	Progress       int        `json:"progress" gorm:"default:0"` // 0-100
+	Status         string     `json:"status" gorm:"type:enum('pending','running','done','failed','rolled_back','ssl_pending_reissue');default:'pending';not null"`
+	SSLMode        string     `json:"ssl_mode" gorm:"size:20"` // reissue|copy|paid_ca|skip
+	PHPVersion     string     `json:"php_version" gorm:"size:10"` // resolved PHP version for this site
+	Error          string     `json:"error,omitempty" gorm:"type:text"`
+	LogExcerpt     string     `json:"log_excerpt,omitempty" gorm:"type:text"` // last 10 log lines
+	StartedAt      *time.Time `json:"started_at"`
+	CompletedAt    *time.Time `json:"completed_at"`
+	Job            *TransferJob `json:"job,omitempty" gorm:"foreignKey:JobID"`
+	Site           *Site        `json:"site,omitempty" gorm:"foreignKey:SiteID"`
+}
+
+// ─── Transfer in-memory / JSON types (not GORM models) ───────────────────────
+
+// DiscoveredSiteInfo is serialised into TransferJob.DiscoveredSites (JSON column).
+type DiscoveredSiteInfo struct {
+	SiteName        string   `json:"site_name"`
+	DocRoot         string   `json:"doc_root"`
+	PrimaryDomain   string   `json:"primary_domain"`
+	Aliases         []string `json:"aliases"`
+	WPSiteURL       string   `json:"wp_site_url"`
+	WPHomeURL       string   `json:"wp_home_url"`
+	DBName          string   `json:"db_name"`
+	DBUser          string   `json:"db_user"`
+	DBHost          string   `json:"db_host"`
+	DBPass          string   `json:"-"` // never serialised to JSON response
+	SizeBytes       int64    `json:"size_bytes"`
+	PHPVersion      string   `json:"php_version"`       // "" if unknown
+	PHPDetectMethod string   `json:"php_detect_method"` // panel_db|vhost_config|http_header|manual
+	WebServerType   string   `json:"web_server_type"`   // nginx|openlitespeed|apache
+	SSLInfo         *TransferSSLInfo `json:"ssl_info,omitempty"`
+}
+
+// TransferSSLInfo describes the SSL certificate on the source site.
+type TransferSSLInfo struct {
+	Issuer     string   `json:"issuer"`      // letsencrypt|zerossl|paid|selfsigned
+	NotAfter   string   `json:"not_after"`   // RFC3339
+	SANs       []string `json:"sans"`
+	CertPath   string   `json:"cert_path"`   // source file path (agent-internal)
+	KeyPath    string   `json:"key_path"`
+	IsWildcard bool     `json:"is_wildcard"`
+}
+
+// SiteImportOption is one element of TransferJob.SelectedSites (JSON column).
+// Set by the user in Step 2 before starting the transfer.
+type SiteImportOption struct {
+	SourceDomain   string   `json:"source_domain"`
+	TargetDomain   string   `json:"target_domain"`
+	SSLMode        string   `json:"ssl_mode"`          // reissue|copy|paid_ca|skip
+	PHPOverride    string   `json:"php_override"`      // "" = use detected version
+	IncludeAliases []string `json:"include_aliases"`   // alias domains to import
+}
+
+// ConflictCheckResult is returned by the domain availability check.
+type ConflictCheckResult struct {
+	Available      bool   `json:"available"`
+	ConflictType   string `json:"conflict_type,omitempty"`   // existing_site|existing_alias|pending_transfer|orphaned_vhost
+	ConflictDetail string `json:"conflict_detail,omitempty"`
+	ConflictSiteID *uint64 `json:"conflict_site_id,omitempty"`
 }

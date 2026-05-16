@@ -27,6 +27,18 @@ func SiteUser(domain string) string {
 	return "wp_" + strings.NewReplacer(".", "_", "-", "_").Replace(domain)
 }
 
+// SiteRoot returns the site's root directory path.
+// Single source of truth — always use this instead of SiteRoot(domain).
+func SiteRoot(domain string) string {
+	return "/var/www/" + domain
+}
+
+// SiteWebRoot returns the web-accessible directory (served by Nginx).
+// Single source of truth — always use this instead of siteRoot + "/public".
+func SiteWebRoot(domain string) string {
+	return SiteRoot(domain) + "/public"
+}
+
 // createSiteUser creates a system user for the site (no login shell, no home dir creation).
 func createSiteUser(domain string) error {
 	if err := utils.ValidateDomain(domain); err != nil {
@@ -37,7 +49,7 @@ func createSiteUser(domain string) error {
 		"--system",
 		"--no-create-home",
 		"--shell", "/usr/sbin/nologin",
-		"--home-dir", fmt.Sprintf("/var/www/%s", domain),
+		"--home-dir", SiteRoot(domain),
 		user,
 	)
 	out, err := cmd.CombinedOutput()
@@ -90,7 +102,7 @@ func NewManager(onProgress ProgressFunc) *Manager {
 // GetWPVersion reads the WordPress version directly from wp-includes/version.php.
 // This avoids WP-CLI/PHP entirely — works with any PHP version, ionCube themes, etc.
 func GetWPVersion(domain string) string {
-	versionFile := fmt.Sprintf("/var/www/%s/public/wp-includes/version.php", domain)
+	versionFile := SiteWebRoot(domain) + "/wp-includes/version.php"
 	data, err := os.ReadFile(versionFile)
 	if err != nil {
 		return ""
@@ -117,7 +129,7 @@ func GetWPVersion(domain string) string {
 // Called automatically when any CreateSite step fails.
 func (m *Manager) cleanupFailedSite(domain, dbName, dbUser string) {
 	slog.Info("Rolling back failed site creation", "domain", domain)
-	siteRoot := fmt.Sprintf("/var/www/%s", domain)
+	siteRoot := SiteRoot(domain)
 
 	// Remove nginx configs
 	os.Remove(fmt.Sprintf("/etc/nginx/sites-enabled/%s.conf", domain))
@@ -157,7 +169,7 @@ func (m *Manager) CreateSite(params CreateParams) error {
 		return fmt.Errorf("CreateSite: %w", err)
 	}
 
-	siteRoot := fmt.Sprintf("/var/www/%s", params.Domain)
+	siteRoot := SiteRoot(params.Domain)
 	webRoot := siteRoot + "/public"
 	phpVer := params.PHPVersion
 	if phpVer == "" {
@@ -239,17 +251,26 @@ func (m *Manager) DeleteSite(domain, dbName, dbUser string) error {
 		return fmt.Errorf("DeleteSite: %w", err)
 	}
 
-	siteRoot := fmt.Sprintf("/var/www/%s", domain)
+	siteRoot := SiteRoot(domain)
 
 	// Remove nginx config
 	os.Remove(fmt.Sprintf("/etc/nginx/sites-enabled/%s.conf", domain))
 	os.Remove(fmt.Sprintf("/etc/nginx/sites-available/%s.conf", domain))
 
-	// Remove PHP-FPM pool for all versions
+	// Remove PHP-FPM pool for all versions and reload each affected FPM service
+	// so that worker processes exit before we try to remove the Linux user.
 	phpVersions := []string{"7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5"}
 	for _, v := range phpVersions {
 		poolFile := fmt.Sprintf("/etc/php/%s/fpm/pool.d/%s.conf", v, domain)
-		os.Remove(poolFile)
+		if err := os.Remove(poolFile); err == nil {
+			// Pool file existed — reload this FPM version so workers stop now.
+			svc := fmt.Sprintf("php%s-fpm", v)
+			if out, err := exec.Command("systemctl", "reload", svc).CombinedOutput(); err != nil {
+				// reload failed — try restart as fallback
+				exec.Command("systemctl", "restart", svc).Run()
+				slog.Warn("PHP-FPM reload failed, restarted", "version", v, "output", string(out))
+			}
+		}
 	}
 
 	// Revoke & delete SSL certificate (certbot)
@@ -269,7 +290,7 @@ func (m *Manager) DeleteSite(domain, dbName, dbUser string) error {
 	// Remove the site's Linux user + group
 	deleteSiteUser(domain)
 
-	// Reload services
+	// Reload nginx (PHP-FPM already reloaded above per version)
 	exec.Command("nginx", "-t").Run()
 	exec.Command("systemctl", "reload", "nginx").Run()
 
@@ -280,7 +301,7 @@ func (m *Manager) DeleteSite(domain, dbName, dbUser string) error {
 // CreateSiteManual sets up server infrastructure (dirs, DB, Nginx, PHP-FPM) WITHOUT installing WordPress.
 // Used for manual/custom deployments where the user will upload their own source code.
 func (m *Manager) CreateSiteManual(params CreateParams) error {
-	siteRoot := fmt.Sprintf("/var/www/%s", params.Domain)
+	siteRoot := SiteRoot(params.Domain)
 	webRoot := siteRoot + "/public"
 	phpVer := params.PHPVersion
 	if phpVer == "" {
@@ -328,7 +349,7 @@ func (m *Manager) CreateSiteManual(params CreateParams) error {
 // If DB credentials are provided, wp-config.php is patched with the correct values so the
 // site connects to the panel-managed database immediately after deploy.
 func (m *Manager) ExtractSourceZip(domain, zipPath, dbName, dbUser, dbPass, dbHost string) error {
-	webRoot := fmt.Sprintf("/var/www/%s/public", domain)
+	webRoot := SiteWebRoot(domain)
 	tmpExtract := fmt.Sprintf("/tmp/wp-source-extract-%s", domain)
 
 	// Clean up any previous temp dir
@@ -505,7 +526,7 @@ func (m *Manager) ImportDatabase(dbName, sqlPath, domain, oldDomain, phpVersion 
 	if domain == "" {
 		return nil
 	}
-	webRoot := fmt.Sprintf("/var/www/%s/public", domain)
+	webRoot := SiteWebRoot(domain)
 
 	// Detect whether SSL cert exists for this domain → use https or http
 	scheme := "http"
@@ -1279,7 +1300,7 @@ add_action('init', function() {
 // InstallAutologinOnExisting installs autologin on an already existing site.
 // Called via a task from the panel.
 func InstallAutologinOnExisting(domain string) (string, error) {
-	webRoot := fmt.Sprintf("/var/www/%s/public", domain)
+	webRoot := SiteWebRoot(domain)
 	mgr := NewManager(func(s string, p int, m string) {})
 	return mgr.installAutologin(webRoot, domain)
 }

@@ -3,6 +3,7 @@ import api from '@/lib/api'
 import type {
   FirewallRule,
   CreateFirewallRuleRequest,
+  CloudflareFirewallConfig,
   NginxConfig,
   CreateNginxConfigRequest,
   UpdateNginxConfigRequest,
@@ -429,6 +430,45 @@ export function useFirewallStatus() {
     mutationFn: async (serverId: number) => {
       const { data } = await api.get<APIResponse<{ status: string }>>(`/servers/${serverId}/firewall/status`)
       return data.data?.status ?? ''
+    },
+  })
+}
+
+// ==================== Cloudflare Firewall ====================
+
+export function useCloudflareConfig(serverId: number) {
+  return useQuery({
+    queryKey: ['cloudflare-fw', serverId],
+    queryFn: async () => {
+      const { data } = await api.get<APIResponse<CloudflareFirewallConfig>>(`/servers/${serverId}/firewall/cloudflare`)
+      return data.data!
+    },
+    enabled: serverId > 0,
+  })
+}
+
+export function useEnableCloudflareFirewall() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (serverId: number) => {
+      const { data } = await api.post<APIResponse<null>>(`/servers/${serverId}/firewall/cloudflare/enable`)
+      return data
+    },
+    onSuccess: (_, serverId) => {
+      qc.invalidateQueries({ queryKey: ['cloudflare-fw', serverId] })
+    },
+  })
+}
+
+export function useDisableCloudflareFirewall() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (serverId: number) => {
+      const { data } = await api.post<APIResponse<null>>(`/servers/${serverId}/firewall/cloudflare/disable`)
+      return data
+    },
+    onSuccess: (_, serverId) => {
+      qc.invalidateQueries({ queryKey: ['cloudflare-fw', serverId] })
     },
   })
 }

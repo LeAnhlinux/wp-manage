@@ -9,6 +9,7 @@ import {
 import { useServer, useDeleteServer } from '@/hooks/useServers'
 import {
   useFirewallRules, useCreateFirewallRule, useDeleteFirewallRule, useFirewallStatus,
+  useCloudflareConfig, useEnableCloudflareFirewall, useDisableCloudflareFirewall,
   useNginxConfigs, useCreateNginxConfig, useDeleteNginxConfig,
   useOPcacheAction, useRebuildConfig, useRunHealthCheck, useServerLogs,
   usePHPFPMPool, useUpdatePHPFPMPool,
@@ -386,6 +387,92 @@ function DetailRow({ label, value }: { label: string; value: React.ReactNode }) 
 
 // ==================== Firewall Tab ====================
 
+function CloudflareProtectionPanel({ serverId, canManage }: { serverId: number; canManage: boolean }) {
+  const { data: cfg, isLoading } = useCloudflareConfig(serverId)
+  const enable = useEnableCloudflareFirewall()
+  const disable = useDisableCloudflareFirewall()
+  const isPending = enable.isPending || disable.isPending
+
+  const handleToggle = async () => {
+    try {
+      if (cfg?.enabled) {
+        await disable.mutateAsync(serverId)
+      } else {
+        await enable.mutateAsync(serverId)
+      }
+    } catch (e: any) {
+      alert('Lỗi: ' + (e?.response?.data?.error ?? e?.message ?? 'Unknown error'))
+    }
+  }
+
+  return (
+    <div className="bg-white rounded-xl shadow-sm border border-orange-100 p-6">
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex-1">
+          <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+            <Shield size={20} className="text-orange-500" />
+            Cloudflare Protection
+          </h2>
+          <p className="text-sm text-gray-500 mt-1">
+            Chỉ cho phép traffic từ Cloudflare IPs vào port 80 và 443.
+            IP Cloudflare tự động cập nhật hàng tuần (Thứ 2 lúc 02:00).
+          </p>
+          {cfg?.last_sync_at && (
+            <p className="text-xs text-gray-400 mt-1">
+              Lần đồng bộ cuối: {new Date(cfg.last_sync_at).toLocaleString('vi-VN')}
+            </p>
+          )}
+        </div>
+        {canManage ? (
+          <button
+            onClick={handleToggle}
+            disabled={isLoading || isPending}
+            title={cfg?.enabled ? 'Tắt Cloudflare Protection' : 'Bật Cloudflare Protection'}
+            className={`relative inline-flex h-7 w-12 flex-shrink-0 items-center rounded-full transition-colors focus:outline-none disabled:opacity-50 ${
+              cfg?.enabled ? 'bg-orange-500' : 'bg-gray-200'
+            }`}
+          >
+            <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
+              cfg?.enabled ? 'translate-x-6' : 'translate-x-1'
+            }`} />
+          </button>
+        ) : (
+          <span className={`px-2.5 py-1 rounded-full text-xs font-medium flex-shrink-0 ${
+            cfg?.enabled ? 'bg-orange-100 text-orange-700' : 'bg-gray-100 text-gray-500'
+          }`}>
+            {cfg?.enabled ? 'Đang bật' : 'Đã tắt'}
+          </span>
+        )}
+      </div>
+
+      {isPending && (
+        <div className="mt-3 flex items-center gap-2 text-sm text-orange-600">
+          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-orange-500" />
+          {enable.isPending ? 'Đang bật Cloudflare Protection...' : 'Đang tắt Cloudflare Protection...'}
+          <span className="text-xs text-gray-400">(30–120s)</span>
+        </div>
+      )}
+
+      {cfg?.enabled && !isPending && (
+        <div className="mt-3 p-3 bg-orange-50 rounded-lg border border-orange-100 flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full bg-orange-400 animate-pulse flex-shrink-0" />
+          <p className="text-xs text-orange-700">
+            <strong>Đang hoạt động:</strong> Port 80/443 chỉ nhận traffic từ Cloudflare IPs.
+            Sites phải dùng Cloudflare proxy <span className="font-mono">☁️</span> mới truy cập được.
+          </p>
+        </div>
+      )}
+
+      <div className="mt-3 p-3 bg-amber-50 rounded-lg border border-amber-100">
+        <p className="text-xs text-amber-700">
+          ⚠️ <strong>Lưu ý:</strong> Chỉ bật khi <em>tất cả</em> sites trên server đã dùng Cloudflare proxy.
+          Site dùng DNS trực tiếp (không qua Cloudflare) sẽ không truy cập được.
+        </p>
+      </div>
+    </div>
+  )
+}
+
 function FirewallTab({ serverId }: { serverId: number }) {
   const { can } = usePermissions()
   const canManage = can('infrastructure', 'manage')
@@ -421,6 +508,9 @@ function FirewallTab({ serverId }: { serverId: number }) {
 
   return (
     <div className="space-y-4">
+      {/* Cloudflare Protection Panel */}
+      <CloudflareProtectionPanel serverId={serverId} canManage={canManage} />
+
       {/* UFW Status Panel */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
         <div className="flex items-center justify-between mb-3">

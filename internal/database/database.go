@@ -61,6 +61,13 @@ func RunManualMigrations(db *gorm.DB) {
 	// Add open_basedir_enabled to sites (per-site PHP open_basedir toggle).
 	// Default 1 = enabled (most secure). Existing sites get open_basedir enabled.
 	db.Exec("ALTER TABLE sites ADD COLUMN IF NOT EXISTS open_basedir_enabled TINYINT(1) NOT NULL DEFAULT 1")
+
+	// Transfer Tool: change JSON columns → LONGTEXT to remove MariaDB's implicit
+	// JSON_VALID() CHECK constraint which rejects empty string on INSERT.
+	// MariaDB stores JSON and LONGTEXT identically on disk; no data loss.
+	db.Exec("ALTER TABLE transfer_jobs MODIFY COLUMN IF EXISTS discovered_sites LONGTEXT")
+	db.Exec("ALTER TABLE transfer_jobs MODIFY COLUMN IF EXISTS target_php_versions LONGTEXT")
+	db.Exec("ALTER TABLE transfer_jobs MODIFY COLUMN IF EXISTS selected_sites LONGTEXT")
 }
 
 func AutoMigrate(db *gorm.DB) error {
@@ -118,5 +125,11 @@ func AutoMigrate(db *gorm.DB) error {
 		&models.MobileRefreshToken{},
 		&models.MobileNotification{},
 		&models.MobilePushLog{},
+		// Metrics history (mobile + dashboard)
+		&models.ServerMetric{},
+		// Transfer Tool
+		&models.TransferJob{},
+		&models.TransferSiteResult{},
+		&models.CloudflareFirewallConfig{},
 	)
 }

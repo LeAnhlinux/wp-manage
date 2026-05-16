@@ -80,6 +80,28 @@ export function useCheckUpdate() {
   })
 }
 
+// Background query — checks mirror once per hour silently.
+// Returns { hasUpdate, latestVersion } for the sidebar badge.
+export function useUpdateAvailable() {
+  return useQuery({
+    queryKey: ['panel-update-available'],
+    queryFn: async () => {
+      const { data } = await api.get<APIResponse<CheckUpdateResult>>('/settings/update/check')
+      const result = data.data
+      return {
+        hasUpdate: !!(result?.panel_newer || result?.agent_newer),
+        latestVersion: result?.latest?.version ?? null,
+      }
+    },
+    // Cache 30 min — recheck every 1h (only when tab is focused)
+    staleTime: 30 * 60 * 1000,
+    refetchInterval: 60 * 60 * 1000,
+    refetchIntervalInBackground: false,
+    // Don't throw — silent failure is fine for a background badge
+    retry: 1,
+  })
+}
+
 export function useApplyPanelUpdate() {
   return useMutation({
     mutationFn: async (req: { version: string; download_url: string; checksum: string; web_url?: string; web_checksum?: string }) => {

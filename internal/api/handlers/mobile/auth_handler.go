@@ -4,15 +4,17 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber-team/wp-manage/internal/api/services"
 	"github.com/gofiber-team/wp-manage/internal/models"
+	"gorm.io/gorm"
 )
 
 // AuthHandler handles all /api/mobile/v1/auth/* endpoints.
 type AuthHandler struct {
 	svc *services.MobileAuthService
+	db  *gorm.DB
 }
 
-func NewAuthHandler(svc *services.MobileAuthService) *AuthHandler {
-	return &AuthHandler{svc: svc}
+func NewAuthHandler(svc *services.MobileAuthService, db *gorm.DB) *AuthHandler {
+	return &AuthHandler{svc: svc, db: db}
 }
 
 // Login godoc
@@ -121,12 +123,16 @@ func (h *AuthHandler) Me(c *fiber.Ctx) error {
 	email, _ := c.Locals("email").(string)
 	role, _ := c.Locals("role").(string)
 
-	// We have all info from JWT; do a quick DB read to get name + 2FA status
-	// This keeps it consistent without heavy joins
+	// Quick DB lookup for name + 2FA status (not in JWT claims)
+	var user models.User
+	h.db.Select("name, two_factor_enabled").First(&user, userID)
+
 	return c.JSON(models.MobileOK(models.MobileMe{
-		ID:    userID,
-		Email: email,
-		Role:  role,
+		ID:               userID,
+		Name:             user.Name,
+		Email:            email,
+		Role:             role,
+		TwoFactorEnabled: user.TwoFactorEnabled,
 	}))
 }
 

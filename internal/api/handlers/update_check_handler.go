@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -14,6 +15,22 @@ import (
 )
 
 const mirrorBaseURL = "https://mirrors.bucloud.com"
+
+// gitSuffixRe matches git-describe suffixes appended to version tags:
+//
+//	"-dirty"                → local uncommitted changes on exact tag
+//	"-3-gabcdef1"           → 3 commits after tag, hash gabcdef1
+//	"-3-gabcdef1-dirty"     → commits after tag + uncommitted changes
+//
+// Stripping these gives the base semver tag so we can compare with the clean
+// mirror version without false "needs update" alerts after a manual deploy.
+var gitSuffixRe = regexp.MustCompile(`-\d+-g[0-9a-f]+(-dirty)?$|-dirty$`)
+
+// normalizeVersion strips git-describe suffixes from a version string.
+// "v1.3.15-dirty" → "v1.3.15", "v1.3.12-3-gabcdef1-dirty" → "v1.3.12", "v1.3.15" → "v1.3.15".
+func normalizeVersion(v string) string {
+	return gitSuffixRe.ReplaceAllString(v, "")
+}
 
 type UpdateCheckHandler struct {
 	panelSvc   *services.PanelUpdateService
@@ -77,14 +94,17 @@ func (h *UpdateCheckHandler) CheckUpdate(c *fiber.Ctx) error {
 	}
 
 	currentPanel := h.panelSvc.GetCurrentVersion()
-	panelNewer := manifest.Version != "" && manifest.Version != currentPanel
+	// normalizeVersion strips git-describe suffixes ("-dirty", "-3-gabcdef1-dirty", …)
+	// so a locally-deployed binary built from the same codebase as the latest mirror
+	// release does NOT show a false "needs update" in the UI.
+	panelNewer := manifest.Version != "" && manifest.Version != normalizeVersion(currentPanel)
 
 	// Build per-server agent info
 	servers, _, _ := h.serverSvc.List(0, "admin", 1, 200)
 	serverAgents := make([]ServerAgentInfo, 0, len(servers))
 	agentNewer := false
 	for _, s := range servers {
-		needsUpdate := manifest.Version != "" && s.AgentVersion != manifest.Version
+		needsUpdate := manifest.Version != "" && normalizeVersion(s.AgentVersion) != manifest.Version
 		if needsUpdate {
 			agentNewer = true
 		}

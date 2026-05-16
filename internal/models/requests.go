@@ -688,6 +688,13 @@ type OPcacheActionRequest struct {
 
 // Agent infrastructure task types
 
+// AgentCloudflareFirewallTask is the task payload for cloudflare_firewall task type.
+type AgentCloudflareFirewallTask struct {
+	Action string   `json:"action"` // enable, disable, sync
+	IPv4s  []string `json:"ipv4s,omitempty"`
+	IPv6s  []string `json:"ipv6s,omitempty"`
+}
+
 type AgentFirewallTask struct {
 	Action   string `json:"action"` // add, delete, status
 	RuleType string `json:"rule_type"`
@@ -949,6 +956,7 @@ type HardenWordPressRequest struct {
 type CreateUptimeCheckRequest struct {
 	URL      string `json:"url" validate:"required"`
 	Interval int    `json:"interval"`
+	SiteID   uint64 `json:"site_id"`
 }
 
 type UpdateUptimeCheckRequest struct {
@@ -1241,4 +1249,114 @@ type CreatePanelReleaseRequest struct {
 	WebChecksum  string `json:"web_checksum"` // frontend archive SHA-256
 	ReleaseNotes string `json:"release_notes"`
 	FileSize     int64  `json:"file_size"`
+}
+
+// ==================== Transfer Tool ====================
+
+// TransferConnectRequest — Step 1: POST /api/v1/transfer/connect
+// Creates a TransferJob and triggers discovery task on the target agent.
+type TransferConnectRequest struct {
+	TargetServerID uint64 `json:"target_server_id" validate:"required"`
+	PanelType      string `json:"panel_type" validate:"required,oneof=aapanel cpanel plesk cyberpanel directadmin"`
+	Host           string `json:"host" validate:"required"`
+	Port           int    `json:"port" validate:"omitempty,min=1,max=65535"`
+	User           string `json:"user"`
+	SSHKey         string `json:"ssh_key,omitempty"`   // PEM private key; mutually exclusive with Password
+	Password       string `json:"password,omitempty"` // SSH password auth
+}
+
+// TransferStartRequest — Step 2: POST /api/v1/transfer/:id/start
+// Begins the actual site imports after the user selects sites and maps domains.
+type TransferStartRequest struct {
+	Sites []SiteImportOption `json:"sites" validate:"required,min=1"`
+}
+
+// TransferDomainCheckRequest — domain availability debounce check (Step 2 real-time)
+type TransferDomainCheckRequest struct {
+	Domain         string `json:"domain" validate:"required"`
+	TargetServerID uint64 `json:"target_server_id" validate:"required"`
+	JobID          uint64 `json:"job_id"` // exclude this job's own pending rows from conflict check
+}
+
+// AgentTransferDiscoverTask — sent to target-server agent to SSH into source and discover sites.
+// SSH credentials are stored ONLY in the TaskQueue.Data column (pending row) and scrubbed after fetch.
+type AgentTransferDiscoverTask struct {
+	JobID        uint64 `json:"job_id"`
+	PanelType    string `json:"panel_type"`
+	SourceHost   string `json:"source_host"`
+	SourcePort   int    `json:"source_port"`
+	SourceUser   string `json:"source_user"`
+	SSHKey       string `json:"ssh_key,omitempty"`
+	SSHPassword  string `json:"ssh_password,omitempty"`
+	CallbackURL  string `json:"callback_url"` // POST here when done
+}
+
+// AgentTransferDiscoverResult — POSTed by agent to /api/v1/agent/transfer/:id/discovered
+type AgentTransferDiscoverResult struct {
+	JobID             uint64               `json:"job_id"`
+	Sites             []DiscoveredSiteInfo `json:"sites"`
+	TargetPHPVersions []string             `json:"target_php_versions"`
+	Status            string               `json:"status"` // completed, failed
+	Error             string               `json:"error,omitempty"`
+}
+
+// AgentTransferImportTask — one task per site, dispatched after user confirms in Step 2.
+type AgentTransferImportTask struct {
+	JobID          uint64             `json:"job_id"`
+	ResultID       uint64             `json:"result_id"`
+	TargetServerID uint64             `json:"target_server_id"` // server where this agent runs
+	SourceHost     string             `json:"source_host"`
+	SourcePort     int                `json:"source_port"`
+	SourceUser     string             `json:"source_user"`
+	SSHKey         string             `json:"ssh_key,omitempty"`
+	SSHPassword    string             `json:"ssh_password,omitempty"`
+	Site           DiscoveredSiteInfo `json:"site"`
+	TargetDomain   string             `json:"target_domain"`
+	PHPVersion     string             `json:"php_version"`   // resolved (detected or overridden)
+	SSLMode        string             `json:"ssl_mode"`      // reissue|copy|paid_ca|skip
+	IncludeAliases []string           `json:"include_aliases"`
+	CallbackURL    string             `json:"callback_url"`
+}
+
+// TransferRegisterSite — sent by agent in the final "done" callback so the API
+// can create a sites DB record for the newly transferred site.
+type TransferRegisterSite struct {
+	ServerID   uint64 `json:"server_id"`
+	Domain     string `json:"domain"`
+	PHPVersion string `json:"php_version"`
+	DBName     string `json:"db_name"`
+	DBUser     string `json:"db_user"`
+	DBPassword string `json:"db_password"`
+}
+
+// AgentTransferUpdate — progress callback POSTed by agent during import
+// to /api/v1/agent/transfer/update
+type AgentTransferUpdate struct {
+	JobID        uint64                `json:"job_id"`
+	ResultID     uint64                `json:"result_id"`
+	Phase        string                `json:"phase"`    // files|db|create_site|search_replace|ssl|verify|done|failed|rolled_back
+	Progress     int                   `json:"progress"` // 0-100 for current phase
+	Status       string                `json:"status"`   // running|done|failed|rolled_back
+	SiteID       uint64                `json:"site_id,omitempty"` // set once Site row is created
+	LogMessage   string                `json:"log_message,omitempty"`
+	Error        string                `json:"error,omitempty"`
+	RegisterSite *TransferRegisterSite `json:"register_site,omitempty"` // non-nil on final done
+}
+
+// TransferTestConnectionRequest — POST /api/v1/transfer/test-connection
+// Tests SSH connectivity from the API server to the source server.
+type TransferTestConnectionRequest struct {
+	Host     string `json:"host"`
+	Port     int    `json:"port"`
+	User     string `json:"user"`
+	SSHKey   string `json:"ssh_key,omitempty"`
+	Password string `json:"password,omitempty"`
+}
+
+// TransferTestConnectionResult — response of the test-connection endpoint.
+type TransferTestConnectionResult struct {
+	Success   bool   `json:"success"`
+	LatencyMs int    `json:"latency_ms,omitempty"`
+	Hostname  string `json:"hostname,omitempty"` // output of `hostname` on source
+	Error     string `json:"error,omitempty"`
 }

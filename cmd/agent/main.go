@@ -40,6 +40,15 @@ func main() {
 		slog.Error("Failed to register system info", "error", err)
 	}
 
+	// Ensure required firewall ports are open, then re-check every 5 minutes.
+	// Self-heals if UFW rules are reset or the firewall is reconfigured.
+	agentgrpc.StartFirewallWatcher([]int{
+		8443, // agent HTTPS server — file manager, health check
+		80,   // HTTP — WordPress sites
+		443,  // HTTPS — WordPress sites + Let's Encrypt
+		22,   // SSH — management access (safety net)
+	}, 5*time.Minute)
+
 	// Start HTTP server for file manager and direct operations (port 8443)
 	go agent.StartHTTPServer(8443)
 

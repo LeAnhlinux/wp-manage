@@ -75,6 +75,7 @@ func main() {
 	fail2banService := services.NewFail2BanService(db)
 	panelUpdateService := services.NewPanelUpdateService(db, Version)
 	ionCubeService := services.NewIonCubeService(db)
+	transferService := services.NewTransferService(db)
 
 	// WebSocket Hub
 	hub := ws.NewHub()
@@ -120,6 +121,7 @@ func main() {
 	panelUpdateHandler := handlers.NewPanelUpdateHandler(panelUpdateService)
 	updateCheckHandler := handlers.NewUpdateCheckHandler(panelUpdateService, rolloutService, serverService)
 	ionCubeHandler := handlers.NewIonCubeHandler(ionCubeService)
+	transferHandler := handlers.NewTransferHandler(transferService, hub)
 
 	// ── Mobile API services & handlers ───────────────────────────────────────
 	fcmKey := cfg.FCMServerKey     // Set FCM_SERVER_KEY in env
@@ -128,7 +130,7 @@ func main() {
 	pushService := services.NewPushService(db, fcmKey, fcmProject)
 	_ = pushService // Used by workers below
 
-	mobileAuthHandler := mobileHandlers.NewAuthHandler(mobileAuthService)
+	mobileAuthHandler := mobileHandlers.NewAuthHandler(mobileAuthService, db)
 	mobileDashboardHandler := mobileHandlers.NewDashboardHandler(
 		db, serverService, siteService, uptimeService,
 		alertService, activityService, backupService, migrationService, securityService,
@@ -177,7 +179,7 @@ func main() {
 
 	// API routes
 	routes.Setup(app, cfg, authHandler, serverHandler, siteHandler, deployHandler, fileHandler,
-		userHandler, apiKeyHandler, backupHandler, migrationHandler, securityHandler, wordpressHandler, rolloutHandler, performanceHandler, multisiteHandler, imageOptHandler, teamHandler, infraHandler, activityHandler, cronHandler, domainHandler, redisHandler, sshHandler, sftpHandler, hardeningHandler, uptimeHandler, alertHandler, wpcliHandler, cacheHandler, importHandler, dnsHandler, sslHandler, storageHandler, fail2banHandler, panelUpdateHandler, ionCubeHandler, updateCheckHandler, userService, apiKeyService, rateLimiter)
+		userHandler, apiKeyHandler, backupHandler, migrationHandler, securityHandler, wordpressHandler, rolloutHandler, performanceHandler, multisiteHandler, imageOptHandler, teamHandler, infraHandler, activityHandler, cronHandler, domainHandler, redisHandler, sshHandler, sftpHandler, hardeningHandler, uptimeHandler, alertHandler, wpcliHandler, cacheHandler, importHandler, dnsHandler, sslHandler, storageHandler, fail2banHandler, panelUpdateHandler, ionCubeHandler, updateCheckHandler, transferHandler, userService, apiKeyService, rateLimiter)
 
 	// Mobile API routes — separate prefix /api/mobile/v1/
 	routes.SetupMobile(app, cfg,
@@ -210,6 +212,12 @@ func main() {
 
 	autoUpdateWorker := workers.NewAutoUpdateWorker(db)
 	autoUpdateWorker.Start()
+
+	transferSSLWorker := workers.NewTransferSSLWorker(db)
+	transferSSLWorker.Start()
+
+	cloudflareIPWorker := workers.NewCloudflareIPWorker(db, infraService)
+	cloudflareIPWorker.Start()
 
 	// Integrate alert worker with server handler
 	serverHandler.SetAlertWorker(alertWorker)

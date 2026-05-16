@@ -117,7 +117,7 @@ func (s *ServerService) GetByAPIKey(apiKey string) (*models.Server, error) {
 
 func (s *ServerService) UpdateHeartbeat(serverID uint64, hb models.AgentHeartbeat) error {
 	now := time.Now()
-	return s.db.Model(&models.Server{}).Where("id = ?", serverID).Updates(map[string]interface{}{
+	if err := s.db.Model(&models.Server{}).Where("id = ?", serverID).Updates(map[string]interface{}{
 		"last_heartbeat": &now,
 		"agent_version":  hb.Version,
 		"status":         "active",
@@ -126,7 +126,20 @@ func (s *ServerService) UpdateHeartbeat(serverID uint64, hb models.AgentHeartbea
 		"cpu_usage":  hb.CPUUsage,
 		"ram_usage":  hb.RAMUsage,
 		"disk_usage": hb.DiskUsage,
-	}).Error
+	}).Error; err != nil {
+		return err
+	}
+	// Record time-series snapshot for mobile metrics history endpoint.
+	// Fire-and-forget in goroutine to avoid adding latency to the heartbeat response.
+	go s.db.Create(&models.ServerMetric{
+		ServerID:   serverID,
+		CPUUsage:   hb.CPUUsage,
+		RAMUsage:   hb.RAMUsage,
+		DiskUsage:  hb.DiskUsage,
+		UptimeSec:  int64(hb.Uptime),
+		RecordedAt: now,
+	})
+	return nil
 }
 
 func (s *ServerService) UpdateSystemInfo(serverID uint64, ramMB, cpuCores, diskGB int, os string) error {

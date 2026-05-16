@@ -67,6 +67,10 @@ func (h *MultisiteHandler) ListSubsites(c *fiber.Ctx) error {
 
 	subsites, err := h.svc.GetSubsites(siteID)
 	if err != nil {
+		// Site exists but is not a multisite network — return empty array, not an error
+		if err.Error() == "site is not a multisite network" {
+			return c.JSON(models.APIResponse{Success: true, Data: []models.Subsite{}})
+		}
 		return c.Status(400).JSON(models.APIResponse{Error: err.Error()})
 	}
 

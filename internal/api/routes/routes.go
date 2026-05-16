@@ -160,6 +160,7 @@ func Setup(
 	panelUpdateHandler *handlers.PanelUpdateHandler,
 	ionCubeHandler *handlers.IonCubeHandler,
 	updateCheckHandler *handlers.UpdateCheckHandler,
+	transferHandler *handlers.TransferHandler,
 	userSvc *services.UserService,
 	apiKeySvc *services.APIKeyService,
 	rateLimiter *middleware.RateLimiter,
@@ -197,6 +198,9 @@ func Setup(
 	agent.Post("/wpcli/complete", wpcliHandler.Complete)
 	agent.Post("/import/complete", importHandler.Complete)
 	agent.Get("/files/tmp/:token", siteHandler.GetTempFile)
+	// Transfer tool agent callbacks
+	agent.Post("/transfer/update", transferHandler.ProgressUpdate)
+	agent.Post("/transfer/:id/discovered", transferHandler.DiscoveryComplete)
 
 	// Protected routes (JWT or API Key auth)
 	protected := api.Group("", middleware.APIKeyOrAuthRequired(cfg, apiKeySvc), rateLimiter.Handler())
@@ -391,6 +395,9 @@ func Setup(
 	serverFirewall.Post("/rules", middleware.PermissionRequired("sites", "manage"), infraHandler.CreateFirewallRule)
 	serverFirewall.Delete("/rules/:ruleId", middleware.PermissionRequired("sites", "manage"), infraHandler.DeleteFirewallRule)
 	serverFirewall.Get("/status", middleware.PermissionRequired("infrastructure", "read"), infraHandler.GetFirewallStatus)
+	serverFirewall.Get("/cloudflare", infraHandler.GetCloudflareConfig)
+	serverFirewall.Post("/cloudflare/enable", middleware.PermissionRequired("infrastructure", "manage"), infraHandler.EnableCloudflareFirewall)
+	serverFirewall.Post("/cloudflare/disable", middleware.PermissionRequired("infrastructure", "manage"), infraHandler.DisableCloudflareFirewall)
 
 	serverNginx := servers.Group("/:id/nginx-configs", serverAccess)
 	serverNginx.Get("/", infraHandler.ListNginxConfigs)
@@ -595,6 +602,18 @@ func Setup(
 	settings.Post("/releases", panelUpdateHandler.CreateRelease)
 	settings.Get("/releases", panelUpdateHandler.ListReleases)
 	settings.Post("/releases/:id/apply", panelUpdateHandler.TriggerUpdate) // starts wp-manage-updater, API will restart
+
+	// Transfer Tool routes
+	transfer := protected.Group("/transfer")
+	transfer.Get("/", transferHandler.List)
+	transfer.Post("/test-connection", transferHandler.TestConnection)
+	transfer.Post("/connect", middleware.PermissionRequired("sites", "manage"), transferHandler.Connect)
+	transfer.Get("/check-domain", transferHandler.CheckDomain)
+	transfer.Get("/:id", transferHandler.Get)
+	transfer.Get("/:id/status", transferHandler.Status)
+	transfer.Post("/:id/start", middleware.PermissionRequired("sites", "manage"), transferHandler.Start)
+	transfer.Post("/:id/cancel", middleware.PermissionRequired("sites", "manage"), transferHandler.Cancel)
+	transfer.Delete("/:id", middleware.PermissionRequired("sites", "manage"), transferHandler.Delete)
 
 	// Simple auto-update endpoints (check mirror + one-click apply)
 	updateSettings := protected.Group("/settings/update", middleware.PermissionRequired("settings", "manage"))
