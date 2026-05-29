@@ -4,7 +4,7 @@ import {
   ArrowLeft, Globe, Lock, LockOpen, ExternalLink,
   Code, Clock, Database, Settings,
   FolderOpen, LayoutDashboard, Layers, Download, HardDrive,
-  Network, ImageIcon, Zap, Archive, Shield, Key, Gauge, ServerCrash
+  Network, ImageIcon, Zap, Archive, Shield, Key, Gauge, ServerCrash, SlidersHorizontal
 } from 'lucide-react'
 import { useSite, useAutologin } from '@/hooks/useSites'
 import { usePermissions } from '@/hooks/usePermissions'
@@ -30,10 +30,11 @@ import { WPCLIPanel } from './site-tabs/WPCLIPanel'
 import { CachePanel } from './site-tabs/CachePanel'
 import { SSLPanel } from './site-tabs/SSLPanel'
 import { BackupPanel } from './site-tabs/BackupPanel'
+import { ResourceLimitsPanel } from './site-tabs/ResourceLimitsPanel'
 
 type TabId = 'overview' | 'files' | 'staging' | 'updates' | 'database' | 'performance' |
   'multisite' | 'images' | 'domains' | 'redis' | 'cron' | 'sftp' | 'security' |
-  'ssl' | 'wpcli' | 'cache' | 'backup'
+  'ssl' | 'wpcli' | 'cache' | 'backup' | 'limits'
 
 export default function SiteDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -175,6 +176,7 @@ export default function SiteDetailPage() {
               { id: 'ssl',      icon: <Lock size={15} />,      label: 'SSL' },
               { id: 'sftp',     icon: <Key size={15} />,       label: 'SFTP' },
               { id: 'cron',     icon: <Clock size={15} />,     label: 'Cron Jobs' },
+              { id: 'limits',   icon: <SlidersHorizontal size={15} />, label: 'Resource Limits' },
             ]},
             { group: 'Performance', items: [
               { id: 'performance', icon: <Gauge size={15} />,      label: 'Performance' },
@@ -231,6 +233,7 @@ export default function SiteDetailPage() {
           {activeTab === 'cron' && <CronPanel siteId={site.id} />}
           {activeTab === 'ssl' && <SSLPanel siteId={site.id} domain={site.domain} canManage={can('sites', 'manage')} />}
           {activeTab === 'sftp' && <SFTPPanel siteId={site.id} canManage={can('sites', 'manage')} />}
+          {activeTab === 'limits' && <ResourceLimitsPanel siteId={site.id} canManage={can('sites', 'manage')} />}
           {activeTab === 'backup' && <BackupPanel siteId={site.id} domain={site.domain} canManage={can('sites', 'manage')} />}
           {activeTab === 'security' && (
             <div className="space-y-6">

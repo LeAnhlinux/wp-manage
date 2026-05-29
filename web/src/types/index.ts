@@ -40,8 +40,34 @@ export interface Site {
   linux_user?: string
   open_basedir_enabled?: boolean
   status: 'active' | 'suspended' | 'creating' | 'error' | 'deleting'
+  // resource limits
+  disk_limit_mb?: number | null
+  disk_used_mb?: number
+  disk_state?: 'ok' | 'warning' | 'over'
+  over_limit_action?: 'none' | 'alert' | 'suspend'
+  cpu_quota_percent?: number | null
+  memory_max_mb?: number | null
+  fpm_isolated?: boolean
   created_at: string
   server?: Server
+}
+
+export interface ResourceLimits {
+  disk_limit_mb: number | null
+  disk_used_mb: number
+  disk_state: 'ok' | 'warning' | 'over'
+  disk_checked_at: string | null
+  over_limit_action: 'none' | 'alert' | 'suspend'
+  cpu_quota_percent: number | null
+  memory_max_mb: number | null
+  fpm_isolated: boolean
+}
+
+export interface UpdateResourceLimitsRequest {
+  disk_limit_mb?: number       // 0 = unlimited
+  over_limit_action?: 'none' | 'alert' | 'suspend'
+  cpu_quota_percent?: number   // 200 = 2 cores; 0 = unlimited
+  memory_max_mb?: number       // 0 = unlimited
 }
 
 export interface Subsite {

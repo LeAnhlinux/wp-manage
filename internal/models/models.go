@@ -60,6 +60,15 @@ type Site struct {
 	LinuxUser          string `json:"linux_user" gorm:"size:64"`                              // e.g. "wp_example_com" (per-site Linux isolation)
 	OpenBasedirEnabled bool   `json:"open_basedir_enabled" gorm:"column:open_basedir_enabled;default:true"` // PHP open_basedir restriction
 	Status             string `json:"status" gorm:"type:enum('active','suspended','creating','error','deleting','deleted');default:'creating';not null"`
+	// ─── Resource limits (per-site) ───
+	DiskLimitMB     *uint64    `json:"disk_limit_mb"`                                            // nil = unlimited
+	DiskUsedMB      uint64     `json:"disk_used_mb" gorm:"default:0"`                            // files + DB, updated by disk_usage_worker
+	DiskState       string     `json:"disk_state" gorm:"size:10;default:'ok'"`                  // ok | warning | over
+	OverLimitAction string     `json:"over_limit_action" gorm:"size:10;default:'alert'"`        // none | alert | suspend
+	DiskCheckedAt   *time.Time `json:"disk_checked_at"`
+	CPUQuotaPercent *uint      `json:"cpu_quota_percent"`                                       // nil = unlimited; 200 = 2 cores (systemd CPUQuota)
+	MemoryMaxMB     *uint64    `json:"memory_max_mb"`                                            // nil = unlimited; systemd MemoryMax
+	FPMIsolated     bool       `json:"fpm_isolated" gorm:"default:false"`                       // true = running under dedicated wpm-fpm@{domain}.service (cgroup)
 	CreatedAt    time.Time  `json:"created_at"`
 	UpdatedAt    time.Time  `json:"updated_at"`
 	Server       *Server    `json:"server,omitempty" gorm:"foreignKey:ServerID"`

@@ -283,6 +283,172 @@ func (s *SiteService) ToggleOpenBasedir(siteID uint64) (bool, error) {
 	return newValue, nil
 }
 
+// ─── Resource limits ───
+
+// UpdateResourceLimits persists disk/cpu/mem limits. If the CPU or memory cap
+// changed, it queues a set_resource_limit task (apply or remove) and waits for
+// the agent to converge so the response reflects the real result.
+func (s *SiteService) UpdateResourceLimits(siteID uint64, req models.UpdateResourceLimitsRequest) (*models.Site, error) {
+	var site models.Site
+	if err := s.db.First(&site, siteID).Error; err != nil {
+		return nil, fmt.Errorf("site not found")
+	}
+
+	updates := map[string]interface{}{}
+	if req.DiskLimitMB != nil {
+		if *req.DiskLimitMB == 0 {
+			updates["disk_limit_mb"] = nil
+		} else {
+			updates["disk_limit_mb"] = *req.DiskLimitMB
+		}
+	}
+	if req.OverLimitAction != nil {
+		switch *req.OverLimitAction {
+		case "none", "alert", "suspend":
+			updates["over_limit_action"] = *req.OverLimitAction
+		default:
+			return nil, fmt.Errorf("invalid over_limit_action")
+		}
+	}
+
+	// Detect CPU/mem change → decide apply vs remove.
+	cpuChanged := req.CPUQuotaPercent != nil
+	memChanged := req.MemoryMaxMB != nil
+	newCPU := uintPtrVal(site.CPUQuotaPercent)
+	newMem := u64PtrVal(site.MemoryMaxMB)
+	if cpuChanged {
+		newCPU = *req.CPUQuotaPercent
+	}
+	if memChanged {
+		newMem = *req.MemoryMaxMB
+	}
+
+	if cpuChanged {
+		if *req.CPUQuotaPercent == 0 {
+			updates["cpu_quota_percent"] = nil
+		} else {
+			updates["cpu_quota_percent"] = *req.CPUQuotaPercent
+		}
+	}
+	if memChanged {
+		if *req.MemoryMaxMB == 0 {
+			updates["memory_max_mb"] = nil
+		} else {
+			updates["memory_max_mb"] = *req.MemoryMaxMB
+		}
+	}
+
+	if len(updates) > 0 {
+		if err := s.db.Model(&models.Site{}).Where("id = ?", siteID).Updates(updates).Error; err != nil {
+			return nil, err
+		}
+	}
+
+	// Apply cgroup isolation only when CPU/mem actually changed.
+	if cpuChanged || memChanged {
+		phpVersion := site.PHPVersion
+		if phpVersion == "" {
+			phpVersion = "8.2"
+		}
+		wantLimit := newCPU > 0 || newMem > 0
+
+		action := "apply"
+		if !wantLimit {
+			action = "remove"
+		}
+		// Skip a no-op remove (not isolated and nothing to remove).
+		if !(action == "remove" && !site.FPMIsolated) {
+			task, err := s.CreateJSONTaskReturn(site.ServerID, siteID, "set_resource_limit",
+				map[string]interface{}{
+					"action":            action,
+					"domain":            site.Domain,
+					"php_version":       phpVersion,
+					"cpu_quota_percent": newCPU,
+					"memory_max_mb":     newMem,
+				})
+			if err != nil {
+				return nil, fmt.Errorf("queue resource limit task: %w", err)
+			}
+			result, err := WaitForTaskCompleteWithTimeout(s.db, task.ID, 120*time.Second)
+			if err != nil {
+				return nil, err
+			}
+			if result.Error != "" {
+				return nil, fmt.Errorf("%s", result.Error)
+			}
+			s.db.Model(&models.Site{}).Where("id = ?", siteID).
+				Update("fpm_isolated", wantLimit)
+		}
+	}
+
+	return s.GetByID(siteID)
+}
+
+// ScanDiskNow queues a synchronous disk scan for this single site, updates the
+// stored usage + state, and returns the refreshed site.
+func (s *SiteService) ScanDiskNow(siteID uint64) (*models.Site, error) {
+	var site models.Site
+	if err := s.db.First(&site, siteID).Error; err != nil {
+		return nil, fmt.Errorf("site not found")
+	}
+	task, err := s.CreateJSONTaskReturn(site.ServerID, siteID, "scan_disk_usage",
+		map[string]interface{}{
+			"sites": []map[string]string{{"domain": site.Domain, "db_name": site.DBName}},
+		})
+	if err != nil {
+		return nil, fmt.Errorf("queue scan task: %w", err)
+	}
+	result, err := WaitForTaskCompleteWithTimeout(s.db, task.ID, 120*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	if result.Error != "" {
+		return nil, fmt.Errorf("%s", result.Error)
+	}
+
+	var scan []models.DiskScanSiteResult
+	if err := json.Unmarshal([]byte(result.Output), &scan); err != nil || len(scan) == 0 {
+		return s.GetByID(siteID)
+	}
+	usedMB := uint64((scan[0].FilesBytes + scan[0].DBBytes) / (1024 * 1024))
+	s.ApplyDiskUsage(siteID, usedMB, site.DiskLimitMB)
+	return s.GetByID(siteID)
+}
+
+// ApplyDiskUsage persists used MB + recomputes disk_state. Returns the new
+// state so callers (worker) can act on transitions. Shared by manual scan and
+// the periodic worker.
+func (s *SiteService) ApplyDiskUsage(siteID, usedMB uint64, limitMB *uint64) string {
+	state := "ok"
+	if limitMB != nil && *limitMB > 0 {
+		if usedMB >= *limitMB {
+			state = "over"
+		} else if usedMB*100 >= *limitMB*80 {
+			state = "warning"
+		}
+	}
+	now := time.Now()
+	s.db.Model(&models.Site{}).Where("id = ?", siteID).Updates(map[string]interface{}{
+		"disk_used_mb":    usedMB,
+		"disk_state":      state,
+		"disk_checked_at": &now,
+	})
+	return state
+}
+
+func uintPtrVal(p *uint) uint {
+	if p == nil {
+		return 0
+	}
+	return *p
+}
+func u64PtrVal(p *uint64) uint64 {
+	if p == nil {
+		return 0
+	}
+	return *p
+}
+
 func (s *SiteService) GetAutologinSecret(id uint64) string {
 	var site models.Site
 	err := s.db.Select("autologin_secret").First(&site, id).Error

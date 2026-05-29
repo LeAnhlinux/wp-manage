@@ -91,6 +91,13 @@ func RebuildPHPFPMPool(domain, phpVersion string, configData map[string]string) 
 		memoryLimit = "256M"
 	}
 
+	// request_terminate_timeout (seconds) kills runaway scripts — soft CPU guard.
+	// Defaults to 300; "0" disables it.
+	rtt := configData["request_terminate_timeout"]
+	if rtt == "" {
+		rtt = "300"
+	}
+
 	// open_basedir is enabled unless explicitly set to "false" in configData.
 	// Defaults to true (safe default) if key is absent.
 	openBasedir := configData["open_basedir_enabled"] != "false"
@@ -114,6 +121,10 @@ php_admin_value[post_max_size] = 64M
 php_admin_value[max_execution_time] = 300
 php_admin_value[max_input_vars] = 3000
 `, domain, su, su, phpVersion, domain, maxChildren, memoryLimit)
+
+	if rtt != "0" {
+		conf += fmt.Sprintf("request_terminate_timeout = %ss\n", rtt)
+	}
 
 	if openBasedir {
 		conf += fmt.Sprintf("php_admin_value[open_basedir] = /var/www/%s/:/tmp/:/usr/share/php/\n", domain)

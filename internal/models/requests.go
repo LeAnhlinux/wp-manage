@@ -819,12 +819,22 @@ type RedisConfigRequest struct {
 }
 
 type PHPFPMPoolConfig struct {
-	MaxChildren     int    `json:"max_children"`
-	StartServers    int    `json:"start_servers"`
-	MinSpareServers int    `json:"min_spare_servers"`
-	MaxSpareServers int    `json:"max_spare_servers"`
-	MaxRequests     int    `json:"max_requests"`
-	MemoryLimit     string `json:"memory_limit"`
+	MaxChildren             int    `json:"max_children"`
+	StartServers            int    `json:"start_servers"`
+	MinSpareServers         int    `json:"min_spare_servers"`
+	MaxSpareServers         int    `json:"max_spare_servers"`
+	MaxRequests             int    `json:"max_requests"`
+	MemoryLimit             string `json:"memory_limit"`
+	RequestTerminateTimeout int    `json:"request_terminate_timeout"` // seconds; 0 = off. Kills runaway scripts (soft CPU guard)
+}
+
+// UpdateResourceLimitsRequest sets per-site disk + CPU/RAM limits.
+// Pointer fields: nil means "leave unchanged"; explicit 0 means "unlimited".
+type UpdateResourceLimitsRequest struct {
+	DiskLimitMB     *uint64 `json:"disk_limit_mb"`     // 0 = unlimited
+	OverLimitAction *string `json:"over_limit_action"` // none | alert | suspend
+	CPUQuotaPercent *uint   `json:"cpu_quota_percent"` // 200 = 2 cores; 0 = unlimited
+	MemoryMaxMB     *uint64 `json:"memory_max_mb"`     // 0 = unlimited
 }
 
 type MariaDBUserRequest struct {
@@ -878,6 +888,39 @@ type AgentPHPFPMTask struct {
 	Domain     string           `json:"domain"`
 	PHPVersion string           `json:"php_version"`
 	PoolConfig PHPFPMPoolConfig `json:"pool_config"`
+}
+
+// ─── Resource limits ───
+
+// AgentDiskScanTask is a per-server batch task: the agent computes file + DB
+// size for every listed site in one pass and returns the result as JSON in
+// task.Output (see DiskScanSiteResult).
+type AgentDiskScanTask struct {
+	Sites []DiskScanSite `json:"sites"`
+}
+
+type DiskScanSite struct {
+	Domain string `json:"domain"`
+	DBName string `json:"db_name"`
+}
+
+// DiskScanSiteResult is one element of the JSON array the agent writes to
+// task.Output after a scan_disk_usage task.
+type DiskScanSiteResult struct {
+	Domain     string `json:"domain"`
+	FilesBytes int64  `json:"files_bytes"`
+	DBBytes    int64  `json:"db_bytes"`
+}
+
+// AgentResourceLimitTask applies or removes a per-site cgroup CPU/RAM limit by
+// converting the site between the shared PHP-FPM pool and a dedicated
+// wpm-fpm@{domain}.service (which systemd places in its own cgroup).
+type AgentResourceLimitTask struct {
+	Action          string `json:"action"`            // apply | remove
+	Domain          string `json:"domain"`
+	PHPVersion      string `json:"php_version"`
+	CPUQuotaPercent uint   `json:"cpu_quota_percent"` // 200 = 2 cores; 0 = no CPU cap
+	MemoryMaxMB     uint64 `json:"memory_max_mb"`     // 0 = no memory cap
 }
 
 type AgentMariaDBTask struct {

@@ -444,3 +444,52 @@ func (h *SiteHandler) ToggleOpenBasedir(c *fiber.Ctx) error {
 	})
 }
 
+// ─── Resource limits ───
+
+// GetResourceLimits returns current disk/cpu/mem limits + latest disk usage.
+func (h *SiteHandler) GetResourceLimits(c *fiber.Ctx) error {
+	id, _ := strconv.ParseUint(c.Params("id"), 10, 64)
+	site, err := h.svc.GetByID(id)
+	if err != nil {
+		return c.Status(404).JSON(models.APIResponse{Error: "Site not found"})
+	}
+	return c.JSON(models.APIResponse{Success: true, Data: fiber.Map{
+		"disk_limit_mb":     site.DiskLimitMB,
+		"disk_used_mb":      site.DiskUsedMB,
+		"disk_state":        site.DiskState,
+		"disk_checked_at":   site.DiskCheckedAt,
+		"over_limit_action": site.OverLimitAction,
+		"cpu_quota_percent": site.CPUQuotaPercent,
+		"memory_max_mb":     site.MemoryMaxMB,
+		"fpm_isolated":      site.FPMIsolated,
+	}})
+}
+
+// UpdateResourceLimits sets disk/cpu/mem limits (cgroup applied synchronously).
+func (h *SiteHandler) UpdateResourceLimits(c *fiber.Ctx) error {
+	id, _ := strconv.ParseUint(c.Params("id"), 10, 64)
+	var req models.UpdateResourceLimitsRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(models.APIResponse{Error: "invalid request body"})
+	}
+	site, err := h.svc.UpdateResourceLimits(id, req)
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Error: err.Error()})
+	}
+	return c.JSON(models.APIResponse{Success: true, Message: "Resource limits updated", Data: site})
+}
+
+// ScanDisk triggers an immediate disk usage scan for this site.
+func (h *SiteHandler) ScanDisk(c *fiber.Ctx) error {
+	id, _ := strconv.ParseUint(c.Params("id"), 10, 64)
+	site, err := h.svc.ScanDiskNow(id)
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Error: err.Error()})
+	}
+	return c.JSON(models.APIResponse{Success: true, Message: "Disk scanned", Data: fiber.Map{
+		"disk_used_mb": site.DiskUsedMB,
+		"disk_state":   site.DiskState,
+		"disk_limit_mb": site.DiskLimitMB,
+	}})
+}
+

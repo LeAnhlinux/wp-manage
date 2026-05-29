@@ -553,6 +553,21 @@ func (s *AgentServer) pollTasks() {
 			json.Unmarshal(task.Data, &phpTask)
 			go s.executeUpdatePHPFPMPool(task.TaskID, phpTask)
 
+		case "scan_disk_usage":
+			var scanTask models.AgentDiskScanTask
+			json.Unmarshal(task.Data, &scanTask)
+			go s.executeScanDiskUsage(task.TaskID, scanTask)
+
+		case "set_resource_limit":
+			var rlTask models.AgentResourceLimitTask
+			json.Unmarshal(task.Data, &rlTask)
+			if err := validateTaskDomain(rlTask.Domain); err != nil {
+				slog.Error("Rejecting set_resource_limit with invalid domain", "domain", rlTask.Domain)
+				s.completeTask(task.TaskID, "failed", "invalid domain")
+				continue
+			}
+			go s.executeSetResourceLimit(task.TaskID, rlTask)
+
 		case "manage_mariadb":
 			var dbTask models.AgentMariaDBTask
 			json.Unmarshal(task.Data, &dbTask)
@@ -2668,13 +2683,16 @@ func (s *AgentServer) executeUpdatePHPFPMPool(taskID uint64, task models.AgentPH
 	slog.Info("Updating PHP-FPM pool", "domain", task.Domain, "php_version", task.PHPVersion)
 	result := models.AgentTaskResult{TaskID: taskID}
 
+	// NOTE: keys MUST match what RebuildPHPFPMPool reads (max_children,
+	// memory_limit, request_terminate_timeout). Previously these were
+	// mis-keyed (pm_max_children/php_memory_limit) so the rebuild silently
+	// fell back to defaults — fixed here.
 	configData := map[string]string{
-		"pm_max_children":      fmt.Sprintf("%d", task.PoolConfig.MaxChildren),
-		"pm_start_servers":     fmt.Sprintf("%d", task.PoolConfig.StartServers),
-		"pm_min_spare_servers": fmt.Sprintf("%d", task.PoolConfig.MinSpareServers),
-		"pm_max_spare_servers": fmt.Sprintf("%d", task.PoolConfig.MaxSpareServers),
-		"pm_max_requests":      fmt.Sprintf("%d", task.PoolConfig.MaxRequests),
-		"php_memory_limit":     task.PoolConfig.MemoryLimit,
+		"max_children":  fmt.Sprintf("%d", task.PoolConfig.MaxChildren),
+		"memory_limit":  task.PoolConfig.MemoryLimit,
+	}
+	if task.PoolConfig.RequestTerminateTimeout > 0 {
+		configData["request_terminate_timeout"] = fmt.Sprintf("%d", task.PoolConfig.RequestTerminateTimeout)
 	}
 
 	if _, err := agentconfig.RebuildPHPFPMPool(task.Domain, task.PHPVersion, configData); err != nil {
@@ -3097,6 +3115,46 @@ func (s *AgentServer) completeTaskWithOutput(taskID uint64, status, errMsg, outp
 		result.Error = errMsg
 	}
 	s.reportTaskResult(result)
+}
+
+// executeScanDiskUsage scans file + DB size for all listed sites in one pass
+// and returns the result as a JSON array in task.Output.
+func (s *AgentServer) executeScanDiskUsage(taskID uint64, task models.AgentDiskScanTask) {
+	slog.Info("Scanning disk usage", "sites", len(task.Sites))
+	results := agentwp.ScanDiskUsage(task.Sites)
+	data, err := json.Marshal(results)
+	if err != nil {
+		s.completeTask(taskID, "failed", err.Error())
+		return
+	}
+	s.completeTaskWithOutput(taskID, "completed", "", string(data))
+}
+
+// executeSetResourceLimit applies or removes a per-site cgroup CPU/RAM limit
+// (dedicated PHP-FPM service). Serialized per-domain to avoid racing with
+// create/delete/php-version changes on the same site.
+func (s *AgentServer) executeSetResourceLimit(taskID uint64, task models.AgentResourceLimitTask) {
+	unlock := s.lockDomain(task.Domain)
+	defer unlock()
+
+	slog.Info("Setting resource limit", "domain", task.Domain, "action", task.Action,
+		"cpu_pct", task.CPUQuotaPercent, "mem_mb", task.MemoryMaxMB)
+
+	var err error
+	switch task.Action {
+	case "apply":
+		err = agentphpfpm.ApplyResourceLimit(task.Domain, task.PHPVersion, task.CPUQuotaPercent, task.MemoryMaxMB)
+	case "remove":
+		err = agentphpfpm.RemoveResourceLimit(task.Domain, task.PHPVersion)
+	default:
+		err = fmt.Errorf("unknown action: %s", task.Action)
+	}
+
+	if err != nil {
+		s.completeTask(taskID, "failed", err.Error())
+		return
+	}
+	s.completeTask(taskID, "completed", "")
 }
 
 func (s *AgentServer) executeWPCLI(taskID uint64, task models.AgentWPCLITask) {

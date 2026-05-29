@@ -1082,6 +1082,7 @@ php_admin_value[upload_max_filesize] = 64M
 php_admin_value[post_max_size] = 64M
 php_admin_value[max_execution_time] = 300
 php_admin_value[max_input_vars] = 3000
+request_terminate_timeout = 300s
 php_admin_value[open_basedir] = /var/www/%s/:/tmp/:/usr/share/php/
 php_admin_value[disable_functions] = exec,passthru,shell_exec,system,proc_open,popen,parse_ini_file,show_source
 `, p.Domain, siteUser, siteUser, phpVer, p.Domain, p.Domain)

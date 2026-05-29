@@ -219,6 +219,9 @@ func main() {
 	cloudflareIPWorker := workers.NewCloudflareIPWorker(db, infraService)
 	cloudflareIPWorker.Start()
 
+	diskUsageWorker := workers.NewDiskUsageWorker(db, siteService, alertService)
+	go diskUsageWorker.Start()
+
 	// Integrate alert worker with server handler
 	serverHandler.SetAlertWorker(alertWorker)
 

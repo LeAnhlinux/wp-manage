@@ -252,6 +252,9 @@ func Setup(
 	sites.Post("/:id/autologin", siteHandler.Autologin)
 	sites.Post("/:id/autologin/reset", middleware.PermissionRequired("sites", "manage"), siteHandler.ResetAutologin)
 	sites.Post("/:siteId/open-basedir/toggle", middleware.PermissionRequired("sites", "manage"), siteHandler.ToggleOpenBasedir)
+	sites.Get("/:id/limits", siteHandler.GetResourceLimits)
+	sites.Put("/:id/limits", middleware.PermissionRequired("sites", "manage"), siteHandler.UpdateResourceLimits)
+	sites.Post("/:id/disk/scan", middleware.PermissionRequired("sites", "manage"), siteHandler.ScanDisk)
 	sites.Post("/:id/upload-source", middleware.PermissionRequired("sites", "manage"), siteHandler.UploadSource)
 	sites.Post("/:id/import-db", middleware.PermissionRequired("sites", "manage"), siteHandler.ImportDB)
 
