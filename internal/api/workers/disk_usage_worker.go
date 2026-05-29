@@ -115,14 +115,14 @@ func (w *DiskUsageWorker) handleTransition(site models.Site, oldState, newState 
 
 	switch newState {
 	case "warning":
-		w.notify(fmt.Sprintf("⚠️ Disk warning: %s đang dùng %d/%d MB (≥80%%).", site.Domain, usedMB, limit))
+		w.notify(fmt.Sprintf("⚠️ Disk warning: %s is using %d/%d MB (≥80%%).", site.Domain, usedMB, limit))
 	case "over":
-		w.notify(fmt.Sprintf("🔴 Disk OVER LIMIT: %s dùng %d/%d MB.", site.Domain, usedMB, limit))
+		w.notify(fmt.Sprintf("🔴 Disk OVER LIMIT: %s using %d/%d MB.", site.Domain, usedMB, limit))
 		if site.OverLimitAction == "suspend" {
 			if err := w.siteSvc.CreateTask(site.ServerID, site.ID, "suspend_site",
 				map[string]string{"domain": site.Domain}); err == nil {
 				w.siteSvc.UpdateStatus(site.ID, "suspended")
-				w.notify(fmt.Sprintf("⛔ %s đã bị tự động SUSPEND do vượt giới hạn disk.", site.Domain))
+				w.notify(fmt.Sprintf("⛔ %s was auto-suspended for exceeding its disk limit.", site.Domain))
 			}
 		}
 	}

@@ -46,7 +46,7 @@ export function ResourceLimitsPanel({ siteId, canManage }: { siteId: number; can
     const gb = parseFloat(diskGB)
     update.mutate(
       { disk_limit_mb: isNaN(gb) || gb <= 0 ? 0 : Math.round(gb * 1024), over_limit_action: action },
-      { onSuccess: () => setMsg({ ok: true, text: 'Đã lưu giới hạn disk' }), onError: (e: any) => setMsg({ ok: false, text: e?.response?.data?.error || 'Lỗi' }) }
+      { onSuccess: () => setMsg({ ok: true, text: 'Disk limit saved' }), onError: (e: any) => setMsg({ ok: false, text: e?.response?.data?.error || 'Error' }) }
     )
   }
 
@@ -59,7 +59,7 @@ export function ResourceLimitsPanel({ siteId, canManage }: { siteId: number; can
         cpu_quota_percent: isNaN(c) || c <= 0 ? 0 : Math.round(c * 100),
         memory_max_mb: isNaN(m) || m <= 0 ? 0 : m,
       },
-      { onSuccess: () => setMsg({ ok: true, text: 'Đã áp dụng giới hạn CPU/RAM (PHP-FPM riêng)' }), onError: (e: any) => setMsg({ ok: false, text: e?.response?.data?.error || 'Lỗi' }) }
+      { onSuccess: () => setMsg({ ok: true, text: 'CPU/RAM limit applied (dedicated PHP-FPM)' }), onError: (e: any) => setMsg({ ok: false, text: e?.response?.data?.error || 'Error' }) }
     )
   }
 
@@ -79,7 +79,7 @@ export function ResourceLimitsPanel({ siteId, canManage }: { siteId: number; can
           </h2>
           <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${stateBadge}`}>{(limits.disk_state || 'ok').toUpperCase()}</span>
         </div>
-        <p className="text-sm text-gray-500 mb-4">Dung lượng files + database. Worker quét mỗi 6 giờ; vượt ngưỡng sẽ cảnh báo / tự suspend tuỳ cấu hình.</p>
+        <p className="text-sm text-gray-500 mb-4">Files + database usage. Scanned every 6 hours; exceeding the limit triggers an alert or auto-suspends the site depending on the action below.</p>
 
         <div className="flex items-center justify-between text-sm mb-1.5">
           <span className="font-medium text-gray-700">{fmtMB(usedMB)} {limitMB > 0 && <span className="text-gray-400">/ {fmtMB(limitMB)}</span>}</span>
@@ -89,7 +89,7 @@ export function ResourceLimitsPanel({ siteId, canManage }: { siteId: number; can
           <div className={`${stateColor} h-2 rounded-full transition-all duration-500`} style={{ width: `${limitMB > 0 ? pct : 0}%` }} />
         </div>
         <div className="flex items-center justify-between text-xs text-gray-400 mb-4">
-          <span>{limits.disk_checked_at ? `Quét lần cuối: ${new Date(limits.disk_checked_at).toLocaleString()}` : 'Chưa quét'}</span>
+          <span>{limits.disk_checked_at ? `Last scanned: ${new Date(limits.disk_checked_at).toLocaleString()}` : 'Not scanned yet'}</span>
           {canManage && (
             <button onClick={() => scan.mutate()} disabled={scan.isPending}
               className="flex items-center gap-1 text-blue-600 hover:text-blue-700 disabled:opacity-50">
@@ -101,22 +101,22 @@ export function ResourceLimitsPanel({ siteId, canManage }: { siteId: number; can
         {canManage && (
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end border-t border-gray-100 pt-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Giới hạn (GB)</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Limit (GB)</label>
               <input value={diskGB} onChange={e => setDiskGB(e.target.value)} type="number" min="0" step="0.5" placeholder="0 = unlimited"
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Khi vượt giới hạn</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">When over limit</label>
               <select value={action} onChange={e => setAction(e.target.value as any)}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white">
-                <option value="none">Không làm gì</option>
-                <option value="alert">Chỉ cảnh báo</option>
-                <option value="suspend">Tự suspend site</option>
+                <option value="none">Do nothing</option>
+                <option value="alert">Alert only</option>
+                <option value="suspend">Auto-suspend site</option>
               </select>
             </div>
             <button onClick={saveDisk} disabled={update.isPending}
               className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2">
-              {update.isPending && <Loader2 size={14} className="animate-spin" />} Lưu disk
+              {update.isPending && <Loader2 size={14} className="animate-spin" />} Save disk
             </button>
           </div>
         )}
@@ -125,40 +125,40 @@ export function ResourceLimitsPanel({ siteId, canManage }: { siteId: number; can
       {/* CPU / RAM */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
         <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2 mb-1">
-          <Cpu size={20} className="text-purple-500" /> CPU & RAM Limit
-          {limits.fpm_isolated && <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-purple-100 text-purple-700">PHP-FPM riêng</span>}
+          <Cpu size={20} className="text-purple-500" /> CPU &amp; RAM Limit
+          {limits.fpm_isolated && <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-purple-100 text-purple-700">Dedicated PHP-FPM</span>}
         </h2>
-        <p className="text-sm text-gray-500 mb-4">Giới hạn cứng qua cgroup. Khi đặt limit, site sẽ chạy PHP-FPM riêng (~vài MB RAM cho master). Để trống = không giới hạn.</p>
+        <p className="text-sm text-gray-500 mb-4">Hard limit via cgroup. Setting a limit runs a dedicated PHP-FPM for this site (~a few MB RAM for the master). Leave empty for unlimited.</p>
 
         {canManage ? (
           <>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">CPU (số core)</label>
-                <input value={cores} onChange={e => setCores(e.target.value)} type="number" min="0" step="0.5" placeholder="vd: 2"
+                <label className="block text-sm font-medium text-gray-700 mb-1">CPU (cores)</label>
+                <input value={cores} onChange={e => setCores(e.target.value)} type="number" min="0" step="0.5" placeholder="e.g. 2"
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
                 {parseFloat(cores) > 0 && <p className="text-xs text-gray-400 mt-1">= {Math.round(parseFloat(cores) * 100)}% CPU</p>}
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">RAM tối đa (MB)</label>
-                <input value={memMB} onChange={e => setMemMB(e.target.value)} type="number" min="0" step="128" placeholder="vd: 512"
+                <label className="block text-sm font-medium text-gray-700 mb-1">Max RAM (MB)</label>
+                <input value={memMB} onChange={e => setMemMB(e.target.value)} type="number" min="0" step="128" placeholder="e.g. 512"
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
               </div>
               <button onClick={saveCompute} disabled={update.isPending}
                 className="px-4 py-2 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 flex items-center justify-center gap-2">
-                {update.isPending && <Loader2 size={14} className="animate-spin" />} Áp dụng
+                {update.isPending && <Loader2 size={14} className="animate-spin" />} Apply
               </button>
             </div>
             <div className="flex items-start gap-2 mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
               <AlertTriangle size={14} className="flex-shrink-0 mt-0.5" />
-              <span>Thay đổi CPU/RAM sẽ tách (hoặc gộp lại) PHP-FPM của site — có thể gián đoạn ~1-2 giây khi áp dụng.</span>
+              <span>Changing CPU/RAM splits (or merges back) the site's PHP-FPM — expect a ~1-2 second interruption when applied.</span>
             </div>
           </>
         ) : (
           <div className="grid grid-cols-2 gap-3">
             <div className="p-3 bg-gray-50 rounded-lg">
               <p className="text-xs text-gray-500 uppercase font-medium mb-0.5">CPU</p>
-              <p className="text-base font-semibold text-gray-900">{limits.cpu_quota_percent ? `${limits.cpu_quota_percent / 100} core` : 'Unlimited'}</p>
+              <p className="text-base font-semibold text-gray-900">{limits.cpu_quota_percent ? `${limits.cpu_quota_percent / 100} cores` : 'Unlimited'}</p>
             </div>
             <div className="p-3 bg-gray-50 rounded-lg">
               <p className="text-xs text-gray-500 uppercase font-medium mb-0.5">RAM</p>
