@@ -77,6 +77,10 @@ wppanel-gioithieu/CLAUDE.md
 # Per-deployment config sourced by scripts (never commit)
 scripts/.deploy.env
 
+# CodeGraph — local code index + MCP config (100% local, never commit)
+.codegraph/
+.mcp.json
+
 # Planning docs & API collections (internal — not for GitHub)
 *.postman_collection.json
 WP-Manage-*.xlsx

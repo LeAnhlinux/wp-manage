@@ -3,7 +3,6 @@ package services
 import (
 	"bytes"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -37,11 +36,11 @@ func (s *DeployService) Deploy(req models.AutoDeployRequest, progress ProgressFu
 	totalSteps := 7
 
 	// Step 1: Validate server exists and get API key
-	progress(models.DeployProgress{Step: 1, Total: totalSteps, Message: "Kiểm tra thông tin server...", Status: "running"})
+	progress(models.DeployProgress{Step: 1, Total: totalSteps, Message: "Checking server info...", Status: "running"})
 
 	var server models.Server
 	if err := s.db.First(&server, req.ServerID).Error; err != nil {
-		return fmt.Errorf("server không tồn tại: %w", err)
+		return fmt.Errorf("server not found: %w", err)
 	}
 
 	sshPort := req.SSHPort
@@ -50,29 +49,29 @@ func (s *DeployService) Deploy(req models.AutoDeployRequest, progress ProgressFu
 	}
 
 	// Step 2: Establish SSH connection
-	progress(models.DeployProgress{Step: 2, Total: totalSteps, Message: fmt.Sprintf("Kết nối SSH tới %s:%d...", server.IPAddress, sshPort), Status: "running"})
+	progress(models.DeployProgress{Step: 2, Total: totalSteps, Message: fmt.Sprintf("Connecting via SSH to %s:%d...", server.IPAddress, sshPort), Status: "running"})
 
 	client, err := s.connectSSH(server.IPAddress, sshPort, req)
 	if err != nil {
-		return fmt.Errorf("kết nối SSH thất bại: %w", err)
+		return fmt.Errorf("SSH connection failed: %w", err)
 	}
 	defer client.Close()
 
 	// Step 3: Check OS compatibility
-	progress(models.DeployProgress{Step: 3, Total: totalSteps, Message: "Kiểm tra hệ điều hành...", Status: "running"})
+	progress(models.DeployProgress{Step: 3, Total: totalSteps, Message: "Checking operating system...", Status: "running"})
 
 	osInfo, err := s.runCommand(client, "cat /etc/os-release 2>/dev/null | grep -E '^(ID|VERSION_ID)=' | head -2")
 	if err != nil {
-		return fmt.Errorf("không thể kiểm tra OS: %w", err)
+		return fmt.Errorf("cannot check OS: %w", err)
 	}
 	if !strings.Contains(strings.ToLower(osInfo), "ubuntu") {
-		return fmt.Errorf("OS không được hỗ trợ. Yêu cầu Ubuntu 20.04+")
+		return fmt.Errorf("unsupported OS — Ubuntu 20.04+ required")
 	}
 
 	// Detect architecture
 	arch, err := s.runCommand(client, "uname -m")
 	if err != nil {
-		return fmt.Errorf("không thể xác định kiến trúc CPU: %w", err)
+		return fmt.Errorf("cannot detect CPU architecture: %w", err)
 	}
 	arch = strings.TrimSpace(arch)
 	goarch := "amd64"
@@ -81,24 +80,24 @@ func (s *DeployService) Deploy(req models.AutoDeployRequest, progress ProgressFu
 	}
 
 	// Step 4: Upload agent binary
-	progress(models.DeployProgress{Step: 4, Total: totalSteps, Message: "Upload agent binary...", Status: "running"})
+	progress(models.DeployProgress{Step: 4, Total: totalSteps, Message: "Uploading agent binary...", Status: "running"})
 
 	binaryName := fmt.Sprintf("wp-manage-agent-linux-%s", goarch)
 	localBinary := s.findAgentBinary(binaryName)
 	if localBinary == "" {
-		return fmt.Errorf("không tìm thấy agent binary: %s. Chạy 'make build-linux' trước", binaryName)
+		return fmt.Errorf("agent binary not found: %s. Run 'make build-linux' first", binaryName)
 	}
 
 	if err := s.uploadFile(client, localBinary, "/usr/local/bin/wp-manage-agent"); err != nil {
-		return fmt.Errorf("upload agent binary thất bại: %w", err)
+		return fmt.Errorf("failed to upload agent binary: %w", err)
 	}
 
 	if _, err := s.runCommand(client, "chmod +x /usr/local/bin/wp-manage-agent"); err != nil {
-		return fmt.Errorf("chmod thất bại: %w", err)
+		return fmt.Errorf("chmod failed: %w", err)
 	}
 
 	// Step 5: Create systemd service
-	progress(models.DeployProgress{Step: 5, Total: totalSteps, Message: "Cấu hình systemd service...", Status: "running"})
+	progress(models.DeployProgress{Step: 5, Total: totalSteps, Message: "Configuring systemd service...", Status: "running"})
 
 	apiURL := fmt.Sprintf("https://%s", s.cfg.Panel.Domain)
 	serviceContent := fmt.Sprintf(`[Unit]
@@ -122,11 +121,11 @@ WantedBy=multi-user.target
 
 
 	if err := s.writeRemoteFile(client, "/etc/systemd/system/wp-manage-agent.service", serviceContent); err != nil {
-		return fmt.Errorf("tạo systemd service thất bại: %w", err)
+		return fmt.Errorf("failed to create systemd service: %w", err)
 	}
 
 	// Step 6: Start agent service
-	progress(models.DeployProgress{Step: 6, Total: totalSteps, Message: "Khởi động agent service...", Status: "running"})
+	progress(models.DeployProgress{Step: 6, Total: totalSteps, Message: "Starting agent service...", Status: "running"})
 
 	commands := []string{
 		"systemctl daemon-reload",
@@ -135,7 +134,7 @@ WantedBy=multi-user.target
 	}
 	for _, cmd := range commands {
 		if _, err := s.runCommand(client, cmd); err != nil {
-			return fmt.Errorf("lệnh '%s' thất bại: %w", cmd, err)
+			return fmt.Errorf("command '%s' failed: %w", cmd, err)
 		}
 	}
 
@@ -146,11 +145,11 @@ WantedBy=multi-user.target
 	if err != nil || strings.TrimSpace(status) != "active" {
 		// Get logs for debugging
 		logs, _ := s.runCommand(client, "journalctl -u wp-manage-agent --no-pager -n 20")
-		return fmt.Errorf("agent không khởi động được. Logs:\n%s", logs)
+		return fmt.Errorf("agent failed to start. Logs:\n%s", logs)
 	}
 
 	// Step 7: Finalize
-	progress(models.DeployProgress{Step: 7, Total: totalSteps, Message: "Hoàn tất...", Status: "running"})
+	progress(models.DeployProgress{Step: 7, Total: totalSteps, Message: "Finalizing...", Status: "running"})
 
 	osVersion, _ := s.runCommand(client, `grep PRETTY_NAME /etc/os-release | cut -d'"' -f2`)
 	osVersion = strings.TrimSpace(osVersion)
@@ -160,8 +159,8 @@ WantedBy=multi-user.target
 		"os":     osVersion,
 	})
 
-	// Auto-queue install tasks cho tất cả service sau khi agent sẵn sàng
-	// Thứ tự quan trọng: ufw trước, php sau cùng vì lâu nhất
+	// Auto-queue install tasks for all services once the agent is ready.
+	// Order matters: ufw first, php last (it takes the longest).
 	autoInstallServices := []string{"ufw", "nginx", "mariadb", "redis", "certbot", "fail2ban", "cron", "wpcli", "php"}
 	for _, svc := range autoInstallServices {
 		task := models.TaskQueue{
@@ -176,7 +175,7 @@ WantedBy=multi-user.target
 	}
 	slog.Info("Queued auto-install tasks", "server_id", server.ID, "services", autoInstallServices)
 
-	progress(models.DeployProgress{Step: 7, Total: totalSteps, Message: "Deploy agent thành công! Đang tự động cài tất cả service (Nginx, PHP, MariaDB, Redis...)...", Status: "success"})
+	progress(models.DeployProgress{Step: 7, Total: totalSteps, Message: "Agent deployed successfully! Auto-installing all services (Nginx, PHP, MariaDB, Redis...)...", Status: "success"})
 
 	slog.Info("Auto deploy completed", "server_id", server.ID, "ip", server.IPAddress)
 	return nil
@@ -188,20 +187,20 @@ func (s *DeployService) connectSSH(host string, port int, req models.AutoDeployR
 	switch req.AuthMethod {
 	case "password":
 		if req.Password == "" {
-			return nil, fmt.Errorf("password không được để trống")
+			return nil, fmt.Errorf("password must not be empty")
 		}
 		authMethods = append(authMethods, ssh.Password(req.Password))
 	case "key":
 		if req.PrivateKey == "" {
-			return nil, fmt.Errorf("SSH private key không được để trống")
+			return nil, fmt.Errorf("SSH private key must not be empty")
 		}
 		signer, err := ssh.ParsePrivateKey([]byte(req.PrivateKey))
 		if err != nil {
-			return nil, fmt.Errorf("SSH key không hợp lệ: %w", err)
+			return nil, fmt.Errorf("invalid SSH key: %w", err)
 		}
 		authMethods = append(authMethods, ssh.PublicKeys(signer))
 	default:
-		return nil, fmt.Errorf("auth method không hợp lệ: %s", req.AuthMethod)
+		return nil, fmt.Errorf("invalid auth method: %s", req.AuthMethod)
 	}
 
 	config := &ssh.ClientConfig{
@@ -215,10 +214,10 @@ func (s *DeployService) connectSSH(host string, port int, req models.AutoDeployR
 	client, err := ssh.Dial("tcp", addr, config)
 	if err != nil {
 		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-			return nil, fmt.Errorf("timeout - port %d có thể bị firewall chặn", port)
+			return nil, fmt.Errorf("timeout - port %d may be blocked by a firewall", port)
 		}
 		if strings.Contains(err.Error(), "unable to authenticate") {
-			return nil, fmt.Errorf("xác thực thất bại - kiểm tra lại thông tin đăng nhập")
+			return nil, fmt.Errorf("authentication failed - check your credentials")
 		}
 		return nil, err
 	}
@@ -243,17 +242,20 @@ func (s *DeployService) runCommand(client *ssh.Client, cmd string) (string, erro
 	return stdout.String(), nil
 }
 
+// uploadFile streams a local file to the remote host by piping it into
+// `cat > <path>` over an SSH session.
+//
+// We intentionally do NOT use the legacy `scp -t` sink protocol: OpenSSH 9.0+
+// (Ubuntu 22.10+, all of 24.04) removed the old SCP transfer protocol, so
+// `scp -t` now fails with "protocol error: unexpected <newline>" and the
+// session exits with status 1. Piping through `cat` works on every OpenSSH
+// version and needs no extra dependency.
 func (s *DeployService) uploadFile(client *ssh.Client, localPath, remotePath string) error {
 	f, err := os.Open(localPath)
 	if err != nil {
-		return fmt.Errorf("không thể mở file %s: %w", localPath, err)
+		return fmt.Errorf("cannot open file %s: %w", localPath, err)
 	}
 	defer f.Close()
-
-	stat, err := f.Stat()
-	if err != nil {
-		return err
-	}
 
 	session, err := client.NewSession()
 	if err != nil {
@@ -261,16 +263,16 @@ func (s *DeployService) uploadFile(client *ssh.Client, localPath, remotePath str
 	}
 	defer session.Close()
 
-	go func() {
-		w, _ := session.StdinPipe()
-		defer w.Close()
-		fmt.Fprintf(w, "C0755 %d %s\n", stat.Size(), filepath.Base(remotePath))
-		io.Copy(w, f)
-		fmt.Fprint(w, "\x00")
-	}()
+	session.Stdin = f
+	var stderr bytes.Buffer
+	session.Stderr = &stderr
 
-	dir := filepath.Dir(remotePath)
-	return session.Run(fmt.Sprintf("scp -t %s", dir))
+	// shell-quote the remote path to be safe
+	quoted := "'" + strings.ReplaceAll(remotePath, "'", `'\''`) + "'"
+	if err := session.Run("cat > " + quoted); err != nil {
+		return fmt.Errorf("%s: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return nil
 }
 
 func (s *DeployService) writeRemoteFile(client *ssh.Client, path, content string) error {

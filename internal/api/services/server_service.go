@@ -34,7 +34,7 @@ func (s *ServerService) Create(userID uint64, req models.CreateServerRequest) (*
 
 	if err := s.db.Create(&server).Error; err != nil {
 		if strings.Contains(err.Error(), "Duplicate entry") && strings.Contains(err.Error(), "ip_address") {
-			return nil, "", fmt.Errorf("IP address %s đã được đăng ký. Mỗi server chỉ được thêm một lần", req.IPAddress)
+			return nil, "", fmt.Errorf("IP address %s is already registered. Each server can only be added once", req.IPAddress)
 		}
 		return nil, "", err
 	}
@@ -156,9 +156,18 @@ func (s *ServerService) CreateTask(task *models.TaskQueue) error {
 	return s.db.Create(task).Error
 }
 
+// GenerateInstallCommand returns a one-line command the user pastes on a fresh
+// VPS to install ONLY the agent and connect it back to this panel. It mirrors
+// what the Auto-Deploy SSH flow does (download agent binary → systemd service →
+// start), but runs locally on the VPS so no SSH credentials leave the machine.
+//
+// The agent binary is pulled from the public mirror; the service connects to
+// this panel via --api-url / --api-key.
 func (s *ServerService) GenerateInstallCommand(server *models.Server, apiKey, panelDomain string) string {
-	return fmt.Sprintf(
-		`curl -sSL https://install.wpm.vn | bash -s -- --api-url=https://%s --api-key=%s`,
-		panelDomain, apiKey,
+	apiURL := "https://" + panelDomain
+	const mirror = "https://mirrors.bucloud.com"
+	// Single root shell command: arch-detect → download → install → systemd → start.
+	return fmt.Sprintf(`curl -fsSL %s/wp-manage-agent-linux-$(case $(uname -m) in aarch64|arm64) echo arm64;; *) echo amd64;; esac) -o /usr/local/bin/wp-manage-agent && chmod +x /usr/local/bin/wp-manage-agent && printf '[Unit]\nDescription=WP Manage Agent\nAfter=network.target\n[Service]\nExecStart=/usr/local/bin/wp-manage-agent --api-url=%s --api-key=%s\nRestart=always\nRestartSec=5\n[Install]\nWantedBy=multi-user.target\n' > /etc/systemd/system/wp-manage-agent.service && systemctl daemon-reload && systemctl enable --now wp-manage-agent`,
+		mirror, apiURL, apiKey,
 	)
 }
