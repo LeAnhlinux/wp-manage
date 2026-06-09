@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/gofiber-team/wp-manage/internal/models"
@@ -140,8 +141,9 @@ func (s *DomainService) IssueSSL(siteID, domainID uint64) error {
 		return fmt.Errorf("site not found")
 	}
 
+	// Let's Encrypt rejects placeholder addresses (e.g. admin@example.com).
 	email := site.WPAdminEmail
-	if email == "" {
+	if email == "" || strings.HasSuffix(email, "@example.com") {
 		email = "admin@" + site.Domain
 	}
 

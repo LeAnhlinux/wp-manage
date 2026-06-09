@@ -3,6 +3,7 @@ package services
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/gofiber-team/wp-manage/internal/models"
 	"gorm.io/gorm"
@@ -23,8 +24,10 @@ func (s *SSLService) EnableSSL(siteID uint64) error {
 		return fmt.Errorf("site not found: %w", err)
 	}
 
+	// Let's Encrypt rejects placeholder addresses (e.g. admin@example.com).
+	// Fall back to admin@<domain> when the email is empty or a known placeholder.
 	email := site.WPAdminEmail
-	if email == "" {
+	if email == "" || strings.HasSuffix(email, "@example.com") {
 		email = "admin@" + site.Domain
 	}
 
