@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef } from 'react'
 import {
-  Folder, File, ChevronRight, Home, Upload, FolderPlus,
+  Folder, File, ChevronRight, Home, Upload, FolderPlus, FilePlus,
   Download, Trash2, Edit3, Lock, MoreVertical, Search,
   ArrowLeft, RefreshCw, X, Save, FileText, Image, Code,
   Archive, Film, Music, FileSpreadsheet, PackageOpen,
@@ -10,7 +10,7 @@ import {
   useFileList, useFileMkdir, useFileRename, useFileDelete,
   useFilePermissions, useFileUploadChunked, useFileExtract,
   useFileSearch, useFileCopy, useFileMove, useFileDeleteBulk,
-  getFileDownloadUrl
+  useSaveFileContent, getFileDownloadUrl
 } from '@/hooks/useFiles'
 import { formatBytes, formatDate } from '@/lib/utils'
 import type { FileInfo, FileSearchResult } from '@/types'
@@ -75,6 +75,8 @@ export default function FileBrowser({ siteId }: Props) {
   const [contextMenu, setContextMenu] = useState<{ file: FileInfo; x: number; y: number } | null>(null)
   const [showNewFolder, setShowNewFolder] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
+  const [showNewFile, setShowNewFile] = useState(false)
+  const [newFileName, setNewFileName] = useState('')
   const [renaming, setRenaming] = useState<FileInfo | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [showChmod, setShowChmod] = useState<FileInfo | null>(null)
@@ -96,6 +98,7 @@ export default function FileBrowser({ siteId }: Props) {
 
   const { data: files, isLoading, refetch } = useFileList(siteId, currentPath)
   const mkdirMut = useFileMkdir()
+  const saveContentMut = useSaveFileContent()
   const renameMut = useFileRename()
   const deleteMut = useFileDelete()
   const chmodMut = useFilePermissions()
@@ -194,6 +197,20 @@ export default function FileBrowser({ siteId }: Props) {
       showMsg('success', `Created folder "${newFolderName}"`)
     } catch {
       showMsg('error', 'Failed to create folder')
+    }
+  }
+
+  // New file
+  const handleCreateFile = async () => {
+    if (!newFileName.trim()) return
+    const fullPath = currentPath === '/' ? `/${newFileName}` : `${currentPath}/${newFileName}`
+    try {
+      await saveContentMut.mutateAsync({ siteId, req: { path: fullPath, content: '' } })
+      setShowNewFile(false)
+      setNewFileName('')
+      setEditingFile(fullPath)
+    } catch {
+      showMsg('error', 'Failed to create file')
     }
   }
 
@@ -408,6 +425,10 @@ export default function FileBrowser({ siteId }: Props) {
             className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100 rounded-lg">
             <FolderPlus size={15} /> New Folder
           </button>
+          <button onClick={() => { setShowNewFile(true); setShowNewFolder(false) }}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100 rounded-lg">
+            <FilePlus size={15} /> New File
+          </button>
           <button onClick={() => fileInputRef.current?.click()}
             className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100 rounded-lg">
             <Upload size={15} /> Upload
@@ -527,6 +548,26 @@ export default function FileBrowser({ siteId }: Props) {
             Create
           </button>
           <button onClick={() => { setShowNewFolder(false); setNewFolderName('') }}
+            className="p-1 text-gray-400 hover:text-gray-600">
+            <X size={16} />
+          </button>
+        </div>
+      )}
+
+      {/* New file inline input */}
+      {showNewFile && (
+        <div className="mb-3 flex items-center gap-2 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg">
+          <FilePlus size={16} className="text-blue-600" />
+          <input type="text" value={newFileName} onChange={(e) => setNewFileName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleCreateFile(); if (e.key === 'Escape') setShowNewFile(false) }}
+            placeholder="New file name (e.g. index.php)..."
+            className="flex-1 px-2 py-1 text-sm border border-blue-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+            autoFocus />
+          <button onClick={handleCreateFile} disabled={saveContentMut.isPending}
+            className="px-3 py-1 text-sm text-white bg-blue-600 rounded hover:bg-blue-700 disabled:opacity-50">
+            {saveContentMut.isPending ? 'Creating...' : 'Create'}
+          </button>
+          <button onClick={() => { setShowNewFile(false); setNewFileName('') }}
             className="p-1 text-gray-400 hover:text-gray-600">
             <X size={16} />
           </button>
