@@ -141,7 +141,7 @@ export function useFileUploadChunked() {
       file: File
       onProgress?: (pct: number) => void
     }) => {
-      const token = localStorage.getItem('token')
+      const token = sessionStorage.getItem('token')
       const authHeader = token ? `Bearer ${token}` : ''
 
       if (file.size <= CHUNK_SIZE) {
@@ -273,6 +273,6 @@ export function useFileDeleteBulk() {
 }
 
 export function getFileDownloadUrl(siteId: number, path: string): string {
-  const token = localStorage.getItem('token')
+  const token = sessionStorage.getItem('token')
   return `/api/v1/sites/${siteId}/files/download?path=${encodeURIComponent(path)}&token=${token}`
 }
