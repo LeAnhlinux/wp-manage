@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"fmt"
+	"io"
 	"strconv"
 
 	"github.com/gofiber/fiber/v2"
@@ -86,6 +88,33 @@ func (h *BackupHandler) Get(c *fiber.Ctx) error {
 		return c.Status(404).JSON(models.APIResponse{Error: "Backup not found"})
 	}
 	return c.JSON(models.APIResponse{Success: true, Data: backup})
+}
+
+// Download streams a local backup archive to the client, proxied from the agent.
+func (h *BackupHandler) Download(c *fiber.Ctx) error {
+	id, _ := strconv.ParseUint(c.Params("id"), 10, 64)
+
+	resp, filename, err := h.svc.ProxyDownload(id)
+	if err != nil {
+		return c.Status(400).JSON(models.APIResponse{Error: err.Error()})
+	}
+	defer resp.Body.Close()
+
+	// Forward agent-side errors (404/403/500) verbatim.
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		c.Set("Content-Type", "application/json")
+		return c.Status(resp.StatusCode).Send(body)
+	}
+
+	c.Set("Content-Type", "application/gzip")
+	c.Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	if cl := resp.Header.Get("Content-Length"); cl != "" {
+		c.Set("Content-Length", cl)
+	}
+	c.Status(200)
+	_, streamErr := io.Copy(c.Context().Response.BodyWriter(), resp.Body)
+	return streamErr
 }
 
 func (h *BackupHandler) Delete(c *fiber.Ctx) error {

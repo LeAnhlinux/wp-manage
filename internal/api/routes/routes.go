@@ -262,6 +262,8 @@ func Setup(
 	backups := protected.Group("/backups")
 	backups.Get("/", backupHandler.ListAll) // all backups (filtered by role)
 	backups.Get("/:id", backupHandler.Get)
+	// Download the backup archive (streamed from the agent). Token may come via ?token= for browser downloads.
+	backups.Get("/:id/download", backupHandler.Download)
 	backups.Delete("/:id", middleware.PermissionRequired("backups", "manage"), backupHandler.Delete)
 	// Restore by backup ID — works for both normal and orphaned (site deleted) backups
 	backups.Post("/:id/restore", middleware.PermissionRequired("backups", "restore"), backupHandler.RestoreByID)

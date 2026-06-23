@@ -1,8 +1,12 @@
 package services
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/url"
+	"path/filepath"
 	"time"
 
 	"github.com/gofiber-team/wp-manage/internal/cron"
@@ -115,6 +119,52 @@ func (s *BackupService) GetByID(id uint64) (*models.Backup, error) {
 	var backup models.Backup
 	err := s.db.Preload("Site").First(&backup, id).Error
 	return &backup, err
+}
+
+// ProxyDownload streams a local backup archive from the agent that holds it.
+// Returns the agent's HTTP response (caller forwards the body) and the suggested filename.
+// Only completed, local backups can be downloaded; remote-storage backups (s3/r2/...) are not proxied.
+func (s *BackupService) ProxyDownload(id uint64) (*http.Response, string, error) {
+	var backup models.Backup
+	if err := s.db.First(&backup, id).Error; err != nil {
+		return nil, "", fmt.Errorf("backup not found")
+	}
+	if backup.Status != "completed" || backup.FilePath == "" {
+		return nil, "", fmt.Errorf("backup file is not available for download")
+	}
+	if backup.Storage != "local" {
+		return nil, "", fmt.Errorf("only local backups can be downloaded from the panel")
+	}
+	if backup.ServerID == 0 {
+		return nil, "", fmt.Errorf("cannot determine which server holds this backup")
+	}
+
+	var server models.Server
+	if err := s.db.First(&server, backup.ServerID).Error; err != nil {
+		return nil, "", fmt.Errorf("server not found for backup")
+	}
+
+	params := url.Values{}
+	params.Set("path", backup.FilePath)
+	u := fmt.Sprintf("https://%s:%d/backup/download?%s", server.IPAddress, agentPort, params.Encode())
+
+	req, err := http.NewRequest("GET", u, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Set("X-Agent-Key", server.AgentAPIKey)
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // self-signed cert on internal network
+		},
+		Timeout: 30 * time.Minute, // backups can be multi-GB
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to reach agent: %w", err)
+	}
+	return resp, filepath.Base(backup.FilePath), nil
 }
 
 func (s *BackupService) Delete(id uint64) error {

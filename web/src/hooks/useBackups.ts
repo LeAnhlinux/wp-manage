@@ -120,6 +120,14 @@ export function useRestoreBackupByID() {
   })
 }
 
+// getBackupDownloadUrl builds a direct download URL for a local backup archive.
+// Token goes in the query string because the browser navigates to this URL directly
+// (no axios interceptor to attach the Authorization header); the API accepts ?token= for downloads.
+export function getBackupDownloadUrl(backupId: number): string {
+  const token = sessionStorage.getItem('token')
+  return `/api/v1/backups/${backupId}/download?token=${token}`
+}
+
 // --- Backup Schedules ---
 
 export function useSiteBackupSchedules(siteId: number) {

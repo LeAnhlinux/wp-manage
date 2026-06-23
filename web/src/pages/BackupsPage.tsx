@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
-import { HardDrive, Plus, RotateCcw, Trash2, Clock, Database, Archive, AlertCircle, CheckCircle2, Loader2, X } from 'lucide-react'
-import { useBackups, useCreateBackup, useDeleteBackup, useRestoreBackupByID } from '@/hooks/useBackups'
+import { HardDrive, Plus, RotateCcw, Trash2, Clock, Database, Archive, AlertCircle, CheckCircle2, Loader2, X, Download } from 'lucide-react'
+import { useBackups, useCreateBackup, useDeleteBackup, useRestoreBackupByID, getBackupDownloadUrl } from '@/hooks/useBackups'
 import { useSites } from '@/hooks/useSites'
 import { useServers } from '@/hooks/useServers'
 import { usePermissions } from '@/hooks/usePermissions'
@@ -458,6 +458,21 @@ export default function BackupsPage() {
                   </td>
                   <td className="px-4 py-3 text-right">
                     <div className="flex items-center justify-end gap-1">
+                      {backup.status === 'completed' && backup.storage === 'local' && (
+                        <button
+                          onClick={() => {
+                            const a = document.createElement('a')
+                            a.href = getBackupDownloadUrl(backup.id)
+                            document.body.appendChild(a)
+                            a.click()
+                            a.remove()
+                          }}
+                          className="p-1.5 text-gray-500 hover:bg-gray-100 rounded"
+                          title="Download backup archive"
+                        >
+                          <Download size={16} />
+                        </button>
+                      )}
                       {canManage && backup.status === 'completed' && (
                         <button
                           onClick={() => { setRestoreBackup(backup); setConfirmDomain('') }}

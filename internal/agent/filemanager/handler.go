@@ -144,9 +144,55 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/files/copy", h.authMiddleware(h.handleCopy))
 	mux.HandleFunc("/files/move", h.authMiddleware(h.handleMove))
 	mux.HandleFunc("/files/delete-bulk", h.authMiddleware(h.handleDeleteBulk))
+	mux.HandleFunc("/backup/download", h.authMiddleware(h.handleBackupDownload))
 }
 
 const chunkTempDir = "/tmp/wp-manage-chunks"
+
+// backupBaseDir is where the agent stores backup archives.
+// Must match internal/agent/backup.BackupDir. Kept as a local const to avoid an import cycle.
+const backupBaseDir = "/opt/wp-manage/backups"
+
+// handleBackupDownload streams a backup archive from /opt/wp-manage/backups to the caller.
+// Backups live outside any site web root (and are 0700/root-only), so they can't go through
+// the file-manager download path — this handler validates the request stays within backupBaseDir.
+func (h *Handler) handleBackupDownload(w http.ResponseWriter, r *http.Request) {
+	reqPath := r.URL.Query().Get("path")
+	if reqPath == "" {
+		writeJSON(w, 400, models.APIResponse{Error: "path is required"})
+		return
+	}
+
+	// Confine to backupBaseDir: clean, then verify prefix on the resolved real path.
+	cleaned := filepath.Clean(reqPath)
+	resolved, err := filepath.EvalSymlinks(cleaned)
+	if err != nil {
+		writeJSON(w, 404, models.APIResponse{Error: "Backup file not found"})
+		return
+	}
+	if resolved != backupBaseDir && !strings.HasPrefix(resolved, backupBaseDir+string(os.PathSeparator)) {
+		writeJSON(w, 403, models.APIResponse{Error: "path outside backup directory"})
+		return
+	}
+
+	info, err := os.Stat(resolved)
+	if err != nil || info.IsDir() {
+		writeJSON(w, 404, models.APIResponse{Error: "Backup file not found"})
+		return
+	}
+
+	f, err := os.Open(resolved)
+	if err != nil {
+		writeJSON(w, 500, models.APIResponse{Error: "Failed to open backup file"})
+		return
+	}
+	defer f.Close()
+
+	w.Header().Set("Content-Type", "application/gzip")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, info.Name()))
+	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
+	io.Copy(w, f)
+}
 
 // handleUploadChunk receives a single raw binary chunk and stores it in a temp dir
 func (h *Handler) handleUploadChunk(w http.ResponseWriter, r *http.Request) {

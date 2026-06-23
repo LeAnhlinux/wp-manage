@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { Loader2, Archive, Database, Clock, AlertTriangle, Trash2, Plus, ChevronLeft, ChevronRight, Edit2, X } from 'lucide-react'
-import { useSiteBackups, useCreateBackup, useDeleteBackup, useRestoreBackup, useSiteBackupSchedules, useCreateBackupSchedule, useUpdateBackupSchedule, useDeleteBackupSchedule } from '@/hooks/useBackups'
+import { Loader2, Archive, Database, Clock, AlertTriangle, Trash2, Plus, ChevronLeft, ChevronRight, Edit2, X, Download } from 'lucide-react'
+import { useSiteBackups, useCreateBackup, useDeleteBackup, useRestoreBackup, useSiteBackupSchedules, useCreateBackupSchedule, useUpdateBackupSchedule, useDeleteBackupSchedule, getBackupDownloadUrl } from '@/hooks/useBackups'
 import type { Backup, BackupSchedule } from '@/types'
 
 export const BACKUP_CRON_PRESETS = [
@@ -94,6 +94,15 @@ export function BackupPanel({ siteId, domain, canManage }: { siteId: number; dom
     } catch (e: any) {
       showMsg('error', e?.response?.data?.error || 'Failed to restore backup')
     }
+  }
+
+  const handleDownload = (backup: Backup) => {
+    // Navigate directly so the browser handles the streamed file (token is in the URL).
+    const a = document.createElement('a')
+    a.href = getBackupDownloadUrl(backup.id)
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
   }
 
   const handleCreateSchedule = async (e: React.FormEvent) => {
@@ -223,6 +232,14 @@ export function BackupPanel({ siteId, domain, canManage }: { siteId: number; dom
                       </td>
                       <td className="py-3">
                         <div className="flex items-center gap-2 justify-end">
+                          {backup.status === 'completed' && backup.storage === 'local' && (
+                            <button
+                              onClick={() => handleDownload(backup)}
+                              title="Download backup archive"
+                              className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-gray-600 border border-gray-200 rounded hover:bg-gray-50 transition-colors">
+                              <Download size={13} /> Download
+                            </button>
+                          )}
                           {backup.status === 'completed' && canManage && (
                             <button
                               onClick={() => { setRestoreTarget(backup); setRestoreConfirm('') }}

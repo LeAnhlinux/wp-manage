@@ -52,18 +52,23 @@ func APIKeyOrAuthRequired(cfg *config.Config, apiKeySvc *services.APIKeyService)
 			return c.Next()
 		}
 
-		// 2) Fallback to JWT
-		auth := c.Get("Authorization")
-		if auth == "" {
+		// 2) Fallback to JWT — from the Authorization header, or a ?token= query param.
+		// The query-param path exists for browser-initiated downloads (window.open / <a href>),
+		// where custom headers can't be set. JWTs are short-lived, so this is acceptable.
+		tokenStr := ""
+		if auth := c.Get("Authorization"); auth != "" {
+			parts := strings.SplitN(auth, " ", 2)
+			if len(parts) != 2 || parts[0] != "Bearer" {
+				return c.Status(401).JSON(fiber.Map{"success": false, "error": "Invalid authorization format"})
+			}
+			tokenStr = parts[1]
+		} else if qt := c.Query("token"); qt != "" {
+			tokenStr = qt
+		} else {
 			return c.Status(401).JSON(fiber.Map{"success": false, "error": "Missing authorization"})
 		}
 
-		parts := strings.SplitN(auth, " ", 2)
-		if len(parts) != 2 || parts[0] != "Bearer" {
-			return c.Status(401).JSON(fiber.Map{"success": false, "error": "Invalid authorization format"})
-		}
-
-		claims, err := utils.ParseJWT(parts[1], cfg.JWT.Secret)
+		claims, err := utils.ParseJWT(tokenStr, cfg.JWT.Secret)
 		if err != nil {
 			return c.Status(401).JSON(fiber.Map{"success": false, "error": "Invalid or expired token"})
 		}
