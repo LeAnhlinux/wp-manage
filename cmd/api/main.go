@@ -225,6 +225,15 @@ func main() {
 	// Integrate alert worker with server handler
 	serverHandler.SetAlertWorker(alertWorker)
 
+	// Self-heal: ensure nginx never caches index.html so browsers always load the
+	// newest asset hashes after an update. Idempotent + non-fatal; runs on every boot
+	// so panels installed before this guard get fixed on their next restart/update.
+	go func() {
+		if err := services.EnsurePanelNginxNoCacheIndex(); err != nil {
+			slog.Warn("nginx index.html no-cache check failed (non-fatal)", "error", err)
+		}
+	}()
+
 	// Health check
 	app.Get("/health", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"status": "ok", "version": Version})

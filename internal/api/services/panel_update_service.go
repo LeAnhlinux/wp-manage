@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	agentUpdater "github.com/gofiber-team/wp-manage/internal/agent/updater"
@@ -154,14 +155,23 @@ func (s *PanelUpdateService) TriggerUpdate(releaseID uint64) error {
 			slog.Info("Web archive checksum verified", "sha256", actual)
 		}
 
-		// Extract web archive to /opt/wp-manage/web/
-		if err := extractTarGz(webStaged, webDir); err != nil {
+		// Apply atomically: unpack into a staging dir, then swap it in. This removes
+		// stale files (e.g. old hashed index-*.js) instead of letting them accumulate —
+		// clients can't SSH in to clean up by hand.
+		if err := applyWebArchive(webStaged, webDir); err != nil {
 			os.Remove(stagedPath)
 			os.Remove(webStaged)
 			return fmt.Errorf("web archive extraction failed: %w", err)
 		}
 		os.Remove(webStaged)
-		slog.Info("Web archive extracted", "dst", webDir)
+		slog.Info("Web archive applied", "dst", webDir)
+
+		// Make sure nginx never caches index.html so browsers always fetch the new
+		// asset hashes. Idempotent + self-healing: patches panels installed before
+		// this guard, validates with `nginx -t`, rolls back on failure, never fatal.
+		if err := EnsurePanelNginxNoCacheIndex(); err != nil {
+			slog.Warn("Could not apply nginx no-cache for index.html (non-fatal)", "error", err)
+		}
 	}
 
 	// ── 4. Write updater metadata ─────────────────────────────────────────────
@@ -223,6 +233,89 @@ func downloadFile(url, dst string) error {
 	defer f.Close()
 	_, err = io.Copy(f, resp.Body)
 	return err
+}
+
+// applyWebArchive unpacks the web tarball into a staging dir next to webDir,
+// then atomically swaps it in. This guarantees files removed in the new release
+// (notably old content-hashed assets) are gone, instead of piling up forever.
+func applyWebArchive(src, webDir string) error {
+	newDir := webDir + ".new"
+	oldDir := webDir + ".old"
+
+	os.RemoveAll(newDir)
+	if err := extractTarGz(src, newDir); err != nil {
+		os.RemoveAll(newDir)
+		return err
+	}
+	// Refuse to swap in an archive that has no index.html — that would brick the panel.
+	if _, err := os.Stat(filepath.Join(newDir, "index.html")); err != nil {
+		os.RemoveAll(newDir)
+		return fmt.Errorf("archive missing index.html — refusing to swap")
+	}
+
+	os.RemoveAll(oldDir)
+	if _, err := os.Stat(webDir); err == nil {
+		if err := os.Rename(webDir, oldDir); err != nil {
+			os.RemoveAll(newDir)
+			return fmt.Errorf("cannot move current web dir aside: %w", err)
+		}
+	}
+	if err := os.Rename(newDir, webDir); err != nil {
+		if _, statErr := os.Stat(oldDir); statErr == nil {
+			os.Rename(oldDir, webDir) // rollback
+		}
+		return fmt.Errorf("cannot swap in new web dir: %w", err)
+	}
+	os.RemoveAll(oldDir)
+	return nil
+}
+
+const panelNginxConf = "/etc/nginx/sites-available/wp-manage-panel.conf"
+
+// EnsurePanelNginxNoCacheIndex makes the panel vhost send Cache-Control: no-cache
+// for index.html, so browsers always pick up new asset hashes after an update.
+// Idempotent (skips if already present), validates with `nginx -t`, and rolls back
+// the file if validation fails. Returns nil when the config isn't found (custom setups).
+func EnsurePanelNginxNoCacheIndex() error {
+	data, err := os.ReadFile(panelNginxConf)
+	if err != nil {
+		return nil // non-standard install — nothing to patch
+	}
+	content := string(data)
+	if strings.Contains(content, "location = /index.html") {
+		return nil // already patched
+	}
+
+	// Anchor the insert inside the web-serving server block (the dotfile deny rule
+	// only exists there, not in the cert-bot HTTP→HTTPS redirect block).
+	marker := "location ~ /\\."
+	idx := strings.Index(content, marker)
+	if idx < 0 {
+		return fmt.Errorf("insertion point not found in nginx config")
+	}
+
+	webRoot := "/opt/wp-manage/web"
+	if m := regexp.MustCompile(`root\s+(\S+?)/?;`).FindStringSubmatch(content); len(m) == 2 {
+		webRoot = strings.TrimSuffix(m[1], "/")
+	}
+
+	block := fmt.Sprintf("location = /index.html {\n"+
+		"        root %s;\n"+
+		"        add_header Cache-Control \"no-cache, no-store, must-revalidate\";\n"+
+		"        expires off;\n"+
+		"    }\n\n    ", webRoot)
+	patched := content[:idx] + block + content[idx:]
+
+	if err := os.WriteFile(panelNginxConf, []byte(patched), 0644); err != nil {
+		return err
+	}
+	if out, terr := exec.Command("nginx", "-t").CombinedOutput(); terr != nil {
+		os.WriteFile(panelNginxConf, data, 0644) // rollback
+		return fmt.Errorf("nginx -t failed after patch, rolled back: %s", strings.TrimSpace(string(out)))
+	}
+	exec.Command("systemctl", "reload", "nginx").Run()
+	slog.Info("Patched nginx: index.html now served with no-cache")
+	return nil
 }
 
 // extractTarGz extracts a .tar.gz archive into dst directory.
