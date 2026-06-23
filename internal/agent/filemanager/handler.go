@@ -2,6 +2,7 @@ package filemanager
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"bufio"
 	"compress/gzip"
 	"encoding/json"
@@ -144,6 +145,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/files/copy", h.authMiddleware(h.handleCopy))
 	mux.HandleFunc("/files/move", h.authMiddleware(h.handleMove))
 	mux.HandleFunc("/files/delete-bulk", h.authMiddleware(h.handleDeleteBulk))
+	mux.HandleFunc("/files/compress", h.authMiddleware(h.handleCompress))
 	mux.HandleFunc("/backup/download", h.authMiddleware(h.handleBackupDownload))
 }
 
@@ -1049,6 +1051,142 @@ func (h *Handler) handleDeleteBulk(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, 200, models.APIResponse{Success: true, Message: "Deleted successfully"})
+}
+
+// handleCompress zips one or more files/dirs into a single .zip inside dest_dir.
+func (h *Handler) handleCompress(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, models.APIResponse{Error: "Method not allowed"})
+		return
+	}
+	domain := r.URL.Query().Get("domain")
+	var req struct {
+		Paths       []string `json:"paths"`
+		DestDir     string   `json:"dest_dir"`
+		ArchiveName string   `json:"archive_name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || domain == "" || len(req.Paths) == 0 || req.DestDir == "" {
+		writeJSON(w, 400, models.APIResponse{Error: "domain, paths and dest_dir are required"})
+		return
+	}
+
+	webRoot := filepath.Join("/var/www", domain)
+	destDirFull, err := safePath(domain, req.DestDir)
+	if err != nil {
+		writeJSON(w, 403, models.APIResponse{Error: err.Error()})
+		return
+	}
+	if err := os.MkdirAll(destDirFull, 0755); err != nil {
+		writeJSON(w, 500, models.APIResponse{Error: "Cannot access dest dir: " + err.Error()})
+		return
+	}
+
+	// Resolve and validate every source before creating the archive.
+	type srcEntry struct{ full, base string }
+	entries := make([]srcEntry, 0, len(req.Paths))
+	for _, p := range req.Paths {
+		full, err := safePath(domain, p)
+		if err != nil {
+			writeJSON(w, 403, models.APIResponse{Error: "Invalid path: " + err.Error()})
+			return
+		}
+		if full == webRoot {
+			writeJSON(w, 403, models.APIResponse{Error: "Cannot compress site root"})
+			return
+		}
+		entries = append(entries, srcEntry{full, filepath.Base(full)})
+	}
+
+	// Derive archive name; sanitize and avoid clobbering an existing file.
+	name := filepath.Base(strings.TrimSpace(req.ArchiveName))
+	if name == "" || name == "." || name == "/" {
+		if len(req.Paths) == 1 {
+			name = filepath.Base(entries[0].base)
+		} else {
+			name = "archive"
+		}
+	}
+	name = strings.TrimSuffix(name, ".zip")
+	zipPath := filepath.Join(destDirFull, name+".zip")
+	for i := 1; ; i++ {
+		if _, err := os.Stat(zipPath); os.IsNotExist(err) {
+			break
+		}
+		zipPath = filepath.Join(destDirFull, fmt.Sprintf("%s-%d.zip", name, i))
+	}
+
+	zf, err := os.Create(zipPath)
+	if err != nil {
+		writeJSON(w, 500, models.APIResponse{Error: "Cannot create archive: " + err.Error()})
+		return
+	}
+	zw := zip.NewWriter(zf)
+
+	writeErr := func() error {
+		for _, e := range entries {
+			info, err := os.Stat(e.full)
+			if err != nil {
+				return err
+			}
+			if !info.IsDir() {
+				if err := addFileToZip(zw, e.full, e.base); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := filepath.WalkDir(e.full, func(path string, d fs.DirEntry, err error) error {
+				if err != nil {
+					return err
+				}
+				rel, _ := filepath.Rel(e.full, path)
+				if rel == "." {
+					return nil
+				}
+				arcName := filepath.Join(e.base, rel)
+				if d.IsDir() {
+					_, err := zw.Create(arcName + "/")
+					return err
+				}
+				return addFileToZip(zw, path, arcName)
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}()
+
+	zw.Close()
+	zf.Close()
+
+	if writeErr != nil {
+		os.Remove(zipPath)
+		writeJSON(w, 500, models.APIResponse{Error: "Compression failed: " + writeErr.Error()})
+		return
+	}
+
+	su := siteUser(domain)
+	exec.Command("chown", su+":"+su, zipPath).Run() //nolint
+
+	writeJSON(w, 200, models.APIResponse{
+		Success: true,
+		Message: "Compressed successfully",
+		Data:    filepath.Base(zipPath),
+	})
+}
+
+// addFileToZip writes a single file into the zip writer under arcName.
+func addFileToZip(zw *zip.Writer, srcPath, arcName string) error {
+	f, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	hw, err := zw.Create(arcName)
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(hw, f)
+	return err
 }
 
 // copyRecursive copies src to dst (file or directory)

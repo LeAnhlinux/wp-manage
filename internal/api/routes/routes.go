@@ -644,4 +644,5 @@ func Setup(
 	files.Post("/copy", middleware.PermissionRequired("files", "write"), fileHandler.Copy)
 	files.Post("/move", middleware.PermissionRequired("files", "write"), fileHandler.Move)
 	files.Post("/delete-bulk", middleware.PermissionRequired("files", "write"), fileHandler.DeleteBulk)
+	files.Post("/compress", middleware.PermissionRequired("files", "write"), fileHandler.Compress)
 }

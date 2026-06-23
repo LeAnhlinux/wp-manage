@@ -4,13 +4,13 @@ import {
   Download, Trash2, Edit3, Lock, MoreVertical, Search,
   ArrowLeft, RefreshCw, X, Save, FileText, Image, Code,
   Archive, Film, Music, FileSpreadsheet, PackageOpen,
-  Copy, Scissors, Clipboard, CheckSquare, Square
+  Copy, Scissors, Clipboard, CheckSquare, Square, FileArchive, Loader2
 } from 'lucide-react'
 import {
   useFileList, useFileMkdir, useFileRename, useFileDelete,
   useFilePermissions, useFileUploadChunked, useFileExtract,
   useFileSearch, useFileCopy, useFileMove, useFileDeleteBulk,
-  useSaveFileContent, getFileDownloadUrl
+  useSaveFileContent, useFileDownload, useFileCompress
 } from '@/hooks/useFiles'
 import { formatBytes, formatDate } from '@/lib/utils'
 import type { FileInfo, FileSearchResult } from '@/types'
@@ -99,6 +99,8 @@ export default function FileBrowser({ siteId }: Props) {
   const { data: files, isLoading, refetch } = useFileList(siteId, currentPath)
   const mkdirMut = useFileMkdir()
   const saveContentMut = useSaveFileContent()
+  const downloadMut = useFileDownload()
+  const compressMut = useFileCompress()
   const renameMut = useFileRename()
   const deleteMut = useFileDelete()
   const chmodMut = useFilePermissions()
@@ -361,10 +363,29 @@ export default function FileBrowser({ siteId }: Props) {
     handleUpload(e.dataTransfer.files)
   }
 
-  // Download
-  const handleDownload = (file: FileInfo) => {
+  // Download (blob via axios — Authorization header attached by interceptor)
+  const handleDownload = async (file: FileInfo) => {
     setContextMenu(null)
-    window.open(getFileDownloadUrl(siteId, file.path), '_blank')
+    try {
+      await downloadMut.mutateAsync({ siteId, path: file.path, filename: file.name, isDir: file.is_dir })
+    } catch {
+      showMsg('error', 'Download failed')
+    }
+  }
+
+  // Compress selected items into a single .zip in the current folder
+  const handleCompress = async () => {
+    if (selected.size === 0) return
+    setContextMenu(null)
+    try {
+      const res = await compressMut.mutateAsync({ siteId, req: { paths: Array.from(selected), dest_dir: currentPath } })
+      const name = (res?.data as string) || 'archive.zip'
+      showMsg('success', `Compressed ${selected.size} item(s) into ${name}`)
+      clearSelection()
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Compression failed'
+      showMsg('error', msg)
+    }
   }
 
   // Search
@@ -473,6 +494,11 @@ export default function FileBrowser({ siteId }: Props) {
           <button onClick={handleCutSelected}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50">
             <Scissors size={13} /> Cut
+          </button>
+          <button onClick={handleCompress}
+            disabled={compressMut.isPending}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-50">
+            {compressMut.isPending ? <Loader2 size={13} className="animate-spin" /> : <FileArchive size={13} />} Zip
           </button>
           <button onClick={handleDeleteSelected}
             disabled={deleteBulkMut.isPending}

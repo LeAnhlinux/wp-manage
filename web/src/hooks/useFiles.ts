@@ -272,7 +272,42 @@ export function useFileDeleteBulk() {
   })
 }
 
-export function getFileDownloadUrl(siteId: number, path: string): string {
-  const token = sessionStorage.getItem('token')
-  return `/api/v1/sites/${siteId}/files/download?path=${encodeURIComponent(path)}&token=${token}`
+// useFileCompress zips the given paths into a single .zip inside dest_dir.
+// Returns APIResponse whose data is the created archive's filename.
+export function useFileCompress() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ siteId, req }: { siteId: number; req: { paths: string[]; dest_dir: string; archive_name?: string } }) => {
+      const { data } = await api.post<APIResponse>(`/sites/${siteId}/files/compress`, req)
+      return data
+    },
+    onSuccess: (_d, v) => {
+      qc.invalidateQueries({ queryKey: ['files', v.siteId] })
+    },
+  })
+}
+
+// useFileDownload fetches a file (or a directory as .tar.gz) as a blob via axios,
+// so the Authorization header is attached by the interceptor — no token in the URL.
+// timeout: 0 disables the default 120s cap for large files.
+export function useFileDownload() {
+  return useMutation({
+    mutationFn: async ({ siteId, path, filename, isDir }: {
+      siteId: number; path: string; filename: string; isDir: boolean
+    }) => {
+      const resp = await api.get(`/sites/${siteId}/files/download`, {
+        params: { path },
+        responseType: 'blob',
+        timeout: 0,
+      })
+      const url = URL.createObjectURL(resp.data as Blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = isDir ? `${filename}.tar.gz` : filename
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+    },
+  })
 }

@@ -352,3 +352,18 @@ func (h *FileHandler) DeleteBulk(c *fiber.Ctx) error {
 	c.Set("Content-Type", "application/json")
 	return c.Status(status).Send(resp)
 }
+
+// Compress zips one or more files/dirs into a single archive in a destination directory
+func (h *FileHandler) Compress(c *fiber.Ctx) error {
+	site, err := h.getSiteForFileOp(c)
+	if err != nil {
+		return err
+	}
+	params := services.BuildFileQueryParams(site.Domain, "")
+	resp, status, proxyErr := h.fileSvc.ProxyToAgent(site, "POST", "/files/compress", params, c.Body())
+	if proxyErr != nil {
+		return c.Status(502).JSON(models.APIResponse{Error: "Failed to connect to agent: " + proxyErr.Error()})
+	}
+	c.Set("Content-Type", "application/json")
+	return c.Status(status).Send(resp)
+}
