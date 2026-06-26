@@ -90,6 +90,8 @@ export function useUpdateAvailable() {
       const result = data.data
       return {
         hasUpdate: !!(result?.panel_newer || result?.agent_newer),
+        panelNewer: !!result?.panel_newer,
+        agentNewer: !!result?.agent_newer,
         latestVersion: result?.latest?.version ?? null,
       }
     },

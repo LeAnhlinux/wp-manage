@@ -79,7 +79,9 @@ export default function Sidebar({ mobile }: SidebarProps) {
             <h1 className="text-[15px] font-bold text-white tracking-tight leading-none">WP Manage</h1>
             {updateInfo?.hasUpdate ? (
               <p className="text-[10px] text-amber-400 mt-0.5 leading-none font-medium truncate">
-                ↑ {updateInfo.latestVersion} available
+                ↑ {updateInfo.panelNewer
+                  ? `${updateInfo.latestVersion} available`
+                  : `Agent update to ${updateInfo.latestVersion}`}
               </p>
             ) : (
               <p className="text-[11px] text-slate-400 mt-0.5 leading-none">Server Management</p>
