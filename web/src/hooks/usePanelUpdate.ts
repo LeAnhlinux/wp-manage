@@ -72,11 +72,15 @@ export interface CheckUpdateResult {
 }
 
 export function useCheckUpdate() {
+  const qc = useQueryClient()
   return useMutation({
     mutationFn: async () => {
       const { data } = await api.get<APIResponse<CheckUpdateResult>>('/settings/update/check')
       return data.data!
     },
+    // Keep the sidebar badge in sync with the Settings check result, so it can't
+    // claim "vX available" while the Updates panel already shows "Up to date".
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['panel-update-available'] }),
   })
 }
 
@@ -95,10 +99,13 @@ export function useUpdateAvailable() {
         latestVersion: result?.latest?.version ?? null,
       }
     },
-    // Cache 30 min — recheck every 1h (only when tab is focused)
-    staleTime: 30 * 60 * 1000,
+    // Cache 5 min, recheck hourly, and re-validate on mount / tab focus so the
+    // badge clears promptly after an update instead of lingering on stale data.
+    staleTime: 5 * 60 * 1000,
     refetchInterval: 60 * 60 * 1000,
     refetchIntervalInBackground: false,
+    refetchOnMount: true,
+    refetchOnWindowFocus: true,
     // Don't throw — silent failure is fine for a background badge
     retry: 1,
   })
