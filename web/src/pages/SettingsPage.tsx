@@ -502,6 +502,17 @@ function UpdatesSection() {
 
   const serverAgents = result?.server_agents || []
 
+  // Auto-check for updates once when the Settings page opens, so availability
+  // shows up without the user clicking "Check for Updates". Ref-guarded so it
+  // fires a single time (and survives React StrictMode's double-mount in dev).
+  const didAutoCheck = useRef(false)
+  useEffect(() => {
+    if (didAutoCheck.current) return
+    didAutoCheck.current = true
+    checkUpdate.mutate(undefined, { onSuccess: setResult })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // When result is received, pre-select only servers that need update
   useEffect(() => {
     if (result) {
@@ -812,9 +823,13 @@ function UpdatesSection() {
             </div>
           )}
         </div>
+      ) : checkUpdate.isPending ? (
+        <div className="flex items-center justify-center gap-2 py-6 text-sm text-gray-400">
+          <Loader2 size={15} className="animate-spin" /> Checking for updates…
+        </div>
       ) : (
         <p className="text-sm text-gray-400 text-center py-6">
-          Click "Check for Updates" to see if a new version is available.
+          Couldn't check for updates. Click "Check for Updates" to retry.
         </p>
       )}
     </div>
