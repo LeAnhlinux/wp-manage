@@ -1,19 +1,38 @@
 [Unit]
 Description=WP Manage Agent
-After=network.target nginx.service mariadb.service
+After=network.target wp-manage-api.service
+Wants=wp-manage-api.service
 
 [Service]
 Type=simple
 User=root
-ExecStart=/usr/local/bin/wp-manage-agent --api-url=${WPM_API_URL} --api-key=${WPM_API_KEY}
+# Config (WPM_API_URL, WPM_API_KEY) lives in the env file so the key stays out of
+# `ps aux`. This must match what scripts/install.sh writes — /etc/wp-manage-agent.env.
+EnvironmentFile=/etc/wp-manage-agent.env
+ExecStart=/usr/local/bin/wp-manage-agent
 Restart=always
-RestartSec=5
+RestartSec=10
 LimitNOFILE=65535
-EnvironmentFile=/etc/wp-agent/agent.env
 
-# Health check - rollback if agent crashes within 10s
-StartLimitIntervalSec=60
-StartLimitBurst=5
+StandardOutput=append:/var/log/wp-manage/agent.log
+StandardError=append:/var/log/wp-manage/agent-error.log
+
+# Memory safety. The agent shares small VPSes (e.g. 4 GB, often no swap) with
+# MariaDB, PHP-FPM and nginx, and the child processes it spawns (wp-cli,
+# mysqldump, tar, clamscan) run inside this same cgroup, so their memory counts
+# here too.
+#   MemoryHigh        soft limit: past this the kernel throttles and reclaims, but
+#                     never kills — keeps the agent lean during normal work.
+#   MemoryMax         hard limit: a true runaway is contained to the agent cgroup
+#                     instead of triggering the global OOM killer, which might
+#                     otherwise pick MariaDB and take the whole site down.
+#   OOMPolicy=continue if a single child (e.g. clamscan loading its signatures)
+#                     is OOM-killed, the agent keeps running instead of the whole
+#                     unit being torn down and restarted.
+MemoryAccounting=yes
+MemoryHigh=1G
+MemoryMax=2G
+OOMPolicy=continue
 
 [Install]
 WantedBy=multi-user.target
