@@ -598,7 +598,10 @@ function ScanDetailModal({ scan, onClose }: { scan: MalwareScan; onClose: () => 
   const siteId = scan.site_id
   let threats: ThreatDetail[] = []
   try {
-    if (scan.threats_detail) threats = JSON.parse(scan.threats_detail)
+    // threats_detail is "null" for clean scans (Go marshals a nil slice as null),
+    // so guard against JSON.parse returning null before using array methods.
+    const parsed = scan.threats_detail ? JSON.parse(scan.threats_detail) : null
+    if (Array.isArray(parsed)) threats = parsed
   } catch { /* empty */ }
 
   const { data: whitelist = [] } = useSiteWhitelist(siteId)
