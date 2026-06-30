@@ -45,6 +45,7 @@ export default function ServerDetailPage() {
   const canManage = can('infrastructure', 'manage')
   const [activeTab, setActiveTab] = useState('overview')
   const [installingService, setInstallingService] = useState<string | null>(null)
+  const [installError, setInstallError] = useState<string | null>(null)
 
   // These hooks must be called before any conditional returns (Rules of Hooks)
   const { data: servicesData, isLoading: servicesLoading, refetch: refetchServices, isFetching: servicesFetching } = useCheckServices(serverId)
@@ -77,10 +78,14 @@ export default function ServerDetailPage() {
 
   const handleInstallService = async (service: string) => {
     setInstallingService(service)
+    setInstallError(null)
     try {
       await installService.mutateAsync(service)
       // Auto re-check service status after install completes
       await refetchServices()
+    } catch (e: unknown) {
+      const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error
+      setInstallError(`${service}: ${msg || 'Install failed'}`)
     } finally {
       setInstallingService(null)
     }
@@ -232,6 +237,9 @@ export default function ServerDetailPage() {
                   </button>
                 )}
               </div>
+              {installError && (
+                <div className="mb-3 px-4 py-2.5 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700 whitespace-pre-wrap break-words">{installError}</div>
+              )}
               <div className="grid grid-cols-2 gap-3">
                 {(() => {
                   const SERVICES = [
@@ -260,7 +268,7 @@ export default function ServerDetailPage() {
                         <span className="text-sm font-medium text-gray-700">{label}</span>
                         {isInstalling ? (
                           <span className="ml-auto flex items-center gap-1 text-xs text-blue-600">
-                            <Loader2 size={11} className="animate-spin" /> Đang cài...
+                            <Loader2 size={11} className="animate-spin" /> Installing...
                           </span>
                         ) : servicesLoading || servicesFetching ? (
                           <span className="ml-auto text-xs text-gray-400">...</span>
@@ -270,7 +278,7 @@ export default function ServerDetailPage() {
                             disabled={!!installingService}
                             className="ml-auto flex items-center gap-1 text-xs px-2 py-0.5 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-40 transition-colors"
                           >
-                            <Plus size={10} /> Cài
+                            <Plus size={10} /> Install
                           </button>
                         ) : (
                           <span className={`ml-auto text-xs px-2 py-0.5 rounded-full ${

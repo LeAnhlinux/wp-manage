@@ -207,7 +207,15 @@ func (p *Provisioner) InstallService(name string) error {
 			return err
 		}
 		runCmd("systemctl", "enable", "fail2ban")
-		return runCmd("systemctl", "restart", "fail2ban")
+		runCmd("systemctl", "restart", "fail2ban")
+		// fail2ban exits (status 255) shortly after start if any jail config is
+		// bad, but `systemctl restart` still returns 0. Verify it's actually up so
+		// the install task reports the real outcome instead of a false success.
+		if out, _ := exec.Command("systemctl", "is-active", "fail2ban").Output(); strings.TrimSpace(string(out)) != "active" {
+			jout, _ := exec.Command("journalctl", "-u", "fail2ban", "--no-pager", "-n", "8").CombinedOutput()
+			return fmt.Errorf("fail2ban installed but failed to start:\n%s", strings.TrimSpace(string(jout)))
+		}
+		return nil
 	case "ufw":
 		// Install UFW trước nếu chưa có
 		if _, err := exec.LookPath("ufw"); err != nil {
