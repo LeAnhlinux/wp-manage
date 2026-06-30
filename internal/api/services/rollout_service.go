@@ -3,6 +3,7 @@ package services
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math"
 	"time"
 
@@ -65,12 +66,37 @@ func (s *RolloutService) DeleteRelease(id uint64) error {
 // --- Rollout Plans ---
 
 // CreateRollout creates a new rollout plan
+// failStaleRollouts marks rollouts that have been pending/running longer than
+// maxAge as failed — along with their unfinished servers — so a stuck rollout
+// (agent crashed/restarted mid-update and never reported) never permanently
+// blocks new rollouts.
+func (s *RolloutService) failStaleRollouts(maxAge time.Duration) {
+	cutoff := time.Now().Add(-maxAge)
+	var stuck []models.RolloutPlan
+	s.db.Where("status IN ? AND created_at < ?", []string{"pending", "running"}, cutoff).Find(&stuck)
+	for _, p := range stuck {
+		s.db.Model(&models.RolloutServer{}).
+			Where("rollout_plan_id = ? AND status IN ?", p.ID, []string{"pending", "updating"}).
+			Update("status", "failed")
+		now := time.Now()
+		s.db.Model(&models.RolloutPlan{}).Where("id = ?", p.ID).
+			Updates(map[string]interface{}{"status": "failed", "completed_at": &now})
+		slog.Warn("Auto-failed stale rollout", "plan_id", p.ID, "age_minutes", int(time.Since(p.CreatedAt).Minutes()))
+	}
+}
+
 func (s *RolloutService) CreateRollout(req models.CreateRolloutRequest) (*models.RolloutPlan, error) {
 	// Verify release exists
 	var release models.AgentRelease
 	if err := s.db.First(&release, req.ReleaseID).Error; err != nil {
 		return nil, fmt.Errorf("release not found")
 	}
+
+	// Clear out rollouts that got stuck: an agent can restart or crash mid-update
+	// (or already be on a different version) and never report back, which would
+	// otherwise block every future rollout with "another rollout is already in
+	// progress". Fail anything older than 15 minutes before checking.
+	s.failStaleRollouts(15 * time.Minute)
 
 	// Check no active rollout
 	var count int64
