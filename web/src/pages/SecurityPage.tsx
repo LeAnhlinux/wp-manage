@@ -4,13 +4,14 @@ import {
   Bug, ChevronLeft, ChevronRight, ScanLine, ShieldCheck, ShieldAlert,
   Download, RefreshCw, Server, Database, Clock, Calendar, Trash2,
   ToggleLeft, ToggleRight, Plus, ChevronDown, Eye, ShieldOff, ArrowLeft,
+  Save, CheckSquare, Square,
 } from 'lucide-react'
 import {
   useMalwareScans, useStartMalwareScan, useClamAVStatus, useInstallClamAV,
   useScanSchedules, useCreateScanSchedule, useUpdateScanSchedule, useDeleteScanSchedule,
   useSiteWhitelist, useWhitelistThreat, useQuarantineThreat,
 } from '@/hooks/useSecurity'
-import { useFileContent, useFileDelete } from '@/hooks/useFiles'
+import { useFileContent, useFileDelete, useSaveFileContent } from '@/hooks/useFiles'
 import { useSites } from '@/hooks/useSites'
 import { useServers } from '@/hooks/useServers'
 import { usePermissions } from '@/hooks/usePermissions'
@@ -574,21 +575,54 @@ function ScanScheduleModal({ sites, defaultSiteId, existing, onClose, onSaved }:
 
 // ─── Scan detail modal ────────────────────────────────────────────────────────
 
-// Read-only viewer so users can inspect a flagged file before acting on it.
-function ThreatFileViewer({ siteId, filePath, onBack }: { siteId: number; filePath: string; onBack: () => void }) {
+// Editor so users can inspect AND fix a flagged file (e.g. strip injected code) in place.
+function ThreatFileEditor({ siteId, filePath, onBack }: { siteId: number; filePath: string; onBack: () => void }) {
   const { data, isLoading, error } = useFileContent(siteId, filePath, true)
+  const saveMut = useSaveFileContent()
+  const [content, setContent] = useState<string | null>(null)
+  const [dirty, setDirty] = useState(false)
+  const [note, setNote] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+
+  useEffect(() => { if (data?.content != null) { setContent(data.content); setDirty(false) } }, [data?.content])
+
+  const save = async () => {
+    if (content == null) return
+    setNote(null)
+    try {
+      await saveMut.mutateAsync({ siteId, req: { path: filePath, content } })
+      setDirty(false)
+      setNote({ type: 'success', text: 'Saved' })
+    } catch (e) {
+      setNote({ type: 'error', text: (e as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Failed to save' })
+    }
+  }
+
   return (
     <div className="flex flex-col min-h-0">
-      <button onClick={onBack} className="flex items-center gap-1.5 text-sm text-blue-600 hover:underline mb-3 shrink-0">
-        <ArrowLeft size={14} /> Back to threats
-      </button>
+      <div className="flex items-center justify-between mb-3 shrink-0">
+        <button onClick={onBack} className="flex items-center gap-1.5 text-sm text-blue-600 hover:underline">
+          <ArrowLeft size={14} /> Back to threats
+        </button>
+        <div className="flex items-center gap-2">
+          {note && <span className={`text-xs font-medium ${note.type === 'success' ? 'text-emerald-600' : 'text-red-600'}`}>{note.text}</span>}
+          <button onClick={save} disabled={!dirty || saveMut.isPending || content == null}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50">
+            {saveMut.isPending ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />} Save
+          </button>
+        </div>
+      </div>
       <code className="text-xs text-gray-500 break-all mb-2 shrink-0">{filePath}</code>
       {isLoading ? (
         <div className="flex items-center justify-center py-10 text-gray-400"><Loader2 size={18} className="animate-spin" /></div>
       ) : error ? (
         <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">Could not open file — it may have been quarantined or deleted.</div>
       ) : (
-        <pre className="text-xs font-mono bg-gray-900 text-gray-100 p-4 rounded-xl whitespace-pre-wrap break-words max-h-[50vh] overflow-auto">{data?.content}</pre>
+        <textarea
+          value={content ?? ''}
+          onChange={e => { setContent(e.target.value); setDirty(true) }}
+          spellCheck={false}
+          className="w-full text-xs font-mono bg-gray-900 text-gray-100 p-4 rounded-xl whitespace-pre resize-none max-h-[50vh] min-h-[40vh] overflow-auto focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
       )}
     </div>
   )
@@ -614,6 +648,9 @@ function ScanDetailModal({ scan, onClose }: { scan: MalwareScan; onClose: () => 
   const [openFile, setOpenFile] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<ThreatDetail | null>(null)
   const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [bulkBusy, setBulkBusy] = useState(false)
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState(false)
 
   const flash = (type: 'success' | 'error', text: string) => { setMsg({ type, text }); setTimeout(() => setMsg(null), 4000) }
   const errText = (e: unknown, fallback: string) => (e as { response?: { data?: { error?: string } } })?.response?.data?.error || fallback
@@ -649,6 +686,31 @@ function ScanDetailModal({ scan, onClose }: { scan: MalwareScan; onClose: () => 
       flash('success', `Deleted ${t.file.split('/').pop()}`)
     } catch (e) { flash('error', errText(e, 'Failed to delete')) } finally { setBusy(null) }
   }
+
+  // --- Bulk selection / actions ---
+  // Selectable = visible threats not yet handled in this session.
+  const actionable = visible.filter(t => !handled[t.file])
+  const allSelected = actionable.length > 0 && actionable.every(t => selected.has(t.file))
+  const selCount = actionable.filter(t => selected.has(t.file)).length
+
+  const toggleSel = (f: string) => setSelected(s => { const n = new Set(s); n.has(f) ? n.delete(f) : n.add(f); return n })
+  const toggleAll = () => setSelected(allSelected ? new Set() : new Set(actionable.map(t => t.file)))
+
+  const runBulk = async (label: string, fn: (t: ThreatDetail) => Promise<unknown>, mark: 'safe' | 'quarantined' | 'deleted') => {
+    const targets = actionable.filter(t => selected.has(t.file))
+    if (targets.length === 0) return
+    setBulkBusy(true)
+    const results = await Promise.allSettled(targets.map(fn))
+    const okFiles = targets.filter((_, i) => results[i].status === 'fulfilled').map(t => t.file)
+    const failed = targets.length - okFiles.length
+    setHandled(h => { const n = { ...h }; okFiles.forEach(f => { n[f] = mark }); return n })
+    setSelected(new Set()); setBulkBusy(false)
+    flash(failed ? 'error' : 'success', `${label}: ${okFiles.length} done${failed ? `, ${failed} failed` : ''}`)
+  }
+
+  const bulkMarkSafe = () => runBulk('Marked safe', t => whitelistMut.mutateAsync({ siteId, file: t.file, threat_type: t.threat_type }), 'safe')
+  const bulkQuarantine = () => runBulk('Quarantined', t => quarantineMut.mutateAsync({ siteId, file: t.file, threat_type: t.threat_type }), 'quarantined')
+  const bulkDelete = () => { setConfirmBulkDelete(false); runBulk('Deleted', t => deleteMut.mutateAsync({ siteId, req: { path: toPublicPath(t.file) } }), 'deleted') }
 
   const isClean = scan.status === 'completed' && threats.length === 0
 
@@ -691,7 +753,7 @@ function ScanDetailModal({ scan, onClose }: { scan: MalwareScan; onClose: () => 
             </div>
           )}
           {openFile ? (
-            <ThreatFileViewer siteId={siteId} filePath={toPublicPath(openFile)} onBack={() => setOpenFile(null)} />
+            <ThreatFileEditor siteId={siteId} filePath={toPublicPath(openFile)} onBack={() => setOpenFile(null)} />
           ) : isClean ? (
             <div className="text-center py-6">
               <div className="w-14 h-14 rounded-full bg-emerald-100 flex items-center justify-center mx-auto mb-3">
@@ -702,10 +764,36 @@ function ScanDetailModal({ scan, onClose }: { scan: MalwareScan; onClose: () => 
             </div>
           ) : threats.length > 0 ? (
             <div>
-              <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
-                <AlertTriangle size={14} className="text-orange-500" />
-                {visible.length} Threat{visible.length !== 1 ? 's' : ''} {visible.length !== threats.length ? `· ${threats.length - visible.length} handled` : 'Detected'}
-              </h4>
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
+                  <AlertTriangle size={14} className="text-orange-500" />
+                  {visible.length} Threat{visible.length !== 1 ? 's' : ''} {visible.length !== threats.length ? `· ${threats.length - visible.length} handled` : 'Detected'}
+                </h4>
+                {actionable.length > 0 && (
+                  <button onClick={toggleAll} className="flex items-center gap-1.5 text-xs font-medium text-gray-600 hover:text-blue-600">
+                    {allSelected ? <CheckSquare size={14} className="text-blue-600" /> : <Square size={14} />} Select all
+                  </button>
+                )}
+              </div>
+              {selCount > 0 && (
+                <div className="flex flex-wrap items-center gap-2 mb-3 px-3 py-2 bg-blue-50 border border-blue-200 rounded-xl sticky top-0 z-10">
+                  <span className="text-sm font-medium text-blue-800">{selCount} selected</span>
+                  <div className="flex-1" />
+                  <button onClick={bulkMarkSafe} disabled={bulkBusy}
+                    className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-emerald-700 bg-white border border-emerald-200 rounded-lg hover:bg-emerald-50 disabled:opacity-50">
+                    {bulkBusy ? <Loader2 size={13} className="animate-spin" /> : <ShieldCheck size={13} />} Mark safe
+                  </button>
+                  <button onClick={bulkQuarantine} disabled={bulkBusy}
+                    className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-amber-700 bg-white border border-amber-200 rounded-lg hover:bg-amber-50 disabled:opacity-50">
+                    {bulkBusy ? <Loader2 size={13} className="animate-spin" /> : <ShieldOff size={13} />} Quarantine
+                  </button>
+                  <button onClick={() => setConfirmBulkDelete(true)} disabled={bulkBusy}
+                    className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-red-700 bg-white border border-red-200 rounded-lg hover:bg-red-50 disabled:opacity-50">
+                    <Trash2 size={13} /> Delete
+                  </button>
+                  <button onClick={() => setSelected(new Set())} className="p-1 text-blue-400 hover:text-blue-600"><XCircle size={14} /></button>
+                </div>
+              )}
               {visible.length === 0 ? (
                 <div className="text-center py-6 text-sm text-emerald-700 font-medium flex items-center justify-center gap-2">
                   <ShieldCheck size={16} /> All threats handled
@@ -716,9 +804,14 @@ function ScanDetailModal({ scan, onClose }: { scan: MalwareScan; onClose: () => 
                     const state = handled[threat.file]
                     const isBusy = busy === threat.file
                     return (
-                      <div key={idx} className="p-4 bg-red-50 border border-red-100 rounded-xl">
-                        <div className="flex items-start justify-between gap-2 mb-1.5">
-                          <code className="text-sm font-mono text-red-800 break-all">{threat.file}</code>
+                      <div key={idx} className={`p-4 border rounded-xl ${selected.has(threat.file) ? 'bg-blue-50 border-blue-200' : 'bg-red-50 border-red-100'}`}>
+                        <div className="flex items-start gap-2 mb-1.5">
+                          {!state && (
+                            <button onClick={() => toggleSel(threat.file)} className="mt-0.5 shrink-0" title="Select">
+                              {selected.has(threat.file) ? <CheckSquare size={15} className="text-blue-600" /> : <Square size={15} className="text-gray-400" />}
+                            </button>
+                          )}
+                          <code className="text-sm font-mono text-red-800 break-all flex-1">{threat.file}</code>
                           <SeverityBadge severity={threat.severity} />
                         </div>
                         <p className="text-xs text-gray-600 mb-1">{threat.description}</p>
@@ -771,6 +864,19 @@ function ScanDetailModal({ scan, onClose }: { scan: MalwareScan; onClose: () => 
             <div className="flex gap-3">
               <button onClick={() => setConfirmDelete(null)} className="flex-1 px-4 py-2 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200">Cancel</button>
               <button onClick={() => doDelete(confirmDelete)} className="flex-1 px-4 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700">Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmBulkDelete && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4" onClick={() => setConfirmBulkDelete(false)}>
+          <div className="bg-white rounded-xl p-6 max-w-sm w-full shadow-xl" onClick={e => e.stopPropagation()}>
+            <h4 className="text-base font-semibold text-gray-900 mb-2 flex items-center gap-2"><AlertTriangle size={18} className="text-red-500" /> Delete {selCount} file{selCount !== 1 ? 's' : ''}?</h4>
+            <p className="text-xs text-gray-500 mb-4">This permanently deletes the selected files. This cannot be undone. If unsure, use Quarantine instead.</p>
+            <div className="flex gap-3">
+              <button onClick={() => setConfirmBulkDelete(false)} className="flex-1 px-4 py-2 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200">Cancel</button>
+              <button onClick={bulkDelete} className="flex-1 px-4 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700">Delete {selCount}</button>
             </div>
           </div>
         </div>
