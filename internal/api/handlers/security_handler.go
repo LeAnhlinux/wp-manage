@@ -180,3 +180,74 @@ func (h *SecurityHandler) ScanComplete(c *fiber.Ctx) error {
 	}
 	return c.JSON(models.APIResponse{Success: true})
 }
+
+// --- Threat actions: whitelist ---
+
+func (h *SecurityHandler) AddWhitelist(c *fiber.Ctx) error {
+	siteID, _ := strconv.ParseUint(c.Params("siteId"), 10, 64)
+	var req struct {
+		File       string `json:"file"`
+		ThreatType string `json:"threat_type"`
+		Reason     string `json:"reason"`
+	}
+	if err := c.BodyParser(&req); err != nil || req.File == "" {
+		return c.Status(400).JSON(models.APIResponse{Error: "file is required"})
+	}
+	rec, err := h.svc.AddWhitelist(siteID, req.File, req.ThreatType, req.Reason)
+	if err != nil {
+		return c.Status(400).JSON(models.APIResponse{Error: err.Error()})
+	}
+	return c.Status(201).JSON(models.APIResponse{Success: true, Message: "File marked as safe", Data: rec})
+}
+
+func (h *SecurityHandler) ListWhitelist(c *fiber.Ctx) error {
+	siteID, _ := strconv.ParseUint(c.Params("siteId"), 10, 64)
+	list, err := h.svc.ListWhitelist(siteID)
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Error: "Failed to fetch whitelist"})
+	}
+	return c.JSON(models.APIResponse{Success: true, Data: list})
+}
+
+func (h *SecurityHandler) RemoveWhitelist(c *fiber.Ctx) error {
+	id, _ := strconv.ParseUint(c.Params("id"), 10, 64)
+	if err := h.svc.RemoveWhitelist(id); err != nil {
+		return c.Status(400).JSON(models.APIResponse{Error: err.Error()})
+	}
+	return c.JSON(models.APIResponse{Success: true, Message: "Removed from whitelist"})
+}
+
+// --- Threat actions: quarantine ---
+
+func (h *SecurityHandler) QuarantineThreat(c *fiber.Ctx) error {
+	siteID, _ := strconv.ParseUint(c.Params("siteId"), 10, 64)
+	var req struct {
+		File       string `json:"file"`
+		ThreatType string `json:"threat_type"`
+	}
+	if err := c.BodyParser(&req); err != nil || req.File == "" {
+		return c.Status(400).JSON(models.APIResponse{Error: "file is required"})
+	}
+	rec, err := h.svc.QuarantineThreat(siteID, req.File, req.ThreatType)
+	if err != nil {
+		return c.Status(400).JSON(models.APIResponse{Error: err.Error()})
+	}
+	return c.Status(201).JSON(models.APIResponse{Success: true, Message: "File quarantined", Data: rec})
+}
+
+func (h *SecurityHandler) ListQuarantine(c *fiber.Ctx) error {
+	siteID, _ := strconv.ParseUint(c.Params("siteId"), 10, 64)
+	list, err := h.svc.ListQuarantine(siteID)
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Error: "Failed to fetch quarantine"})
+	}
+	return c.JSON(models.APIResponse{Success: true, Data: list})
+}
+
+func (h *SecurityHandler) RestoreQuarantine(c *fiber.Ctx) error {
+	id, _ := strconv.ParseUint(c.Params("id"), 10, 64)
+	if err := h.svc.RestoreQuarantine(id); err != nil {
+		return c.Status(400).JSON(models.APIResponse{Error: err.Error()})
+	}
+	return c.JSON(models.APIResponse{Success: true, Message: "File restored"})
+}

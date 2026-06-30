@@ -314,6 +314,17 @@ func Setup(
 	siteScans.Put("/schedule/:schedId", middleware.PermissionRequired("sites", "manage"), securityHandler.UpdateSchedule)
 	siteScans.Delete("/schedule/:schedId", middleware.PermissionRequired("sites", "manage"), securityHandler.DeleteSchedule)
 
+	// Threat actions — mark-as-safe (whitelist) + quarantine/restore
+	siteThreats := sites.Group("/:siteId/threats")
+	siteThreats.Get("/whitelist", securityHandler.ListWhitelist)
+	siteThreats.Post("/whitelist", middleware.PermissionRequired("sites", "manage"), securityHandler.AddWhitelist)
+	siteThreats.Post("/quarantine", middleware.PermissionRequired("sites", "manage"), securityHandler.QuarantineThreat)
+	siteThreats.Get("/quarantine", securityHandler.ListQuarantine)
+	threatWhitelist := protected.Group("/threats/whitelist")
+	threatWhitelist.Delete("/:id", middleware.PermissionRequired("sites", "manage"), securityHandler.RemoveWhitelist)
+	threatQuarantine := protected.Group("/threats/quarantine")
+	threatQuarantine.Post("/:id/restore", middleware.PermissionRequired("sites", "manage"), securityHandler.RestoreQuarantine)
+
 	// ClamAV — server-scoped (ClamAV is installed on the server, not per site)
 	serverClamAV := servers.Group("/:id/clamav")
 	serverClamAV.Get("/status", securityHandler.GetClamAVStatus)

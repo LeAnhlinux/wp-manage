@@ -159,3 +159,87 @@ export function useDeleteScanSchedule() {
     },
   })
 }
+
+// --- Threat actions: whitelist (mark as safe) + quarantine ---
+
+export interface ThreatWhitelistEntry {
+  id: number
+  site_id: number
+  file_path: string
+  threat_type: string
+  reason: string
+  created_at: string
+}
+
+export interface QuarantinedFileEntry {
+  id: number
+  site_id: number
+  original_path: string
+  quarantine_path: string
+  threat_type: string
+  quarantined_at: string
+}
+
+export function useSiteWhitelist(siteId: number) {
+  return useQuery({
+    queryKey: ['threat-whitelist', siteId],
+    queryFn: async () => {
+      const { data } = await api.get<APIResponse<ThreatWhitelistEntry[]>>(`/sites/${siteId}/threats/whitelist`)
+      return data.data || []
+    },
+    enabled: !!siteId,
+  })
+}
+
+export function useWhitelistThreat() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ siteId, file, threat_type, reason }: { siteId: number; file: string; threat_type?: string; reason?: string }) => {
+      const { data } = await api.post<APIResponse<ThreatWhitelistEntry>>(`/sites/${siteId}/threats/whitelist`, { file, threat_type, reason })
+      return data.data!
+    },
+    onSuccess: (_d, v) => qc.invalidateQueries({ queryKey: ['threat-whitelist', v.siteId] }),
+  })
+}
+
+export function useRemoveWhitelist() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ id }: { id: number; siteId: number }) => {
+      await api.delete(`/threats/whitelist/${id}`)
+    },
+    onSuccess: (_d, v) => qc.invalidateQueries({ queryKey: ['threat-whitelist', v.siteId] }),
+  })
+}
+
+export function useSiteQuarantine(siteId: number) {
+  return useQuery({
+    queryKey: ['threat-quarantine', siteId],
+    queryFn: async () => {
+      const { data } = await api.get<APIResponse<QuarantinedFileEntry[]>>(`/sites/${siteId}/threats/quarantine`)
+      return data.data || []
+    },
+    enabled: !!siteId,
+  })
+}
+
+export function useQuarantineThreat() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ siteId, file, threat_type }: { siteId: number; file: string; threat_type?: string }) => {
+      const { data } = await api.post<APIResponse<QuarantinedFileEntry>>(`/sites/${siteId}/threats/quarantine`, { file, threat_type })
+      return data.data!
+    },
+    onSuccess: (_d, v) => qc.invalidateQueries({ queryKey: ['threat-quarantine', v.siteId] }),
+  })
+}
+
+export function useRestoreQuarantine() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ id }: { id: number; siteId: number }) => {
+      await api.post(`/threats/quarantine/${id}/restore`)
+    },
+    onSuccess: (_d, v) => qc.invalidateQueries({ queryKey: ['threat-quarantine', v.siteId] }),
+  })
+}

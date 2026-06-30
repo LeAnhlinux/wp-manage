@@ -146,6 +146,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/files/move", h.authMiddleware(h.handleMove))
 	mux.HandleFunc("/files/delete-bulk", h.authMiddleware(h.handleDeleteBulk))
 	mux.HandleFunc("/files/compress", h.authMiddleware(h.handleCompress))
+	mux.HandleFunc("/files/quarantine", h.authMiddleware(h.handleQuarantine))
+	mux.HandleFunc("/files/restore-quarantine", h.authMiddleware(h.handleRestoreQuarantine))
 	mux.HandleFunc("/backup/download", h.authMiddleware(h.handleBackupDownload))
 }
 
@@ -1172,6 +1174,119 @@ func (h *Handler) handleCompress(w http.ResponseWriter, r *http.Request) {
 		Message: "Compressed successfully",
 		Data:    filepath.Base(zipPath),
 	})
+}
+
+// quarantineDirName is the per-site folder that holds disabled (quarantined) files.
+// It lives at /var/www/<domain>/.quarantine — outside /public, so it is neither
+// web-served nor picked up by malware scans (which walk /public).
+const quarantineDirName = ".quarantine"
+
+// handleQuarantine moves a suspicious file into the site's .quarantine directory
+// and disables it (chmod 000). The move is reversible via /files/restore-quarantine.
+func (h *Handler) handleQuarantine(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, models.APIResponse{Error: "Method not allowed"})
+		return
+	}
+	domain := r.URL.Query().Get("domain")
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || domain == "" || req.Path == "" {
+		writeJSON(w, 400, models.APIResponse{Error: "domain and path are required"})
+		return
+	}
+
+	srcFull, err := safePath(domain, req.Path)
+	if err != nil {
+		writeJSON(w, 403, models.APIResponse{Error: err.Error()})
+		return
+	}
+	info, err := os.Stat(srcFull)
+	if err != nil {
+		writeJSON(w, 404, models.APIResponse{Error: "File not found"})
+		return
+	}
+	if info.IsDir() {
+		writeJSON(w, 400, models.APIResponse{Error: "Cannot quarantine a directory"})
+		return
+	}
+
+	qDir := filepath.Join("/var/www", domain, quarantineDirName)
+	if err := os.MkdirAll(qDir, 0700); err != nil {
+		writeJSON(w, 500, models.APIResponse{Error: "Cannot create quarantine dir: " + err.Error()})
+		return
+	}
+
+	// Unique destination: <unixnano>_<basename>, with a counter fallback.
+	base := filepath.Base(srcFull)
+	dest := filepath.Join(qDir, fmt.Sprintf("%d_%s", time.Now().UnixNano(), base))
+	for i := 1; ; i++ {
+		if _, err := os.Stat(dest); os.IsNotExist(err) {
+			break
+		}
+		dest = filepath.Join(qDir, fmt.Sprintf("%d_%d_%s", time.Now().UnixNano(), i, base))
+	}
+
+	if err := os.Rename(srcFull, dest); err != nil {
+		writeJSON(w, 500, models.APIResponse{Error: "Quarantine failed: " + err.Error()})
+		return
+	}
+	os.Chmod(dest, 0000) // disable: no read/write/execute
+
+	writeJSON(w, 200, models.APIResponse{
+		Success: true,
+		Message: "File quarantined",
+		Data:    dest, // absolute quarantine path, stored by the API for restore
+	})
+}
+
+// handleRestoreQuarantine moves a quarantined file back to its original location.
+func (h *Handler) handleRestoreQuarantine(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, 405, models.APIResponse{Error: "Method not allowed"})
+		return
+	}
+	domain := r.URL.Query().Get("domain")
+	var req struct {
+		QuarantinePath string `json:"quarantine_path"`
+		OriginalPath   string `json:"original_path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || domain == "" || req.QuarantinePath == "" || req.OriginalPath == "" {
+		writeJSON(w, 400, models.APIResponse{Error: "domain, quarantine_path and original_path are required"})
+		return
+	}
+
+	// The quarantine path must stay within this site's .quarantine dir.
+	qBase := filepath.Join("/var/www", domain, quarantineDirName)
+	cleanedQ := filepath.Clean(req.QuarantinePath)
+	if cleanedQ != qBase && !strings.HasPrefix(cleanedQ, qBase+string(os.PathSeparator)) {
+		writeJSON(w, 403, models.APIResponse{Error: "quarantine_path outside quarantine directory"})
+		return
+	}
+	if _, err := os.Stat(cleanedQ); err != nil {
+		writeJSON(w, 404, models.APIResponse{Error: "Quarantined file not found"})
+		return
+	}
+
+	destFull, err := safePath(domain, req.OriginalPath)
+	if err != nil {
+		writeJSON(w, 403, models.APIResponse{Error: err.Error()})
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(destFull), 0755); err != nil {
+		writeJSON(w, 500, models.APIResponse{Error: "Cannot recreate original dir: " + err.Error()})
+		return
+	}
+	if err := os.Rename(cleanedQ, destFull); err != nil {
+		writeJSON(w, 500, models.APIResponse{Error: "Restore failed: " + err.Error()})
+		return
+	}
+	os.Chmod(destFull, 0644)
+	su := siteUser(domain)
+	exec.Command("chown", su+":"+su, destFull).Run() //nolint
+
+	writeJSON(w, 200, models.APIResponse{Success: true, Message: "File restored"})
 }
 
 // addFileToZip writes a single file into the zip writer under arcName.

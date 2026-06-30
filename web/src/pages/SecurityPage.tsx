@@ -3,12 +3,14 @@ import {
   Shield, Search, Loader2, CheckCircle2, AlertTriangle, XCircle,
   Bug, ChevronLeft, ChevronRight, ScanLine, ShieldCheck, ShieldAlert,
   Download, RefreshCw, Server, Database, Clock, Calendar, Trash2,
-  ToggleLeft, ToggleRight, Plus, ChevronDown,
+  ToggleLeft, ToggleRight, Plus, ChevronDown, Eye, ShieldOff, ArrowLeft,
 } from 'lucide-react'
 import {
   useMalwareScans, useStartMalwareScan, useClamAVStatus, useInstallClamAV,
   useScanSchedules, useCreateScanSchedule, useUpdateScanSchedule, useDeleteScanSchedule,
+  useSiteWhitelist, useWhitelistThreat, useQuarantineThreat,
 } from '@/hooks/useSecurity'
+import { useFileContent, useFileDelete } from '@/hooks/useFiles'
 import { useSites } from '@/hooks/useSites'
 import { useServers } from '@/hooks/useServers'
 import { usePermissions } from '@/hooks/usePermissions'
@@ -572,11 +574,79 @@ function ScanScheduleModal({ sites, defaultSiteId, existing, onClose, onSaved }:
 
 // ─── Scan detail modal ────────────────────────────────────────────────────────
 
+// Read-only viewer so users can inspect a flagged file before acting on it.
+function ThreatFileViewer({ siteId, filePath, onBack }: { siteId: number; filePath: string; onBack: () => void }) {
+  const { data, isLoading, error } = useFileContent(siteId, filePath, true)
+  return (
+    <div className="flex flex-col min-h-0">
+      <button onClick={onBack} className="flex items-center gap-1.5 text-sm text-blue-600 hover:underline mb-3 shrink-0">
+        <ArrowLeft size={14} /> Back to threats
+      </button>
+      <code className="text-xs text-gray-500 break-all mb-2 shrink-0">{filePath}</code>
+      {isLoading ? (
+        <div className="flex items-center justify-center py-10 text-gray-400"><Loader2 size={18} className="animate-spin" /></div>
+      ) : error ? (
+        <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">Could not open file — it may have been quarantined or deleted.</div>
+      ) : (
+        <pre className="text-xs font-mono bg-gray-900 text-gray-100 p-4 rounded-xl whitespace-pre-wrap break-words max-h-[50vh] overflow-auto">{data?.content}</pre>
+      )}
+    </div>
+  )
+}
+
 function ScanDetailModal({ scan, onClose }: { scan: MalwareScan; onClose: () => void }) {
+  const siteId = scan.site_id
   let threats: ThreatDetail[] = []
   try {
     if (scan.threats_detail) threats = JSON.parse(scan.threats_detail)
   } catch { /* empty */ }
+
+  const { data: whitelist = [] } = useSiteWhitelist(siteId)
+  const whitelistMut = useWhitelistThreat()
+  const quarantineMut = useQuarantineThreat()
+  const deleteMut = useFileDelete()
+
+  const [handled, setHandled] = useState<Record<string, 'safe' | 'quarantined' | 'deleted'>>({})
+  const [busy, setBusy] = useState<string | null>(null)
+  const [openFile, setOpenFile] = useState<string | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState<ThreatDetail | null>(null)
+  const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+
+  const flash = (type: 'success' | 'error', text: string) => { setMsg({ type, text }); setTimeout(() => setMsg(null), 4000) }
+  const errText = (e: unknown, fallback: string) => (e as { response?: { data?: { error?: string } } })?.response?.data?.error || fallback
+  const toPublicPath = (f: string) => '/public/' + f.replace(/^\/+/, '')
+
+  // Hide threats already whitelisted server-side or handled in this session.
+  const whitelistedPaths = new Set(whitelist.map(w => w.file_path))
+  const visible = threats.filter(t => !whitelistedPaths.has(t.file) && handled[t.file] !== 'safe')
+
+  const markSafe = async (t: ThreatDetail) => {
+    setBusy(t.file)
+    try {
+      await whitelistMut.mutateAsync({ siteId, file: t.file, threat_type: t.threat_type })
+      setHandled(h => ({ ...h, [t.file]: 'safe' }))
+      flash('success', `Marked safe — future scans will skip this file`)
+    } catch (e) { flash('error', errText(e, 'Failed to mark safe')) } finally { setBusy(null) }
+  }
+
+  const quarantine = async (t: ThreatDetail) => {
+    setBusy(t.file)
+    try {
+      await quarantineMut.mutateAsync({ siteId, file: t.file, threat_type: t.threat_type })
+      setHandled(h => ({ ...h, [t.file]: 'quarantined' }))
+      flash('success', `Quarantined ${t.file.split('/').pop()}`)
+    } catch (e) { flash('error', errText(e, 'Failed to quarantine')) } finally { setBusy(null) }
+  }
+
+  const doDelete = async (t: ThreatDetail) => {
+    setBusy(t.file); setConfirmDelete(null)
+    try {
+      await deleteMut.mutateAsync({ siteId, req: { path: toPublicPath(t.file) } })
+      setHandled(h => ({ ...h, [t.file]: 'deleted' }))
+      flash('success', `Deleted ${t.file.split('/').pop()}`)
+    } catch (e) { flash('error', errText(e, 'Failed to delete')) } finally { setBusy(null) }
+  }
+
   const isClean = scan.status === 'completed' && threats.length === 0
 
   return (
@@ -609,12 +679,17 @@ function ScanDetailModal({ scan, onClose }: { scan: MalwareScan; onClose: () => 
         </div>
 
         <div className="px-6 pb-6 flex-1 overflow-y-auto space-y-4">
+          {msg && (
+            <div className={`p-3 rounded-xl text-sm border ${msg.type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-red-50 border-red-200 text-red-700'}`}>{msg.text}</div>
+          )}
           {scan.error && (
             <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700 flex items-start gap-2">
               <XCircle size={15} className="mt-0.5 shrink-0" />{scan.error}
             </div>
           )}
-          {isClean && (
+          {openFile ? (
+            <ThreatFileViewer siteId={siteId} filePath={toPublicPath(openFile)} onBack={() => setOpenFile(null)} />
+          ) : isClean ? (
             <div className="text-center py-6">
               <div className="w-14 h-14 rounded-full bg-emerald-100 flex items-center justify-center mx-auto mb-3">
                 <ShieldCheck size={28} className="text-emerald-600" />
@@ -622,27 +697,58 @@ function ScanDetailModal({ scan, onClose }: { scan: MalwareScan; onClose: () => 
               <p className="text-emerald-700 font-semibold">No threats detected</p>
               <p className="text-sm text-gray-500 mt-1">Your site appears to be clean</p>
             </div>
-          )}
-          {threats.length > 0 && (
+          ) : threats.length > 0 ? (
             <div>
               <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
                 <AlertTriangle size={14} className="text-orange-500" />
-                {threats.length} Threat{threats.length !== 1 ? 's' : ''} Detected
+                {visible.length} Threat{visible.length !== 1 ? 's' : ''} {visible.length !== threats.length ? `· ${threats.length - visible.length} handled` : 'Detected'}
               </h4>
-              <div className="space-y-2">
-                {threats.map((threat, idx) => (
-                  <div key={idx} className="p-4 bg-red-50 border border-red-100 rounded-xl">
-                    <div className="flex items-start justify-between gap-2 mb-1.5">
-                      <code className="text-sm font-mono text-red-800 break-all">{threat.file}</code>
-                      <SeverityBadge severity={threat.severity} />
-                    </div>
-                    <p className="text-xs text-gray-600 mb-1">{threat.description}</p>
-                    <span className="inline-block text-xs text-red-600 font-semibold bg-red-100 px-2 py-0.5 rounded-md">{threat.threat_type}</span>
-                  </div>
-                ))}
-              </div>
+              {visible.length === 0 ? (
+                <div className="text-center py-6 text-sm text-emerald-700 font-medium flex items-center justify-center gap-2">
+                  <ShieldCheck size={16} /> All threats handled
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {visible.map((threat, idx) => {
+                    const state = handled[threat.file]
+                    const isBusy = busy === threat.file
+                    return (
+                      <div key={idx} className="p-4 bg-red-50 border border-red-100 rounded-xl">
+                        <div className="flex items-start justify-between gap-2 mb-1.5">
+                          <code className="text-sm font-mono text-red-800 break-all">{threat.file}</code>
+                          <SeverityBadge severity={threat.severity} />
+                        </div>
+                        <p className="text-xs text-gray-600 mb-1">{threat.description}</p>
+                        <span className="inline-block text-xs text-red-600 font-semibold bg-red-100 px-2 py-0.5 rounded-md">{threat.threat_type}</span>
+                        {state === 'quarantined' ? (
+                          <div className="mt-3 text-xs text-amber-700 font-medium flex items-center gap-1.5"><ShieldOff size={13} /> Quarantined — manage under Security → Quarantine</div>
+                        ) : (
+                          <div className="mt-3 flex flex-wrap items-center gap-2">
+                            <button onClick={() => setOpenFile(threat.file)} disabled={isBusy}
+                              className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-50">
+                              <Eye size={13} /> Open
+                            </button>
+                            <button onClick={() => markSafe(threat)} disabled={isBusy}
+                              className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-emerald-700 bg-white border border-emerald-200 rounded-lg hover:bg-emerald-50 disabled:opacity-50">
+                              {isBusy ? <Loader2 size={13} className="animate-spin" /> : <ShieldCheck size={13} />} Mark safe
+                            </button>
+                            <button onClick={() => quarantine(threat)} disabled={isBusy}
+                              className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-amber-700 bg-white border border-amber-200 rounded-lg hover:bg-amber-50 disabled:opacity-50">
+                              {isBusy ? <Loader2 size={13} className="animate-spin" /> : <ShieldOff size={13} />} Quarantine
+                            </button>
+                            <button onClick={() => setConfirmDelete(threat)} disabled={isBusy}
+                              className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-red-700 bg-white border border-red-200 rounded-lg hover:bg-red-50 disabled:opacity-50">
+                              <Trash2 size={13} /> Delete
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
             </div>
-          )}
+          ) : null}
         </div>
 
         <div className="px-6 py-4 border-t border-gray-100">
@@ -651,6 +757,21 @@ function ScanDetailModal({ scan, onClose }: { scan: MalwareScan; onClose: () => 
           </button>
         </div>
       </div>
+
+      {confirmDelete && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4" onClick={() => setConfirmDelete(null)}>
+          <div className="bg-white rounded-xl p-6 max-w-sm w-full shadow-xl" onClick={e => e.stopPropagation()}>
+            <h4 className="text-base font-semibold text-gray-900 mb-2 flex items-center gap-2"><AlertTriangle size={18} className="text-red-500" /> Delete file?</h4>
+            <p className="text-sm text-gray-600 mb-1">This permanently deletes:</p>
+            <code className="block text-xs font-mono text-red-700 bg-red-50 p-2 rounded mb-3 break-all">{confirmDelete.file}</code>
+            <p className="text-xs text-gray-500 mb-4">This cannot be undone. If unsure, use Quarantine instead.</p>
+            <div className="flex gap-3">
+              <button onClick={() => setConfirmDelete(null)} className="flex-1 px-4 py-2 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200">Cancel</button>
+              <button onClick={() => doDelete(confirmDelete)} className="flex-1 px-4 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700">Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

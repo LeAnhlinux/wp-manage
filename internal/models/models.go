@@ -228,6 +228,30 @@ type MalwareScan struct {
 	Site          *Site      `json:"site,omitempty" gorm:"foreignKey:SiteID"`
 }
 
+// ThreatWhitelist marks a file as a known false-positive so future malware
+// scans skip it and the UI hides it. Keyed by (site, file path).
+type ThreatWhitelist struct {
+	ID         uint64    `json:"id" gorm:"primaryKey;autoIncrement"`
+	SiteID     uint64    `json:"site_id" gorm:"uniqueIndex:idx_site_file;not null"`
+	FilePath   string    `json:"file_path" gorm:"uniqueIndex:idx_site_file;size:500;not null"` // relative to /var/www/<domain>/public
+	ThreatType string    `json:"threat_type" gorm:"size:100"`
+	Reason     string    `json:"reason" gorm:"size:255"`
+	CreatedAt  time.Time `json:"created_at"`
+	Site       *Site     `json:"site,omitempty" gorm:"foreignKey:SiteID"`
+}
+
+// QuarantinedFile tracks a file the agent moved into the site's .quarantine
+// directory, so it can be restored to its original location later.
+type QuarantinedFile struct {
+	ID             uint64    `json:"id" gorm:"primaryKey;autoIncrement"`
+	SiteID         uint64    `json:"site_id" gorm:"index;not null"`
+	OriginalPath   string    `json:"original_path" gorm:"size:500;not null"`  // relative to /var/www/<domain>, e.g. /public/wp-content/...
+	QuarantinePath string    `json:"quarantine_path" gorm:"size:500;not null"` // absolute path under /var/www/<domain>/.quarantine
+	ThreatType     string    `json:"threat_type" gorm:"size:100"`
+	QuarantinedAt  time.Time `json:"quarantined_at"`
+	Site           *Site     `json:"site,omitempty" gorm:"foreignKey:SiteID"`
+}
+
 // MalwareScanSchedule configures automatic periodic scanning for a site
 type MalwareScanSchedule struct {
 	ID        uint64     `json:"id" gorm:"primaryKey;autoIncrement"`

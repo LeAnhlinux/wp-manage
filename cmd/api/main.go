@@ -48,7 +48,7 @@ func main() {
 	userService := services.NewUserService(db)
 	apiKeyService := services.NewAPIKeyService(db)
 	backupService := services.NewBackupService(db)
-	securityService := services.NewSecurityService(db)
+	securityService := services.NewSecurityService(db, fileService)
 	rolloutService := services.NewRolloutService(db)
 	performanceService := services.NewPerformanceService(db, cfg)
 	multisiteService := services.NewMultisiteService(db)

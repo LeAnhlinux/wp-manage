@@ -272,12 +272,15 @@ type AgentWAFTask struct {
 }
 
 type AgentMalwareScanTask struct {
-	ScanID   uint64 `json:"scan_id"`
-	SiteID   uint64 `json:"site_id"`
-	Domain   string `json:"domain"`
-	ScanType string `json:"scan_type"`
-	Engine   string `json:"engine"` // wp_signature, clamav, both
-	Path     string `json:"path"`
+	ScanID   uint64   `json:"scan_id"`
+	SiteID   uint64   `json:"site_id"`
+	Domain   string   `json:"domain"`
+	ScanType string   `json:"scan_type"`
+	Engine   string   `json:"engine"` // wp_signature, clamav, both
+	Path     string   `json:"path"`
+	// Whitelist holds file paths (relative to /var/www/<domain>/public) marked as
+	// known false-positives; the scanner skips them so they are not re-flagged.
+	Whitelist []string `json:"whitelist,omitempty"`
 }
 
 type AgentClamAVStatusResult struct {

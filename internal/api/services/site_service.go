@@ -151,6 +151,7 @@ func (s *SiteService) Delete(id uint64) error {
 			"cache_configs", "waf_configs", "auto_update_configs", "sftp_accounts",
 			"uptime_checks", "performance_metrics", "image_opt_configs",
 			"image_opt_results", "malware_scans", "malware_scan_schedules", "update_logs", "wpcli_histories",
+			"threat_whitelists", "quarantined_files",
 			"external_imports", "subsites", "staging_sites",
 		}
 		for _, tbl := range tables {

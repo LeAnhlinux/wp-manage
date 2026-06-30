@@ -89,6 +89,8 @@ func AutoMigrate(db *gorm.DB) error {
 		&models.WAFConfig{},
 		&models.MalwareScan{},
 		&models.MalwareScanSchedule{},
+		&models.ThreatWhitelist{},
+		&models.QuarantinedFile{},
 		&models.StagingSite{},
 		&models.AutoUpdateConfig{},
 		&models.UpdateLog{},
