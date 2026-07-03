@@ -97,3 +97,31 @@ export function useCheckDomainDNS() {
     },
   })
 }
+
+// ── Server metrics history (Dashboard chart) ──────────────────────────────
+// Reuses the mobile endpoint (same JWT): GET /api/mobile/v1/servers/:id/metrics/history
+// Plain fetch because the shared axios client is pinned to the /api/v1 base path.
+export interface MetricHistoryPoint {
+  ts: string
+  cpu_usage: number
+  ram_usage: number
+  disk_usage: number
+}
+
+export function useMetricsHistory(serverId: number, hours = 24) {
+  return useQuery({
+    queryKey: ['metrics-history', serverId, hours],
+    enabled: !!serverId,
+    refetchInterval: 60_000,
+    staleTime: 55_000,
+    queryFn: async () => {
+      const token = sessionStorage.getItem('token')
+      const res = await fetch(`/api/mobile/v1/servers/${serverId}/metrics/history?hours=${hours}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      const body = await res.json()
+      if (!res.ok || !body.ok) throw new Error('Failed to load metrics history')
+      return (body.data ?? []) as MetricHistoryPoint[]
+    },
+  })
+}

@@ -198,23 +198,23 @@ export default function BackupsPage() {
           <div className="flex-1 min-w-0">
             {restoreStatus.status === 'pending' && (
               <>
-                <p className="font-medium">Đang restore <code className="bg-blue-100 px-1 rounded">{restoreStatus.domain}</code>...</p>
+                <p className="font-medium">Restoring <code className="bg-blue-100 px-1 rounded">{restoreStatus.domain}</code>...</p>
                 <p className="text-sm mt-0.5 text-blue-700">
-                  Agent đang xử lý trên server — có thể mất 1-3 phút. Site sẽ xuất hiện trong <strong>Sites</strong> khi hoàn thành.
+                  The agent is working on the server — this can take 1-3 minutes. The site will appear in <strong>Sites</strong> when done.
                 </p>
               </>
             )}
             {restoreStatus.status === 'success' && (
               <>
-                <p className="font-medium">✅ Restore hoàn thành — <code className="bg-green-100 px-1 rounded">{restoreStatus.domain}</code></p>
+                <p className="font-medium">✅ Restore completed — <code className="bg-green-100 px-1 rounded">{restoreStatus.domain}</code></p>
                 <p className="text-sm mt-0.5 text-green-700">
-                  Site đã được recreate và đang active. Vào <strong>Sites</strong> để kiểm tra.
+                  The site has been recreated and is active. Open <strong>Sites</strong> to verify.
                 </p>
               </>
             )}
             {restoreStatus.status === 'error' && (
               <>
-                <p className="font-medium">❌ Restore thất bại — <code className="bg-red-100 px-1 rounded">{restoreStatus.domain}</code></p>
+                <p className="font-medium">❌ Restore failed — <code className="bg-red-100 px-1 rounded">{restoreStatus.domain}</code></p>
                 {restoreStatus.message && (
                   <p className="text-sm mt-0.5 text-red-700">{restoreStatus.message}</p>
                 )}

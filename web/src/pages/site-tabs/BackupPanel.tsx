@@ -337,7 +337,7 @@ export function BackupPanel({ siteId, domain, canManage }: { siteId: number; dom
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Keep Backups (số bản)</label>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Keep Backups (copies)</label>
                 <input
                   type="number" min={1} max={365}
                   value={schedForm.retention}
@@ -397,7 +397,7 @@ export function BackupPanel({ siteId, domain, canManage }: { siteId: number; dom
                     <p className="text-sm font-mono font-medium text-gray-800 truncate">{sched.cron_expr}</p>
                     <p className="text-xs text-gray-500">
                       {BACKUP_CRON_PRESETS.find(p => p.value === sched.cron_expr)?.label ?? sched.cron_expr}
-                      {' · '}Giữ {sched.retention} bản
+                      {' · '}Keep {sched.retention} copies
                     </p>
                   </div>
                 </div>
@@ -447,7 +447,7 @@ export function BackupPanel({ siteId, domain, canManage }: { siteId: number; dom
           <div className="bg-white rounded-xl max-w-lg w-full p-6 shadow-xl">
             <div className="flex items-center justify-between mb-5">
               <h3 className="text-base font-semibold text-gray-900 flex items-center gap-2">
-                <Edit2 size={16} className="text-blue-600" /> Sửa lịch backup
+                <Edit2 size={16} className="text-blue-600" /> Edit backup schedule
               </h3>
               <button onClick={() => setEditSched(null)} className="p-1 text-gray-400 hover:text-gray-600">
                 <X size={18} />
@@ -456,7 +456,7 @@ export function BackupPanel({ siteId, domain, canManage }: { siteId: number; dom
             <form onSubmit={handleUpdateSchedule} className="space-y-4">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Loại backup</label>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Backup type</label>
                   <select
                     value={editForm.type}
                     onChange={e => setEditForm({ ...editForm, type: e.target.value as 'full' | 'database_only' })}
@@ -466,13 +466,13 @@ export function BackupPanel({ siteId, domain, canManage }: { siteId: number; dom
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Giữ lại (số bản)</label>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Keep (copies)</label>
                   <input
                     type="number" min={1} max={365}
                     value={editForm.retention}
                     onChange={e => setEditForm({ ...editForm, retention: Number(e.target.value) })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
-                  <p className="text-xs text-gray-400 mt-1">Bản cũ hơn sẽ bị xóa tự động</p>
+                  <p className="text-xs text-gray-400 mt-1">Older copies are deleted automatically</p>
                 </div>
               </div>
               <div>
@@ -508,13 +508,13 @@ export function BackupPanel({ siteId, domain, canManage }: { siteId: number; dom
                   type="submit"
                   disabled={updateSchedule.isPending}
                   className="flex-1 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">
-                  {updateSchedule.isPending ? 'Đang lưu...' : 'Lưu thay đổi'}
+                  {updateSchedule.isPending ? 'Saving...' : 'Save Changes'}
                 </button>
                 <button
                   type="button"
                   onClick={() => setEditSched(null)}
                   className="px-4 py-2 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200">
-                  Hủy
+                  Cancel
                 </button>
               </div>
             </form>

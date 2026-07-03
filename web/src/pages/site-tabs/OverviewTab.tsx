@@ -104,8 +104,8 @@ export function OverviewTab({ site, onDeleted, onMessage, canManage }: OverviewT
       setSourcePhase('error')
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error
         || (err instanceof Error ? err.message : null)
-        || 'Upload source thất bại'
-      setSourceResult({ success: false, message: 'Deploy thất bại', detail: msg ?? undefined })
+        || 'Source upload failed'
+      setSourceResult({ success: false, message: 'Deploy failed', detail: msg ?? undefined })
     }
   }
 
@@ -133,8 +133,8 @@ export function OverviewTab({ site, onDeleted, onMessage, canManage }: OverviewT
       setDbPhase('error')
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error
         || (err instanceof Error ? err.message : null)
-        || 'Import database thất bại'
-      setDbResult({ success: false, message: 'Import thất bại', detail: msg ?? undefined })
+        || 'Database import failed'
+      setDbResult({ success: false, message: 'Import failed', detail: msg ?? undefined })
     }
   }
 
@@ -234,7 +234,7 @@ export function OverviewTab({ site, onDeleted, onMessage, canManage }: OverviewT
                   {site.ssl_enabled ? (
                     <span className="flex items-center gap-1 text-green-600">
                       <Lock size={13} /> Active
-                      {site.ssl_expires_at && <span className="text-xs text-gray-400 ml-1">· hết hạn {formatDate(site.ssl_expires_at)}</span>}
+                      {site.ssl_expires_at && <span className="text-xs text-gray-400 ml-1">· expires {formatDate(site.ssl_expires_at)}</span>}
                     </span>
                   ) : (
                     <>
@@ -365,7 +365,7 @@ export function OverviewTab({ site, onDeleted, onMessage, canManage }: OverviewT
             <div className="bg-white rounded-xl shadow-sm border border-blue-100 p-6 space-y-6">
               <div>
                 <h2 className="text-lg font-semibold text-blue-700">Deploy Source & Database</h2>
-                <p className="text-xs text-gray-500 mt-0.5">Upload source zip và import SQL database cho site manual.</p>
+                <p className="text-xs text-gray-500 mt-0.5">Upload a source zip and import a SQL database for manual sites.</p>
               </div>
 
               {/* ── Upload Source ── */}
@@ -380,9 +380,9 @@ export function OverviewTab({ site, onDeleted, onMessage, canManage }: OverviewT
                   <div className="space-y-2">
                     <div className="flex items-center gap-2">
                       <label className="flex items-center gap-2 flex-1 min-w-0 cursor-pointer border border-gray-200 rounded-lg px-3 py-1.5 bg-white hover:bg-gray-50 transition-colors">
-                        <span className="text-xs bg-blue-50 text-blue-700 px-2 py-0.5 rounded shrink-0">Chọn file</span>
+                        <span className="text-xs bg-blue-50 text-blue-700 px-2 py-0.5 rounded shrink-0">Choose file</span>
                         <span className="text-sm text-gray-500 truncate min-w-0">
-                          {uploadSourceFile ? uploadSourceFile.name : 'Chưa chọn file (.zip)'}
+                          {uploadSourceFile ? uploadSourceFile.name : 'No file selected (.zip)'}
                         </span>
                         <input type="file" accept=".zip" className="hidden"
                           onChange={(e) => { setUploadSourceFile(e.target.files?.[0] || null); setSourceResult(null); setSourcePhase('idle') }} />
@@ -393,7 +393,7 @@ export function OverviewTab({ site, onDeleted, onMessage, canManage }: OverviewT
                         <Upload size={14} /> Deploy
                       </button>
                     </div>
-                    <p className="text-xs text-gray-400">Max 3 GB · Extract vào <code className="bg-gray-100 px-1 rounded">/var/www/{site.domain}/public/</code></p>
+                    <p className="text-xs text-gray-400">Max 3 GB · Extracts to <code className="bg-gray-100 px-1 rounded">/var/www/{site.domain}/public/</code></p>
                   </div>
                 ) : null}
 
@@ -407,7 +407,7 @@ export function OverviewTab({ site, onDeleted, onMessage, canManage }: OverviewT
                           {sourcePhase === 'uploading'
                             ? <div className="w-3.5 h-3.5 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
                             : <CheckCircle size={14} className="text-emerald-500" />}
-                          Uploading file lên server
+                          Uploading file to server
                         </div>
                         <span className="text-blue-600 font-semibold">{sourceUploadPct}%</span>
                       </div>
@@ -424,7 +424,7 @@ export function OverviewTab({ site, onDeleted, onMessage, canManage }: OverviewT
                           ? <div className="w-3.5 h-3.5 rounded-full border-2 border-blue-300 border-t-transparent animate-spin" />
                           : <div className="w-3.5 h-3.5 rounded-full border border-gray-300" />}
                       <span className={sourcePhase === 'processing' ? 'text-blue-700 font-medium' : 'text-gray-400'}>
-                        Agent đang extract files vào webroot...
+                        Agent is extracting files into the webroot...
                       </span>
                     </div>
                   </div>
@@ -469,9 +469,9 @@ export function OverviewTab({ site, onDeleted, onMessage, canManage }: OverviewT
                   <div className="space-y-2">
                     <div className="flex items-center gap-2">
                       <label className="flex items-center gap-2 flex-1 min-w-0 cursor-pointer border border-gray-200 rounded-lg px-3 py-1.5 bg-white hover:bg-gray-50 transition-colors">
-                        <span className="text-xs bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded shrink-0">Chọn file</span>
+                        <span className="text-xs bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded shrink-0">Choose file</span>
                         <span className="text-sm text-gray-500 truncate min-w-0">
-                          {importDBFile ? importDBFile.name : 'Chưa chọn file (.sql / .gz / .zip)'}
+                          {importDBFile ? importDBFile.name : 'No file selected (.sql / .gz / .zip)'}
                         </span>
                         <input type="file" accept=".sql,.gz,.sql.gz,.zip" className="hidden"
                           onChange={(e) => { setImportDBFile(e.target.files?.[0] || null); setDbResult(null); setDbPhase('idle') }} />
@@ -505,7 +505,7 @@ export function OverviewTab({ site, onDeleted, onMessage, canManage }: OverviewT
                           {dbPhase === 'uploading'
                             ? <div className="w-3.5 h-3.5 rounded-full border-2 border-emerald-500 border-t-transparent animate-spin" />
                             : <CheckCircle size={14} className="text-emerald-500" />}
-                          Uploading file lên server
+                          Uploading file to server
                         </div>
                         <span className="text-emerald-600 font-semibold">{dbUploadPct}%</span>
                       </div>
@@ -521,7 +521,7 @@ export function OverviewTab({ site, onDeleted, onMessage, canManage }: OverviewT
                           ? <div className="w-3.5 h-3.5 rounded-full border-2 border-emerald-300 border-t-transparent animate-spin" />
                           : <div className="w-3.5 h-3.5 rounded-full border border-gray-300" />}
                       <span className={dbPhase === 'processing' ? 'text-emerald-700 font-medium' : 'text-gray-400'}>
-                        Agent đang import SQL vào database...
+                        Agent is importing SQL into the database...
                       </span>
                     </div>
                     {importDBOldDomain.trim() && (
@@ -531,7 +531,7 @@ export function OverviewTab({ site, onDeleted, onMessage, canManage }: OverviewT
                       </div>
                     )}
                     <p className="text-xs text-amber-600 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
-                      ⏳ File lớn có thể mất 1–3 phút. Vui lòng giữ nguyên tab này.
+                      ⏳ Large files can take 1–3 minutes. Keep this tab open.
                     </p>
                   </div>
                 )}
@@ -555,7 +555,7 @@ export function OverviewTab({ site, onDeleted, onMessage, canManage }: OverviewT
                         {dbResult.success && (
                           <a href={siteBaseUrl} target="_blank" rel="noopener"
                             className="inline-flex items-center gap-1 mt-2 text-xs text-emerald-600 hover:text-emerald-700 font-medium">
-                            <ExternalLink size={12} /> Kiểm tra site →
+                            <ExternalLink size={12} /> Check site →
                           </a>
                         )}
                       </div>

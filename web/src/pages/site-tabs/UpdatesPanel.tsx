@@ -82,23 +82,23 @@ export function UpdatesPanel({ siteId, canManage }: { siteId: number; canManage:
             {availableCount > 0 ? <AlertCircle size={16} className="mt-0.5 shrink-0" /> : <CheckCircle2 size={16} className="mt-0.5 shrink-0" />}
             <div className="flex-1">
               {availableCount === 0 ? (
-                <span>Tất cả đang dùng phiên bản mới nhất.</span>
+                <span>Everything is up to date.</span>
               ) : (
                 <div className="space-y-1">
-                  <span className="font-medium">Có {availableCount} cập nhật:</span>
+                  <span className="font-medium">{availableCount} update{availableCount > 1 ? 's' : ''} available:</span>
                   {checkResult?.core && (
                     <div>• WordPress Core: {checkResult.core.from_version} → {checkResult.core.to_version}</div>
                   )}
                   {(checkResult?.plugins?.length ?? 0) > 0 && (
-                    <div>• {checkResult!.plugins!.length} plugin(s) cần update</div>
+                    <div>• {checkResult!.plugins!.length} plugin(s) need updating</div>
                   )}
                   {(checkResult?.themes?.length ?? 0) > 0 && (
-                    <div>• {checkResult!.themes!.length} theme(s) cần update</div>
+                    <div>• {checkResult!.themes!.length} theme(s) need updating</div>
                   )}
                 </div>
               )}
               <div className="mt-1 text-xs opacity-70">
-                Kiểm tra lúc {checkedAt.toLocaleTimeString('vi-VN')}
+                Checked at {checkedAt.toLocaleTimeString('vi-VN')}
               </div>
             </div>
           </div>
@@ -107,7 +107,7 @@ export function UpdatesPanel({ siteId, canManage }: { siteId: number; canManage:
         {checkUpdates.isPending && (
           <div className="mb-4 p-3 rounded-lg border bg-blue-50 border-blue-200 text-blue-700 text-sm flex items-center gap-2">
             <Loader2 size={14} className="animate-spin shrink-0" />
-            Đang kiểm tra WordPress core, plugins và themes — có thể mất 1–2 phút...
+            Checking WordPress core, plugins, and themes — this can take 1–2 minutes...
           </div>
         )}
 
@@ -133,7 +133,7 @@ export function UpdatesPanel({ siteId, canManage }: { siteId: number; canManage:
       <div className="bg-white rounded-lg border p-6">
         <h2 className="text-lg font-semibold mb-4">Update History</h2>
         {logs.length === 0 ? (
-          <p className="text-gray-500 text-sm text-center py-4">Chưa có lịch sử cập nhật. Bật Auto-Update hoặc bấm "Check for Updates" để quét.</p>
+          <p className="text-gray-500 text-sm text-center py-4">No update history yet. Enable Auto-Update or click "Check for Updates" to scan.</p>
         ) : (
           <>
             <table className="w-full">

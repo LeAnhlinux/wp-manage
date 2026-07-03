@@ -46,8 +46,8 @@ function formatDate(dateStr: string | null): string {
 // ─── Step indicator ───────────────────────────────────────────────────────────
 
 const STEPS = [
-  { label: 'Kết nối' },
-  { label: 'Chọn sites' },
+  { label: 'Connect' },
+  { label: 'Select sites' },
   { label: 'Transfer' },
 ]
 
@@ -120,7 +120,7 @@ function TestConnectionBanner({
     return (
       <div className="flex items-center gap-2.5 p-3 bg-blue-50 border border-blue-200 rounded-xl text-sm text-blue-700">
         <Loader2 size={15} className="animate-spin flex-shrink-0" />
-        <span>Đang kiểm tra kết nối SSH...</span>
+        <span>Testing SSH connection...</span>
       </div>
     )
   }
@@ -131,7 +131,7 @@ function TestConnectionBanner({
       <div className="flex items-start gap-2.5 p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-sm text-emerald-800">
         <CheckCircle2 size={15} className="flex-shrink-0 mt-0.5 text-emerald-600" />
         <div className="min-w-0">
-          <span className="font-semibold">Kết nối thành công</span>
+          <span className="font-semibold">Connection successful</span>
           <div className="flex flex-wrap gap-3 mt-0.5 text-xs text-emerald-700">
             {result.latency_ms !== undefined && (
               <span>⏱ {result.latency_ms}ms</span>
@@ -149,7 +149,7 @@ function TestConnectionBanner({
     <div className="flex items-start gap-2.5 p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
       <XCircle size={15} className="flex-shrink-0 mt-0.5" />
       <div className="min-w-0">
-        <span className="font-semibold">Kết nối thất bại</span>
+        <span className="font-semibold">Connection failed</span>
         <p className="text-xs mt-0.5 break-all">{result.error}</p>
       </div>
     </div>
@@ -201,7 +201,7 @@ function Step1Connect() {
       const err = e as { response?: { data?: { error?: string } } }
       setTestResult({
         success: false,
-        error: err?.response?.data?.error || 'Không thể kiểm tra kết nối',
+        error: err?.response?.data?.error || 'Could not test connection',
       })
     }
   }
@@ -223,7 +223,7 @@ function Step1Connect() {
       setError(
         err?.response?.data?.error ||
         err?.response?.data?.message ||
-        'Không thể kết nối. Kiểm tra lại thông tin kết nối.'
+        'Connection failed. Check your connection details.'
       )
     }
   }
@@ -234,9 +234,9 @@ function Step1Connect() {
 
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm">
         <div className="p-6 border-b border-gray-50">
-          <h2 className="text-lg font-bold text-gray-900">Kết nối server nguồn</h2>
+          <h2 className="text-lg font-bold text-gray-900">Connect to source server</h2>
           <p className="text-sm text-gray-500 mt-0.5">
-            Nhập thông tin SSH để quét danh sách WordPress sites cần transfer
+            Enter SSH details to scan for WordPress sites to transfer
           </p>
         </div>
 
@@ -244,7 +244,7 @@ function Step1Connect() {
           {/* Target server */}
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-1.5">
-              Server đích <span className="text-red-500">*</span>
+              Target server <span className="text-red-500">*</span>
             </label>
             <div className="relative">
               <Server size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
@@ -253,7 +253,7 @@ function Step1Connect() {
                 onChange={(e) => setTargetServerId(Number(e.target.value))}
                 className="w-full border border-gray-200 rounded-xl pl-9 pr-3 py-2.5 text-sm bg-gray-50 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none appearance-none"
               >
-                <option value={0}>Chọn server đích...</option>
+                <option value={0}>Select target server…</option>
                 {servers
                   .filter((s) => s.status === 'active')
                   .map((s) => (
@@ -268,7 +268,7 @@ function Step1Connect() {
           {/* Panel type */}
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-2">
-              Loại panel nguồn
+              Source panel type
             </label>
             <div className="grid grid-cols-3 gap-2">
               {[
@@ -289,10 +289,10 @@ function Step1Connect() {
                 >
                   {opt.label}
                   {!opt.available && (
-                    <span className="block text-xs font-normal text-gray-300 mt-0.5">sắp có</span>
+                    <span className="block text-xs font-normal text-gray-300 mt-0.5">coming soon</span>
                   )}
                   {opt.available && (
-                    <span className="block text-xs font-normal text-emerald-500 mt-0.5">khả dụng</span>
+                    <span className="block text-xs font-normal text-emerald-500 mt-0.5">available</span>
                   )}
                 </div>
               ))}
@@ -311,7 +311,7 @@ function Step1Connect() {
                   type="text"
                   value={host}
                   onChange={(e) => setHost(e.target.value)}
-                  placeholder="1.2.3.4 hoặc hostname"
+                  placeholder="1.2.3.4 or hostname"
                   className="w-full border border-gray-200 rounded-xl pl-9 pr-3 py-2.5 text-sm bg-gray-50 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none"
                 />
               </div>
@@ -343,7 +343,7 @@ function Step1Connect() {
 
           {/* Auth method */}
           <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-2">Xác thực</label>
+            <label className="block text-sm font-semibold text-gray-700 mb-2">Authentication</label>
             <div className="grid grid-cols-2 gap-2 mb-3">
               {(
                 [
@@ -372,7 +372,7 @@ function Step1Connect() {
                 <div className="flex items-start gap-2 p-2.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 mb-2">
                   <Shield size={13} className="flex-shrink-0 mt-0.5" />
                   <span>
-                    SSH key chỉ được sử dụng trong phiên làm việc này và không được lưu vào database.
+                    The SSH key is only used for this session and is never stored in the database.
                   </span>
                 </div>
                 <textarea
@@ -407,7 +407,7 @@ function Step1Connect() {
             onClick={() => navigate('/transfer')}
             className="flex items-center gap-1.5 px-4 py-2 text-sm text-gray-500 hover:bg-gray-100 rounded-xl transition-colors"
           >
-            <ChevronLeft size={15} /> Huỷ
+            <ChevronLeft size={15} /> Cancel
           </button>
           <div className="flex items-center gap-2">
             <button
@@ -420,7 +420,7 @@ function Step1Connect() {
               ) : (
                 <Wifi size={14} />
               )}
-              Test kết nối
+              Test connection
             </button>
             <button
               onClick={handleSubmit}
@@ -429,11 +429,11 @@ function Step1Connect() {
             >
               {connect.isPending ? (
                 <>
-                  <Loader2 size={15} className="animate-spin" /> Đang kết nối...
+                  <Loader2 size={15} className="animate-spin" /> Connecting...
                 </>
               ) : (
                 <>
-                  Tiếp <ArrowRight size={15} />
+                  Next <ArrowRight size={15} />
                 </>
               )}
             </button>
@@ -468,7 +468,7 @@ function PHPBadge({
   if (!version) {
     return (
       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs bg-gray-100 text-gray-400">
-        ? Không xác định
+        ? Unknown
       </span>
     )
   }
@@ -498,10 +498,10 @@ function PHPBadge({
 // ─── SSL mode selector (inline) ───────────────────────────────────────────────
 
 const SSL_OPTIONS = [
-  { value: 'reissue', label: 'Cấp lại SSL' },
-  { value: 'copy', label: 'Sao chép cert' },
+  { value: 'reissue', label: 'Reissue SSL' },
+  { value: 'copy', label: 'Copy cert' },
   { value: 'paid_ca', label: 'Paid CA' },
-  { value: 'skip', label: 'Bỏ qua' },
+  { value: 'skip', label: 'Skip' },
 ] as const
 
 // ─── Single site row in selection table ──────────────────────────────────────
@@ -635,7 +635,7 @@ function SiteRow({ site, state, jobId, targetServerId, availablePHP, onChange }:
             onChange={(e) => onChange({ phpOverride: e.target.value })}
             className="border border-gray-200 rounded px-1.5 py-0.5 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 text-gray-600"
           >
-            <option value="">? Chọn PHP</option>
+            <option value="">? Select PHP</option>
             {availablePHP.map((v) => (
               <option key={v} value={v}>PHP {v}</option>
             ))}
@@ -744,7 +744,7 @@ function Step2Select({ job }: { job: TransferJob }) {
     })
     .map((s) => {
       const ver = s.php_version || rows[s.primary_domain]?.phpOverride
-      return `${s.primary_domain}: PHP ${ver} chưa được cài trên server đích`
+      return `${s.primary_domain}: PHP ${ver} is not installed on the target server`
     })
 
   const eolWarnings = sites
@@ -755,7 +755,7 @@ function Step2Select({ job }: { job: TransferJob }) {
     })
     .map((s) => {
       const ver = s.php_version || rows[s.primary_domain]?.phpOverride
-      return `${s.primary_domain}: PHP ${ver} đã EOL — nên nâng cấp`
+      return `${s.primary_domain}: PHP ${ver} is EOL — upgrade recommended`
     })
 
   // Error: selected site has no PHP version and no manual override chosen
@@ -791,7 +791,7 @@ function Step2Select({ job }: { job: TransferJob }) {
       setError(
         err?.response?.data?.error ||
         err?.response?.data?.message ||
-        'Không thể bắt đầu transfer'
+        'Could not start transfer'
       )
     }
   }
@@ -805,16 +805,16 @@ function Step2Select({ job }: { job: TransferJob }) {
       <div className="flex items-center justify-between mb-4">
         <div>
           <h2 className="text-lg font-bold text-gray-900">
-            Chọn sites cần transfer
+            Select sites to transfer
           </h2>
           <p className="text-sm text-gray-500 mt-0.5">
-            Tìm thấy <span className="font-semibold text-gray-700">{sites.length} sites</span> từ{' '}
+            Found <span className="font-semibold text-gray-700">{sites.length} sites</span> on{' '}
             <span className="font-mono text-gray-700">{job.source_host}</span>
           </p>
         </div>
         {availablePHP.length > 0 && (
           <div className="flex items-center gap-1.5">
-            <span className="text-xs text-gray-400">PHP trên đích:</span>
+            <span className="text-xs text-gray-400">PHP on target:</span>
             {availablePHP.map((v) => (
               <span
                 key={v}
@@ -832,8 +832,8 @@ function Step2Select({ job }: { job: TransferJob }) {
         <div className="mb-4 flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
           <AlertCircle size={14} className="flex-shrink-0 mt-0.5" />
           <span>
-            Không thể xác định phiên bản PHP cho:{' '}
-            <strong>{missingPHPSites.join(', ')}</strong>. Vui lòng chọn PHP thủ công.
+            Could not detect the PHP version for:{' '}
+            <strong>{missingPHPSites.join(', ')}</strong>. Select a PHP version manually.
           </span>
         </div>
       )}
@@ -923,18 +923,18 @@ function Step2Select({ job }: { job: TransferJob }) {
               <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
                 <RotateCcw size={18} className="text-red-600" />
               </div>
-              <h3 className="text-base font-semibold text-gray-900">Xóa & Scan lại?</h3>
+              <h3 className="text-base font-semibold text-gray-900">Delete & Rescan?</h3>
             </div>
             <p className="text-sm text-gray-500 mb-5">
-              Job này sẽ bị xóa hoàn toàn. Bạn sẽ được chuyển về màn hình tạo job mới để
-              kết nối lại và scan với detection cải tiến.
+              This job will be deleted completely. You will be taken back to the new job
+              screen to reconnect and rescan with improved detection.
             </p>
             <div className="flex gap-3 justify-end">
               <button
                 onClick={() => setShowDeleteConfirm(false)}
                 className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-xl transition-colors"
               >
-                Hủy
+                Cancel
               </button>
               <button
                 onClick={async () => {
@@ -949,7 +949,7 @@ function Step2Select({ job }: { job: TransferJob }) {
                 ) : (
                   <RotateCcw size={14} />
                 )}
-                Xóa & Scan lại
+                Delete & Rescan
               </button>
             </div>
           </div>
@@ -963,19 +963,19 @@ function Step2Select({ job }: { job: TransferJob }) {
             onClick={() => navigate('/transfer')}
             className="flex items-center gap-1.5 px-4 py-2 text-sm text-gray-500 hover:bg-gray-100 rounded-xl transition-colors"
           >
-            <ChevronLeft size={15} /> Về danh sách
+            <ChevronLeft size={15} /> Back to list
           </button>
           <button
             onClick={() => setShowDeleteConfirm(true)}
             className="flex items-center gap-1.5 px-4 py-2 text-sm text-red-500 hover:bg-red-50 rounded-xl transition-colors"
-            title="Xóa job này và tạo lại từ đầu"
+            title="Delete this job and start over"
           >
-            <RotateCcw size={14} /> Scan lại
+            <RotateCcw size={14} /> Rescan
           </button>
         </div>
         <div className="flex items-center gap-3">
           <span className="text-sm text-gray-500">
-            Đã chọn <span className="font-semibold text-gray-700">{selectedCount}</span>/{sites.length} sites
+            Selected <span className="font-semibold text-gray-700">{selectedCount}</span>/{sites.length} sites
           </span>
           <button
             onClick={handleStart}
@@ -984,11 +984,11 @@ function Step2Select({ job }: { job: TransferJob }) {
           >
             {startTransfer.isPending ? (
               <>
-                <Loader2 size={15} className="animate-spin" /> Đang khởi động...
+                <Loader2 size={15} className="animate-spin" /> Starting...
               </>
             ) : (
               <>
-                Bắt đầu transfer <ArrowRight size={15} />
+                Start transfer <ArrowRight size={15} />
               </>
             )}
           </button>
@@ -1004,32 +1004,32 @@ type SiteStatus = TransferSiteResult['status']
 
 const SITE_STATUS_CONFIG: Record<SiteStatus, { label: string; classes: string; icon: React.ReactNode }> = {
   pending: {
-    label: 'Chờ',
+    label: 'Pending',
     classes: 'bg-gray-100 text-gray-500',
     icon: <Clock size={11} className="shrink-0" />,
   },
   running: {
-    label: 'Đang chạy',
+    label: 'Running',
     classes: 'bg-blue-100 text-blue-700',
     icon: <Loader2 size={11} className="animate-spin shrink-0" />,
   },
   done: {
-    label: 'Xong',
+    label: 'Done',
     classes: 'bg-emerald-100 text-emerald-700',
     icon: <CheckCircle2 size={11} className="shrink-0" />,
   },
   failed: {
-    label: 'Thất bại',
+    label: 'Failed',
     classes: 'bg-red-100 text-red-700',
     icon: <XCircle size={11} className="shrink-0" />,
   },
   rolled_back: {
-    label: 'Đã rollback',
+    label: 'Rolled back',
     classes: 'bg-orange-100 text-orange-700',
     icon: <RotateCcw size={11} className="shrink-0" />,
   },
   ssl_pending_reissue: {
-    label: 'Chờ SSL',
+    label: 'Awaiting SSL',
     classes: 'bg-yellow-100 text-yellow-700',
     icon: <Shield size={11} className="shrink-0" />,
   },
@@ -1038,10 +1038,10 @@ const SITE_STATUS_CONFIG: Record<SiteStatus, { label: string; classes: string; i
 const PHASE_LABELS: Record<string, string> = {
   files: 'Sync files',
   db: 'Import DB',
-  create_site: 'Tạo site',
+  create_site: 'Create site',
   search_replace: 'Search-replace',
   ssl: 'SSL',
-  verify: 'Kiểm tra',
+  verify: 'Verify',
 }
 
 function SiteProgressCard({ result }: { result: TransferSiteResult }) {
@@ -1108,7 +1108,7 @@ function SiteProgressCard({ result }: { result: TransferSiteResult }) {
             onClick={() => setLogExpanded(!logExpanded)}
             className="inline-flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600"
           >
-            Xem log
+            View log
             {logExpanded ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
           </button>
           {logExpanded && (
@@ -1126,7 +1126,7 @@ function SiteProgressCard({ result }: { result: TransferSiteResult }) {
             href={`/sites/${result.site_id}`}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors"
           >
-            <ExternalLink size={12} /> Vào quản lý site
+            <ExternalLink size={12} /> Manage site
           </a>
           <a
             href={`https://${result.target_domain}`}
@@ -1134,7 +1134,7 @@ function SiteProgressCard({ result }: { result: TransferSiteResult }) {
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors"
           >
-            <Globe size={12} /> Mở website
+            <Globe size={12} /> Open website
           </a>
         </div>
       )}
@@ -1161,7 +1161,7 @@ function Step3Progress({ job }: { job: TransferJob }) {
   const isDone = job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled'
 
   const handleCancel = async () => {
-    if (!confirm('Huỷ job transfer này? Các sites đang transfer có thể bị lỗi.')) return
+    if (!confirm('Cancel this transfer job? Sites currently transferring may end up broken.')) return
     await cancelTransfer.mutateAsync()
   }
 
@@ -1174,13 +1174,13 @@ function Step3Progress({ job }: { job: TransferJob }) {
         <div className="flex items-center justify-between mb-1">
           <h2 className="text-lg font-bold text-gray-900">
             {isTransferring
-              ? 'Đang transfer...'
+              ? 'Transferring...'
               : job.status === 'completed'
-              ? 'Transfer hoàn tất!'
+              ? 'Transfer completed!'
               : job.status === 'failed'
-              ? 'Transfer thất bại'
+              ? 'Transfer failed'
               : job.status === 'cancelled'
-              ? 'Đã huỷ'
+              ? 'Cancelled'
               : 'Transfer'}
           </h2>
           <span className="text-sm font-semibold text-gray-700">
@@ -1203,9 +1203,9 @@ function Step3Progress({ job }: { job: TransferJob }) {
         </div>
         <div className="flex items-center justify-between text-xs text-gray-400">
           <span>
-            {done} hoàn tất
-            {failed > 0 && ` · ${failed} thất bại`}
-            {total - done - failed > 0 && ` · ${total - done - failed} còn lại`}
+            {done} completed
+            {failed > 0 && ` · ${failed} failed`}
+            {total - done - failed > 0 && ` · ${total - done - failed} remaining`}
           </span>
           <span>{overall}%</span>
         </div>
@@ -1213,7 +1213,7 @@ function Step3Progress({ job }: { job: TransferJob }) {
         {isTransferring && (
           <div className="mt-1 flex items-center gap-1.5 text-xs text-blue-500">
             <Loader2 size={11} className="animate-spin" />
-            Đang xử lý — trang sẽ tự cập nhật
+            Processing — this page updates automatically
           </div>
         )}
 
@@ -1228,15 +1228,15 @@ function Step3Progress({ job }: { job: TransferJob }) {
           <div className="mt-4 grid grid-cols-3 gap-3">
             <div className="text-center p-3 bg-emerald-50 rounded-xl">
               <p className="text-2xl font-bold text-emerald-600">{done}</p>
-              <p className="text-xs text-emerald-600 mt-0.5">Hoàn tất</p>
+              <p className="text-xs text-emerald-600 mt-0.5">Completed</p>
             </div>
             <div className="text-center p-3 bg-red-50 rounded-xl">
               <p className="text-2xl font-bold text-red-500">{failed}</p>
-              <p className="text-xs text-red-500 mt-0.5">Thất bại</p>
+              <p className="text-xs text-red-500 mt-0.5">Failed</p>
             </div>
             <div className="text-center p-3 bg-gray-50 rounded-xl">
               <p className="text-2xl font-bold text-gray-500">{total}</p>
-              <p className="text-xs text-gray-500 mt-0.5">Tổng cộng</p>
+              <p className="text-xs text-gray-500 mt-0.5">Total</p>
             </div>
           </div>
         )}
@@ -1255,7 +1255,7 @@ function Step3Progress({ job }: { job: TransferJob }) {
       {results.length === 0 && total > 0 && isTransferring && (
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-10 text-center">
           <Loader2 size={24} className="animate-spin text-gray-300 mx-auto mb-3" />
-          <p className="text-sm text-gray-500">Đang khởi tạo các transfer tasks...</p>
+          <p className="text-sm text-gray-500">Initializing transfer tasks...</p>
         </div>
       )}
 
@@ -1265,7 +1265,7 @@ function Step3Progress({ job }: { job: TransferJob }) {
           onClick={() => navigate('/transfer')}
           className="flex items-center gap-1.5 px-4 py-2 text-sm text-gray-500 hover:bg-gray-100 rounded-xl transition-colors"
         >
-          <ChevronLeft size={15} /> Về danh sách
+          <ChevronLeft size={15} /> Back to list
         </button>
 
         <div className="flex items-center gap-3">
@@ -1280,7 +1280,7 @@ function Step3Progress({ job }: { job: TransferJob }) {
               ) : (
                 <XCircle size={14} />
               )}
-              Huỷ job
+              Cancel job
             </button>
           )}
 
@@ -1290,19 +1290,19 @@ function Step3Progress({ job }: { job: TransferJob }) {
                 onClick={() => navigate('/transfer/new')}
                 className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-xl transition-colors"
               >
-                <RotateCcw size={14} /> Transfer thêm
+                <RotateCcw size={14} /> Transfer more
               </button>
               <button
                 onClick={() => navigate('/sites')}
                 className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-emerald-600 bg-emerald-50 hover:bg-emerald-100 rounded-xl transition-colors"
               >
-                <ExternalLink size={14} /> Xem Sites
+                <ExternalLink size={14} /> View Sites
               </button>
               <button
                 onClick={() => navigate('/')}
                 className="flex items-center gap-2 px-5 py-2 text-sm font-semibold bg-emerald-600 text-white hover:bg-emerald-700 rounded-xl transition-colors"
               >
-                <LayoutDashboard size={14} /> Về Dashboard
+                <LayoutDashboard size={14} /> Back to Dashboard
               </button>
             </>
           )}
@@ -1311,8 +1311,8 @@ function Step3Progress({ job }: { job: TransferJob }) {
 
       {/* Timestamps */}
       <div className="mt-4 text-xs text-gray-400 flex items-center gap-4">
-        {job.started_at && <span>Bắt đầu: {formatDate(job.started_at)}</span>}
-        {job.completed_at && <span>Hoàn tất: {formatDate(job.completed_at)}</span>}
+        {job.started_at && <span>Started: {formatDate(job.started_at)}</span>}
+        {job.completed_at && <span>Completed: {formatDate(job.completed_at)}</span>}
       </div>
     </div>
   )
@@ -1341,13 +1341,13 @@ class TransferErrorBoundary extends React.Component<
         <div className="py-4 max-w-xl mx-auto">
           <div className="bg-white rounded-2xl border border-red-100 shadow-sm p-10 text-center">
             <AlertCircle size={32} className="mx-auto text-red-400 mb-3" />
-            <p className="text-gray-700 font-semibold">Lỗi hiển thị trang Transfer</p>
+            <p className="text-gray-700 font-semibold">Failed to render the Transfer page</p>
             <p className="text-gray-400 text-sm mt-1 font-mono break-all">{this.state.message}</p>
             <button
               onClick={() => { this.setState({ hasError: false, message: '' }); window.location.reload() }}
               className="mt-5 px-4 py-2 bg-blue-600 text-white rounded-xl text-sm font-semibold hover:bg-blue-700 transition-colors"
             >
-              Tải lại trang
+              Reload page
             </button>
           </div>
         </div>
@@ -1390,8 +1390,8 @@ function TransferWizardInner() {
       <div className="py-4 max-w-xl mx-auto">
         <div className="bg-white rounded-2xl border border-red-100 shadow-sm p-10 text-center">
           <AlertCircle size={32} className="mx-auto text-red-400 mb-3" />
-          <p className="text-gray-700 font-semibold">Không tìm thấy transfer job</p>
-          <p className="text-gray-400 text-sm mt-1">Job #{jobId} không tồn tại hoặc bạn không có quyền truy cập.</p>
+          <p className="text-gray-700 font-semibold">Transfer job not found</p>
+          <p className="text-gray-400 text-sm mt-1">Job #{jobId} does not exist or you do not have access.</p>
         </div>
       </div>
     )
@@ -1407,10 +1407,10 @@ function TransferWizardInner() {
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-16 text-center">
           <Loader2 size={32} className="animate-spin text-blue-400 mx-auto mb-4" />
           <p className="text-gray-700 font-semibold">
-            {job.status === 'pending' ? 'Đang chuẩn bị kết nối...' : 'Đang quét sites...'}
+            {job.status === 'pending' ? 'Preparing connection...' : 'Scanning sites...'}
           </p>
           <p className="text-gray-400 text-sm mt-1">
-            Hệ thống đang SSH vào server nguồn và liệt kê toàn bộ WordPress sites
+            The system is connecting to the source server via SSH and listing all WordPress sites
           </p>
         </div>
       </div>

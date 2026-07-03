@@ -730,11 +730,11 @@ function ScanDetailModal({ scan, onClose }: { scan: MalwareScan; onClose: () => 
 
         <div className="px-6 pt-5 pb-4 grid grid-cols-3 gap-3">
           <div className="text-center p-4 bg-gray-50 rounded-xl border border-gray-100">
-            <p className="text-2xl font-bold text-gray-900">{scan.files_scanned.toLocaleString()}</p>
+            <p className="text-2xl font-bold text-gray-900 font-mono tabular-nums">{scan.files_scanned.toLocaleString()}</p>
             <p className="text-xs text-gray-500 mt-0.5">Files Scanned</p>
           </div>
           <div className={`text-center p-4 rounded-xl border ${scan.threats_found > 0 ? 'bg-red-50 border-red-100' : 'bg-emerald-50 border-emerald-100'}`}>
-            <p className={`text-2xl font-bold ${scan.threats_found > 0 ? 'text-red-600' : 'text-emerald-600'}`}>{scan.threats_found}</p>
+            <p className={`text-2xl font-bold font-mono tabular-nums ${scan.threats_found > 0 ? 'text-red-600' : 'text-emerald-600'}`}>{scan.threats_found}</p>
             <p className="text-xs text-gray-500 mt-0.5">Threats Found</p>
           </div>
           <div className="text-center p-4 bg-gray-50 rounded-xl border border-gray-100">
@@ -1002,11 +1002,11 @@ export default function SecurityPage() {
                   {scans.map((scan: MalwareScan) => (
                     <tr key={scan.id} className="hover:bg-gray-50/60 transition-colors">
                       <td className="px-5 py-4 text-sm font-mono text-gray-500">#{scan.id}</td>
-                      <td className="px-5 py-4 text-sm font-semibold text-gray-900">{scan.site?.domain || `Site #${scan.site_id}`}</td>
+                      <td className="px-5 py-4 text-[13px] font-mono font-medium text-gray-900">{scan.site?.domain || `Site #${scan.site_id}`}</td>
                       <td className="px-5 py-4 text-sm text-gray-600 capitalize">{scan.scan_type}</td>
                       <td className="px-5 py-4"><EngineBadge engine={scan.engine || 'wp_signature'} /></td>
                       <td className="px-5 py-4"><StatusBadge status={scan.status} /></td>
-                      <td className="px-5 py-4 text-sm text-gray-700">{scan.files_scanned.toLocaleString()}</td>
+                      <td className="px-5 py-4 text-sm text-gray-700 font-mono tabular-nums">{scan.files_scanned.toLocaleString()}</td>
                       <td className="px-5 py-4">
                         {scan.status === 'running' ? (
                           <span className="text-sm text-gray-400">—</span>

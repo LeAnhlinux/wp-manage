@@ -123,12 +123,12 @@ export default function ActivityLogPage() {
 
         {/* Explanation */}
         <p className="text-xs text-gray-400 mb-3">
-          Giữ lại log trong <strong>X ngày gần nhất</strong>, xóa tất cả log cũ hơn. Đặt <strong>0</strong> để xóa toàn bộ.
+          Keep logs from the <strong>last X days</strong> and delete everything older. Set <strong>0</strong> to delete all logs.
         </p>
 
         <div className="flex flex-wrap items-end gap-3">
           <div>
-            <label className="block text-xs text-gray-500 mb-1">Giữ lại log trong</label>
+            <label className="block text-xs text-gray-500 mb-1">Keep logs from the last</label>
             <div className="flex items-center gap-2">
               <input
                 type="number"
@@ -141,17 +141,17 @@ export default function ActivityLogPage() {
                 }}
                 className="w-24 border border-gray-200 rounded-lg px-3 py-2 text-sm"
               />
-              <span className="text-sm text-gray-500">ngày gần nhất</span>
+              <span className="text-sm text-gray-500">days</span>
             </div>
           </div>
 
           {/* Quick presets */}
           <div className="flex items-center gap-1">
             {[
-              { label: 'Tất cả', days: 0 },
-              { label: '7 ngày', days: 7 },
-              { label: '30 ngày', days: 30 },
-              { label: '90 ngày', days: 90 },
+              { label: 'All', days: 0 },
+              { label: '7 days', days: 7 },
+              { label: '30 days', days: 30 },
+              { label: '90 days', days: 90 },
             ].map(preset => (
               <button
                 key={preset.days}
@@ -173,11 +173,11 @@ export default function ActivityLogPage() {
             className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-lg hover:bg-red-700 disabled:opacity-50 transition-colors"
           >
             <RefreshCw size={14} className={cleanup.isPending ? 'animate-spin' : ''} />
-            {cleanup.isPending ? 'Đang xóa...' : retentionDays === 0 ? 'Xóa tất cả' : `Xóa log cũ hơn ${retentionDays} ngày`}
+            {cleanup.isPending ? 'Deleting...' : retentionDays === 0 ? 'Delete all' : `Delete logs older than ${retentionDays} days`}
           </button>
           <div className="flex items-center gap-2 text-xs text-gray-400">
             <Clock size={13} />
-            <span>Tự động chạy mỗi đêm lúc 00:00 (mặc định giữ 90 ngày)</span>
+            <span>Runs automatically every night at 00:00 (keeps 90 days by default)</span>
           </div>
         </div>
 

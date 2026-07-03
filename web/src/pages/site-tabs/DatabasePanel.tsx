@@ -58,7 +58,7 @@ export function DBOptimizeResultCard({ result }: { result: DBOptimizeResult }) {
           ? <CheckCircle2 size={16} className="text-green-600" />
           : <XCircle size={16} className="text-red-600" />}
         <span className={`text-sm font-semibold ${isOk ? 'text-green-800' : 'text-red-800'}`}>
-          {isOk ? 'Tối ưu hoàn tất' : 'Tối ưu thất bại'}
+          {isOk ? 'Optimization completed' : 'Optimization failed'}
         </span>
         <span className="ml-auto text-xs text-gray-400">
           {new Date(result.created_at).toLocaleString('vi-VN')}
@@ -68,19 +68,19 @@ export function DBOptimizeResultCard({ result }: { result: DBOptimizeResult }) {
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <div className="bg-white rounded p-2 text-center border border-green-100">
             <p className="text-lg font-bold text-blue-600">{result.tables_optimized}</p>
-            <p className="text-xs text-gray-500">Tables tối ưu</p>
+            <p className="text-xs text-gray-500">Tables optimized</p>
           </div>
           <div className="bg-white rounded p-2 text-center border border-green-100">
             <p className="text-lg font-bold text-green-600">{formatBytes(result.space_saved)}</p>
-            <p className="text-xs text-gray-500">Dung lượng thu hồi</p>
+            <p className="text-xs text-gray-500">Space reclaimed</p>
           </div>
           <div className="bg-white rounded p-2 text-center border border-green-100">
             <p className="text-lg font-bold text-yellow-600">{result.revisions_cleaned}</p>
-            <p className="text-xs text-gray-500">Revisions đã xóa</p>
+            <p className="text-xs text-gray-500">Revisions deleted</p>
           </div>
           <div className="bg-white rounded p-2 text-center border border-green-100">
             <p className="text-lg font-bold text-purple-600">{result.transients_cleared}</p>
-            <p className="text-xs text-gray-500">Transients đã xóa</p>
+            <p className="text-xs text-gray-500">Transients cleared</p>
           </div>
         </div>
       ) : (
@@ -104,7 +104,7 @@ export function DatabasePanel({ siteId, canManage }: { siteId: number; canManage
         <div className="flex items-center justify-between mb-4">
           <div>
             <h2 className="text-lg font-semibold">Database Optimization</h2>
-            <p className="text-sm text-gray-500">Tối ưu tables, dọn revisions và xóa transients hết hạn</p>
+            <p className="text-sm text-gray-500">Optimize tables, clean up revisions, and clear expired transients</p>
           </div>
           {canManage && (
             <button
@@ -113,7 +113,7 @@ export function DatabasePanel({ siteId, canManage }: { siteId: number; canManage
               className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm disabled:opacity-50"
             >
               {optimizeDb.isPending ? <Loader2 size={14} className="animate-spin" /> : <HardDrive size={14} />}
-              {optimizeDb.isPending ? 'Đang tối ưu...' : 'Optimize Now'}
+              {optimizeDb.isPending ? 'Optimizing...' : 'Optimize Now'}
             </button>
           )}
         </div>
@@ -122,7 +122,7 @@ export function DatabasePanel({ siteId, canManage }: { siteId: number; canManage
         {optimizeDb.isPending && (
           <div className="mb-4 p-3 rounded-lg border bg-blue-50 border-blue-200 text-blue-700 text-sm flex items-center gap-2">
             <Loader2 size={14} className="animate-spin shrink-0" />
-            Đang chạy OPTIMIZE TABLE, dọn revisions và transients...
+            Running OPTIMIZE TABLE, cleaning up revisions and transients...
           </div>
         )}
 
@@ -143,17 +143,17 @@ export function DatabasePanel({ siteId, canManage }: { siteId: number; canManage
           <div className="p-3 bg-green-50 rounded-lg text-center">
             <HardDrive size={20} className="mx-auto text-green-500 mb-1" />
             <p className="text-xs font-medium">Space Recovery</p>
-            <p className="text-xs text-gray-400">Thu hồi fragmented space</p>
+            <p className="text-xs text-gray-400">Reclaim fragmented space</p>
           </div>
           <div className="p-3 bg-yellow-50 rounded-lg text-center">
             <RefreshCw size={20} className="mx-auto text-yellow-500 mb-1" />
             <p className="text-xs font-medium">Revision Cleanup</p>
-            <p className="text-xs text-gray-400">Giữ lại 5 bản gần nhất/post</p>
+            <p className="text-xs text-gray-400">Keeps the 5 most recent per post</p>
           </div>
           <div className="p-3 bg-purple-50 rounded-lg text-center">
             <Clock size={20} className="mx-auto text-purple-500 mb-1" />
             <p className="text-xs font-medium">Transient Cleanup</p>
-            <p className="text-xs text-gray-400">Xóa expired WP transients</p>
+            <p className="text-xs text-gray-400">Clear expired WP transients</p>
           </div>
         </div>
       </div>
@@ -161,7 +161,7 @@ export function DatabasePanel({ siteId, canManage }: { siteId: number; canManage
       {/* Optimization History */}
       {dbLogs.length > 0 && (
         <div className="bg-white rounded-lg border p-6">
-          <h3 className="text-sm font-semibold mb-3">Lịch sử tối ưu</h3>
+          <h3 className="text-sm font-semibold mb-3">Optimization History</h3>
           <div className="space-y-3">
             {dbLogs.map((log: UpdateLog) => {
               const parsed = parseDbLog(log)

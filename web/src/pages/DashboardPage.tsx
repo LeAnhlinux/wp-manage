@@ -1,8 +1,86 @@
-import { Server, Globe, HardDrive, Activity, Cpu, MemoryStick, Database, Wifi, WifiOff, TrendingUp, ArrowRight } from 'lucide-react'
+import { useMemo, useState } from 'react'
+import { Server, Globe, HardDrive, Activity, Cpu, MemoryStick, Database, Wifi, WifiOff, TrendingUp, ArrowRight, LineChart } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { useServers } from '@/hooks/useServers'
+import { useServers, useMetricsHistory, type MetricHistoryPoint } from '@/hooks/useServers'
 import { useSites } from '@/hooks/useSites'
 import { useDashboardMetrics } from '@/hooks/useWebSocket'
+
+// Area chart for CPU/RAM history. Pure SVG: normalized 0..100 coords stretched
+// to the container (vector-effect keeps strokes crisp); labels live in HTML so
+// they never distort. Colors come from theme tokens (--chart-*) so both the
+// dark console and light theme render correctly.
+function HistoryChart({ points }: { points: MetricHistoryPoint[] }) {
+  // Downsample to ≤144 points so the path stays light even for 7-day ranges.
+  const data = useMemo(() => {
+    if (points.length <= 144) return points
+    const step = Math.ceil(points.length / 144)
+    return points.filter((_, i) => i % step === 0)
+  }, [points])
+
+  if (data.length < 2) {
+    return (
+      <p className="text-sm text-gray-400 text-center py-10">
+        Not enough metric history yet — data appears after a few heartbeats.
+      </p>
+    )
+  }
+
+  const toPath = (key: 'cpu_usage' | 'ram_usage') =>
+    data.map((p, i) => {
+      const x = (i / (data.length - 1)) * 100
+      const y = 100 - Math.min(p[key], 100)
+      return `${i === 0 ? 'M' : 'L'}${x.toFixed(2)},${y.toFixed(2)}`
+    }).join(' ')
+
+  const cpuPath = toPath('cpu_usage')
+  const ramPath = toPath('ram_usage')
+  const last = data[data.length - 1]
+  // recorded_at is stored in server-local time but the history endpoint suffixes
+  // a literal 'Z'; strip it so the browser doesn't shift the time a second time.
+  const fmtTime = (ts: string) =>
+    new Date(ts.replace('Z', '')).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
+
+  return (
+    <div>
+      <div className="relative">
+        {/* Grid % labels (HTML so they don't stretch) */}
+        <div className="absolute inset-y-0 left-0 flex flex-col justify-between text-[10px] font-mono py-0.5" style={{ color: 'var(--chart-label)' }}>
+          <span>100</span><span>50</span><span>0</span>
+        </div>
+        <div className="ml-8">
+          <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="w-full h-36 block">
+            {[25, 50, 75].map(g => (
+              <line key={g} x1="0" y1={g} x2="100" y2={g}
+                stroke="var(--chart-grid)" strokeWidth="1" strokeDasharray="2 3"
+                vectorEffect="non-scaling-stroke" />
+            ))}
+            <path d={`${cpuPath} L100,100 L0,100 Z`} fill="var(--chart-cpu)" opacity="0.10" />
+            <path d={cpuPath} fill="none" stroke="var(--chart-cpu)" strokeWidth="1.6"
+              strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+            <path d={ramPath} fill="none" stroke="var(--chart-ram)" strokeWidth="1.4"
+              strokeDasharray="4 3" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+          </svg>
+        </div>
+      </div>
+      <div className="ml-8 flex items-center justify-between mt-2">
+        <span className="text-[10px] font-mono" style={{ color: 'var(--chart-label)' }}>{fmtTime(data[0].ts)}</span>
+        <div className="flex items-center gap-4 text-[11px] font-mono">
+          <span className="flex items-center gap-1.5">
+            <span className="w-2.5 h-0.5 rounded" style={{ background: 'var(--chart-cpu)' }} />
+            <span className="text-gray-500">CPU</span>
+            <b className="text-gray-900 font-semibold">{last.cpu_usage.toFixed(0)}%</b>
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="w-2.5 h-0.5 rounded" style={{ background: 'var(--chart-ram)' }} />
+            <span className="text-gray-500">RAM</span>
+            <b className="text-gray-900 font-semibold">{last.ram_usage.toFixed(0)}%</b>
+          </span>
+        </div>
+        <span className="text-[10px] font-mono" style={{ color: 'var(--chart-label)' }}>{fmtTime(last.ts)}</span>
+      </div>
+    </div>
+  )
+}
 
 function MetricBar({ label, value, color, trackColor }: {
   label: string; value: number; color: string; trackColor: string
@@ -38,7 +116,7 @@ function StatCard({ label, value, icon: Icon, gradient, sub }: {
       </div>
       <div className="min-w-0">
         <p className="text-sm text-gray-500 leading-none mb-1.5">{label}</p>
-        <p className="text-3xl font-bold text-gray-900 leading-none">{value}</p>
+        <p className="text-3xl font-bold text-gray-900 leading-none font-mono tracking-tight tabular-nums">{value}</p>
         {sub && <p className="text-xs text-gray-400 mt-1.5">{sub}</p>}
       </div>
     </div>
@@ -54,6 +132,12 @@ export default function DashboardPage() {
   // without waiting up to 30s for the first WebSocket heartbeat.
   const { metrics: liveMetrics, connected: wsConnected } = useDashboardMetrics(servers)
   const sites = sitesData?.data || []
+
+  // History chart: default to the first active server, switchable when there are several.
+  const activeServerList = servers.filter((s) => s.status === 'active')
+  const [chartServerId, setChartServerId] = useState<number | null>(null)
+  const effectiveChartServer = chartServerId ?? activeServerList[0]?.id ?? 0
+  const { data: history = [], isLoading: historyLoading } = useMetricsHistory(effectiveChartServer, 24)
   const activeServers = servers.filter((s) => s.status === 'active').length
   const activeSites = sites.filter((s) => s.status === 'active').length
   const totalServers = serversData?.meta?.total || 0
@@ -99,7 +183,7 @@ export default function DashboardPage() {
       <div className="flex items-center justify-between mb-8">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 leading-none">Dashboard</h1>
-          <p className="text-gray-500 text-sm mt-1">Overview của hệ thống WP Manage</p>
+          <p className="text-gray-500 text-sm mt-1">System overview — servers, sites, and live metrics</p>
         </div>
         <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border ${
           wsConnected
@@ -120,6 +204,32 @@ export default function DashboardPage() {
           <StatCard key={stat.label} {...stat} />
         ))}
       </div>
+
+      {/* Metrics history chart */}
+      {effectiveChartServer > 0 && (
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 mb-8">
+          <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
+            <h2 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+              <LineChart size={16} className="text-blue-600" />
+              CPU / RAM — last 24h
+            </h2>
+            {activeServerList.length > 1 && (
+              <select
+                value={effectiveChartServer}
+                onChange={(e) => setChartServerId(Number(e.target.value))}
+                className="text-xs font-mono px-2.5 py-1.5 border border-gray-200 rounded-lg bg-gray-50 focus:bg-white focus:border-blue-500 outline-none"
+              >
+                {activeServerList.map((s) => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+            )}
+          </div>
+          {historyLoading
+            ? <p className="text-sm text-gray-400 text-center py-10">Loading metric history…</p>
+            : <HistoryChart points={history} />}
+        </div>
+      )}
 
       {/* Real-time metrics */}
       {liveMetricsList.length > 0 && (
@@ -209,8 +319,8 @@ export default function DashboardPage() {
             {servers.length === 0 && (
               <div className="px-6 py-10 text-center">
                 <Server size={28} className="text-gray-200 mx-auto mb-3" />
-                <p className="text-sm text-gray-400">Chưa có server nào</p>
-                <Link to="/servers" className="text-xs text-blue-600 hover:underline mt-1 inline-block">Thêm server →</Link>
+                <p className="text-sm text-gray-400">No servers yet</p>
+                <Link to="/servers" className="text-xs text-blue-600 hover:underline mt-1 inline-block">Add a server →</Link>
               </div>
             )}
           </div>
@@ -254,8 +364,8 @@ export default function DashboardPage() {
             {sites.length === 0 && (
               <div className="px-6 py-10 text-center">
                 <Globe size={28} className="text-gray-200 mx-auto mb-3" />
-                <p className="text-sm text-gray-400">Chưa có site nào</p>
-                <Link to="/sites" className="text-xs text-blue-600 hover:underline mt-1 inline-block">Tạo site →</Link>
+                <p className="text-sm text-gray-400">No sites yet</p>
+                <Link to="/sites" className="text-xs text-blue-600 hover:underline mt-1 inline-block">Create a site →</Link>
               </div>
             )}
           </div>

@@ -1,8 +1,9 @@
+import { useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import {
   Server, Globe, Shield, LayoutDashboard, Settings, LogOut,
   HardDrive, Users, ArrowRightLeft, UsersRound, Activity,
-  ChevronRight, MonitorDot, Network, Download
+  ChevronRight, MonitorDot, Network, Download, Moon, Sun
 } from 'lucide-react'
 import { useAuth } from '@/stores/auth'
 import { usePermissions } from '@/hooks/usePermissions'
@@ -28,6 +29,17 @@ export default function Sidebar({ mobile }: SidebarProps) {
   const { user, logout } = useAuth()
   const { isAdmin } = usePermissions()
   const { data: updateInfo } = useUpdateAvailable()
+
+  // Theme: dark is default; 'theme-light' class on <html> switches the override layer.
+  const [lightTheme, setLightTheme] = useState(() =>
+    document.documentElement.classList.contains('theme-light')
+  )
+  const toggleTheme = () => {
+    const next = !lightTheme
+    document.documentElement.classList.toggle('theme-light', next)
+    localStorage.setItem('wpm-theme', next ? 'light' : 'dark')
+    setLightTheme(next)
+  }
 
   const navGroups = [
     {
@@ -106,7 +118,7 @@ export default function Sidebar({ mobile }: SidebarProps) {
                     key={to}
                     to={to}
                     end={to === '/'}
-                    title={showUpdateDot ? `Có bản cập nhật mới: ${updateInfo?.latestVersion}` : undefined}
+                    title={showUpdateDot ? `Update available: ${updateInfo?.latestVersion}` : undefined}
                     className={({ isActive }) =>
                       `group flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all duration-150 ${
                         isActive
@@ -159,6 +171,13 @@ export default function Sidebar({ mobile }: SidebarProps) {
           </div>
           <ChevronRight size={14} className="text-slate-600 flex-shrink-0" />
         </div>
+        <button
+          onClick={toggleTheme}
+          className="flex items-center gap-2.5 w-full px-3 py-2 text-sm text-slate-500 hover:text-slate-200 hover:bg-white/5 rounded-lg transition-colors"
+        >
+          {lightTheme ? <Moon size={15} /> : <Sun size={15} />}
+          <span>{lightTheme ? 'Dark mode' : 'Light mode'}</span>
+        </button>
         <button
           onClick={logout}
           className="flex items-center gap-2.5 w-full px-3 py-2 text-sm text-slate-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors group"

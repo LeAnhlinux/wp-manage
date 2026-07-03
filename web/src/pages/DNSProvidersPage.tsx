@@ -356,7 +356,7 @@ function AddProviderModal({ onClose }: { onClose: () => void }) {
               placeholder={
                 form.provider_type === 'route53' ? 'AKIAIOSFODNN7EXAMPLE'
                 : form.provider_type === 'godaddy' ? '3mM44UoYLJmGaD7_xxxxxxxx'
-                : 'Cloudflare API Token hoặc Global API Key'
+                : 'Cloudflare API Token or Global API Key'
               }
               value={form.api_key}
               onChange={e => updateForm({ api_key: e.target.value })}
@@ -365,7 +365,7 @@ function AddProviderModal({ onClose }: { onClose: () => void }) {
             />
             {form.provider_type === 'godaddy' && (
               <p className="text-xs text-gray-400 mt-1">
-                Lấy tại <a href="https://developer.godaddy.com/keys" target="_blank" rel="noreferrer"
+                Get it at <a href="https://developer.godaddy.com/keys" target="_blank" rel="noreferrer"
                   className="text-blue-500 hover:underline">developer.godaddy.com/keys</a> → Production
               </p>
             )}
@@ -376,7 +376,7 @@ function AddProviderModal({ onClose }: { onClose: () => void }) {
             <label className="block text-xs font-medium text-gray-700 mb-1.5">
               {form.provider_type === 'route53' ? 'AWS Secret Access Key'
                 : form.provider_type === 'godaddy' ? 'GoDaddy API Secret'
-                : <>API Email <span className="text-gray-400 font-normal">(chỉ cần khi dùng Global API Key)</span></>}
+                : <>API Email <span className="text-gray-400 font-normal">(only needed with a Global API Key)</span></>}
             </label>
             <input
               type="password"
@@ -392,7 +392,7 @@ function AddProviderModal({ onClose }: { onClose: () => void }) {
             />
             {form.provider_type === 'route53' && (
               <p className="text-xs text-gray-400 mt-1">
-                Tạo IAM user với quyền <code className="bg-gray-100 px-1 rounded">AmazonRoute53FullAccess</code>
+                Create an IAM user with the <code className="bg-gray-100 px-1 rounded">AmazonRoute53FullAccess</code> permission
               </p>
             )}
           </div>
@@ -419,7 +419,7 @@ function AddProviderModal({ onClose }: { onClose: () => void }) {
                   type="button"
                   onClick={handleLookupZone}
                   disabled={!form.api_key || !form.domain || lookupZone.isPending || (form.provider_type === 'route53' && !form.api_email)}
-                  title="Tự động tìm Zone ID từ domain"
+                  title="Auto-find Zone ID from domain"
                   className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-gray-200 rounded-xl bg-gray-50 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed text-gray-700 transition-colors whitespace-nowrap"
                 >
                   {lookupZone.isPending
@@ -434,7 +434,7 @@ function AddProviderModal({ onClose }: { onClose: () => void }) {
                   type="button"
                   onClick={handleLookupZone}
                   disabled={!form.api_key || !form.api_email || !form.domain || lookupZone.isPending}
-                  title="Xác minh domain trong tài khoản GoDaddy"
+                  title="Verify the domain in your GoDaddy account"
                   className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-gray-200 rounded-xl bg-gray-50 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed text-gray-700 transition-colors whitespace-nowrap"
                 >
                   {lookupZone.isPending
@@ -446,7 +446,7 @@ function AddProviderModal({ onClose }: { onClose: () => void }) {
             </div>
             {lookupErr && <p className="text-xs text-red-500 mt-1">{lookupErr}</p>}
             {form.provider_type === 'godaddy' && form.domain && (
-              <p className="text-xs text-gray-400 mt-1">GoDaddy dùng domain làm Zone ID — không cần nhập riêng.</p>
+              <p className="text-xs text-gray-400 mt-1">GoDaddy uses the domain as the Zone ID — no separate input needed.</p>
             )}
           </div>
 
@@ -464,7 +464,7 @@ function AddProviderModal({ onClose }: { onClose: () => void }) {
               <div className="flex gap-2">
                 <input
                   type="text"
-                  placeholder={form.provider_type === 'route53' ? 'Z1D633PJN98FT9' : '32-ký-tự hex từ Cloudflare'}
+                  placeholder={form.provider_type === 'route53' ? 'Z1D633PJN98FT9' : '32-char hex from Cloudflare'}
                   value={form.zone_id}
                   onChange={e => updateForm({ zone_id: e.target.value })}
                   className="flex-1 px-3 py-2 border border-gray-200 rounded-xl text-sm bg-gray-50 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none font-mono"
@@ -474,7 +474,7 @@ function AddProviderModal({ onClose }: { onClose: () => void }) {
                   type="button"
                   onClick={handleTest}
                   disabled={!form.api_key || !form.zone_id || testProvider.isPending || (form.provider_type === 'route53' && !form.api_email)}
-                  title="Kiểm tra kết nối"
+                  title="Test connection"
                   className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-gray-200 rounded-xl bg-gray-50 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed text-gray-700 transition-colors whitespace-nowrap"
                 >
                   {testProvider.isPending
@@ -609,7 +609,7 @@ export default function DNSProvidersPage() {
             <Globe size={24} className="text-blue-500" /> DNS Providers & Records
           </h1>
           <p className="text-sm text-gray-500 mt-1">
-            Quản lý DNS providers và records cho tất cả domain
+            Manage DNS providers and records for all domains
           </p>
         </div>
         {canWrite && (
@@ -648,9 +648,9 @@ export default function DNSProvidersPage() {
       ) : providers.length === 0 ? (
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-12 text-center">
           <Globe size={40} className="text-gray-300 mx-auto mb-3" />
-          <p className="text-gray-600 font-semibold mb-1">Chưa có DNS provider nào</p>
+          <p className="text-gray-600 font-semibold mb-1">No DNS providers yet</p>
           <p className="text-gray-400 text-sm mb-5">
-            Thêm Cloudflare, AWS Route53 hoặc GoDaddy để quản lý DNS records trực tiếp từ đây.
+            Add Cloudflare, AWS Route53, or GoDaddy to manage DNS records directly from here.
           </p>
           {canWrite && (
             <button onClick={() => setShowAddModal(true)}

@@ -293,7 +293,7 @@ export default function ServerDetailPage() {
                 })()}
               </div>
               {!servicesData && !servicesLoading && !servicesFetching && !isOnline && (
-                <p className="text-xs text-gray-400 mt-3 text-center">Server offline — không thể kiểm tra service</p>
+                <p className="text-xs text-gray-400 mt-3 text-center">Server offline — cannot check services</p>
               )}
             </div>
           </div>
@@ -409,7 +409,7 @@ function CloudflareProtectionPanel({ serverId, canManage }: { serverId: number; 
         await enable.mutateAsync(serverId)
       }
     } catch (e: any) {
-      alert('Lỗi: ' + (e?.response?.data?.error ?? e?.message ?? 'Unknown error'))
+      alert('Error: ' + (e?.response?.data?.error ?? e?.message ?? 'Unknown error'))
     }
   }
 
@@ -422,12 +422,12 @@ function CloudflareProtectionPanel({ serverId, canManage }: { serverId: number; 
             Cloudflare Protection
           </h2>
           <p className="text-sm text-gray-500 mt-1">
-            Chỉ cho phép traffic từ Cloudflare IPs vào port 80 và 443.
-            IP Cloudflare tự động cập nhật hàng tuần (Thứ 2 lúc 02:00).
+            Only allow traffic from Cloudflare IPs on ports 80 and 443.
+            Cloudflare IPs update automatically every week (Monday at 02:00).
           </p>
           {cfg?.last_sync_at && (
             <p className="text-xs text-gray-400 mt-1">
-              Lần đồng bộ cuối: {new Date(cfg.last_sync_at).toLocaleString('vi-VN')}
+              Last sync: {new Date(cfg.last_sync_at).toLocaleString('vi-VN')}
             </p>
           )}
         </div>
@@ -435,7 +435,7 @@ function CloudflareProtectionPanel({ serverId, canManage }: { serverId: number; 
           <button
             onClick={handleToggle}
             disabled={isLoading || isPending}
-            title={cfg?.enabled ? 'Tắt Cloudflare Protection' : 'Bật Cloudflare Protection'}
+            title={cfg?.enabled ? 'Disable Cloudflare Protection' : 'Enable Cloudflare Protection'}
             className={`relative inline-flex h-7 w-12 flex-shrink-0 items-center rounded-full transition-colors focus:outline-none disabled:opacity-50 ${
               cfg?.enabled ? 'bg-orange-500' : 'bg-gray-200'
             }`}
@@ -448,7 +448,7 @@ function CloudflareProtectionPanel({ serverId, canManage }: { serverId: number; 
           <span className={`px-2.5 py-1 rounded-full text-xs font-medium flex-shrink-0 ${
             cfg?.enabled ? 'bg-orange-100 text-orange-700' : 'bg-gray-100 text-gray-500'
           }`}>
-            {cfg?.enabled ? 'Đang bật' : 'Đã tắt'}
+            {cfg?.enabled ? 'Enabled' : 'Disabled'}
           </span>
         )}
       </div>
@@ -456,7 +456,7 @@ function CloudflareProtectionPanel({ serverId, canManage }: { serverId: number; 
       {isPending && (
         <div className="mt-3 flex items-center gap-2 text-sm text-orange-600">
           <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-orange-500" />
-          {enable.isPending ? 'Đang bật Cloudflare Protection...' : 'Đang tắt Cloudflare Protection...'}
+          {enable.isPending ? 'Enabling Cloudflare Protection...' : 'Disabling Cloudflare Protection...'}
           <span className="text-xs text-gray-400">(30–120s)</span>
         </div>
       )}
@@ -465,16 +465,16 @@ function CloudflareProtectionPanel({ serverId, canManage }: { serverId: number; 
         <div className="mt-3 p-3 bg-orange-50 rounded-lg border border-orange-100 flex items-center gap-2">
           <span className="w-2 h-2 rounded-full bg-orange-400 animate-pulse flex-shrink-0" />
           <p className="text-xs text-orange-700">
-            <strong>Đang hoạt động:</strong> Port 80/443 chỉ nhận traffic từ Cloudflare IPs.
-            Sites phải dùng Cloudflare proxy <span className="font-mono">☁️</span> mới truy cập được.
+            <strong>Active:</strong> Ports 80/443 only accept traffic from Cloudflare IPs.
+            Sites must use the Cloudflare proxy <span className="font-mono">☁️</span> to be reachable.
           </p>
         </div>
       )}
 
       <div className="mt-3 p-3 bg-amber-50 rounded-lg border border-amber-100">
         <p className="text-xs text-amber-700">
-          ⚠️ <strong>Lưu ý:</strong> Chỉ bật khi <em>tất cả</em> sites trên server đã dùng Cloudflare proxy.
-          Site dùng DNS trực tiếp (không qua Cloudflare) sẽ không truy cập được.
+          ⚠️ <strong>Note:</strong> Only enable this when <em>all</em> sites on the server use the Cloudflare proxy.
+          Sites using direct DNS (not via Cloudflare) will become unreachable.
         </p>
       </div>
     </div>
@@ -2483,19 +2483,19 @@ function ConfigTab({ serverId }: { serverId: number }) {
           <Wrench size={20} className="text-purple-500" /> Rebuild Config
         </h2>
         <p className="text-sm text-gray-500 mb-4">
-          Rebuild Nginx vhost / PHP-FPM pool configs từ template. Tự động test (<code className="bg-gray-100 px-1 rounded">nginx -t</code>,{' '}
-          <code className="bg-gray-100 px-1 rounded">php-fpm -t</code>) và rollback nếu lỗi.
+          Rebuild Nginx vhost / PHP-FPM pool configs from templates. Automatically tests (<code className="bg-gray-100 px-1 rounded">nginx -t</code>,{' '}
+          <code className="bg-gray-100 px-1 rounded">php-fpm -t</code>) and rolls back on failure.
         </p>
 
         {/* Site Selector */}
         <div className="mb-4">
-          <label className="block text-xs font-medium text-gray-500 mb-1.5">Chọn site cần rebuild</label>
+          <label className="block text-xs font-medium text-gray-500 mb-1.5">Select site to rebuild</label>
           <select
             className="border border-gray-200 rounded-lg px-3 py-2 text-sm w-full max-w-sm focus:outline-none focus:ring-2 focus:ring-purple-300"
             value={selectedSiteId ?? ''}
             onChange={e => setSelectedSiteId(e.target.value ? Number(e.target.value) : undefined)}
           >
-            <option value="">🌐 Tất cả sites trên server ({sites.length} sites)</option>
+            <option value="">🌐 All sites on this server ({sites.length} sites)</option>
             {sites.map(s => (
               <option key={s.id} value={s.id}>
                 {s.domain} — PHP {s.php_version || '8.2'}
@@ -2510,7 +2510,7 @@ function ConfigTab({ serverId }: { serverId: number }) {
           )}
           {!selectedSiteId && sites.length > 0 && (
             <p className="text-xs text-amber-600 mt-1">
-              ⚠ Rebuild all sẽ chạy lần lượt qua {sites.length} sites — có thể mất vài giây
+              ⚠ Rebuild all runs through {sites.length} sites one by one — this can take a few seconds
             </p>
           )}
         </div>
@@ -2549,9 +2549,9 @@ function ConfigTab({ serverId }: { serverId: number }) {
         {rebuildConfig.isSuccess && rebuildResults.length > 0 && (
           <div className="mt-4 space-y-2">
             <div className="flex items-center justify-between">
-              <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Kết quả rebuild</p>
+              <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Rebuild results</p>
               <span className="text-xs text-gray-400">
-                {rebuildResults.filter(r => r.success).length}/{rebuildResults.length} thành công
+                {rebuildResults.filter(r => r.success).length}/{rebuildResults.length} succeeded
               </span>
             </div>
             {rebuildResults.map((r, i) => (
@@ -2577,7 +2577,7 @@ function ConfigTab({ serverId }: { serverId: number }) {
 
         {rebuildConfig.isSuccess && rebuildResults.length === 0 && (
           <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
-            <p className="text-sm text-amber-700">Không có site nào để rebuild (server chưa có site nào).</p>
+            <p className="text-sm text-amber-700">No sites to rebuild (this server has no sites yet).</p>
           </div>
         )}
 
@@ -2594,9 +2594,9 @@ function ConfigTab({ serverId }: { serverId: number }) {
           <HeartPulse size={20} className="text-red-500" /> Health Check
         </h2>
         <p className="text-sm text-gray-500 mb-4">
-          Kiểm tra tất cả services: <code className="bg-gray-100 px-1 rounded text-xs">nginx -t</code>,{' '}
-          <code className="bg-gray-100 px-1 rounded text-xs">php-fpm -t</code> (tất cả versions đã cài),
-          và kết nối MariaDB.
+          Checks all services: <code className="bg-gray-100 px-1 rounded text-xs">nginx -t</code>,{' '}
+          <code className="bg-gray-100 px-1 rounded text-xs">php-fpm -t</code> (all installed versions),
+          and the MariaDB connection.
         </p>
         <button
           onClick={() => healthCheck.mutate(serverId)}
@@ -2604,13 +2604,13 @@ function ConfigTab({ serverId }: { serverId: number }) {
           className="flex items-center gap-2 px-4 py-2.5 text-sm text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:opacity-50"
         >
           {healthCheck.isPending ? <Loader2 size={16} className="animate-spin" /> : <HeartPulse size={16} />}
-          {healthCheck.isPending ? 'Đang kiểm tra...' : 'Run Health Check'}
+          {healthCheck.isPending ? 'Checking...' : 'Run Health Check'}
         </button>
 
         {hcResults.length > 0 && (
           <div className="mt-4 space-y-2">
             <div className="flex items-center justify-between">
-              <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Kết quả</p>
+              <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Results</p>
               <span className={`text-xs font-medium ${
                 hcResults.every(r => r.status === 'ok') ? 'text-green-600' : 'text-red-600'
               }`}>

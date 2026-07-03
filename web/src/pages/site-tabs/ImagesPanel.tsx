@@ -281,7 +281,7 @@ export function ImagesPanel({ siteId, canManage }: { siteId: number; canManage: 
                       'bg-red-100 text-red-700'
                     }`}>
                       {r.status === 'running' && <Loader2 size={10} className="animate-spin" />}
-                      {r.status === 'completed' ? 'Hoàn tất' : r.status === 'running' ? 'Đang chạy' : r.status === 'cancelled' ? 'Đã hủy' : 'Lỗi'}
+                      {r.status === 'completed' ? 'Completed' : r.status === 'running' ? 'Running' : r.status === 'cancelled' ? 'Cancelled' : 'Error'}
                     </span>
                   </div>
                   <div className="flex gap-4 text-xs text-gray-600">

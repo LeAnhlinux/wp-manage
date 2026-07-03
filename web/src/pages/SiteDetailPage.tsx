@@ -151,7 +151,7 @@ export default function SiteDetailPage() {
           icon={<Clock size={20} />}
           label="WP Version"
           value={site.wp_version || ''}
-          sub={!site.wp_version ? 'Đang xác định...' : undefined}
+          sub={!site.wp_version ? 'Detecting...' : undefined}
         />
       </div>
 

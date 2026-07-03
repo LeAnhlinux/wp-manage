@@ -16,37 +16,37 @@ function formatDate(dateStr: string): string {
 
 const STATUS_CONFIG: Record<string, { label: string; classes: string; icon: React.ReactNode }> = {
   pending: {
-    label: 'Chờ xử lý',
+    label: 'Pending',
     classes: 'bg-gray-100 text-gray-700',
     icon: <Clock size={11} />,
   },
   discovering: {
-    label: 'Đang quét',
+    label: 'Scanning',
     classes: 'bg-blue-100 text-blue-700',
     icon: <Loader2 size={11} className="animate-spin" />,
   },
   awaiting_selection: {
-    label: 'Chờ chọn site',
+    label: 'Awaiting selection',
     classes: 'bg-amber-100 text-amber-700',
     icon: <RefreshCw size={11} />,
   },
   transferring: {
-    label: 'Đang transfer',
+    label: 'Transferring',
     classes: 'bg-blue-100 text-blue-700',
     icon: <Loader2 size={11} className="animate-spin" />,
   },
   completed: {
-    label: 'Hoàn tất',
+    label: 'Completed',
     classes: 'bg-emerald-100 text-emerald-700',
     icon: <CheckCircle2 size={11} />,
   },
   failed: {
-    label: 'Thất bại',
+    label: 'Failed',
     classes: 'bg-red-100 text-red-700',
     icon: <AlertCircle size={11} />,
   },
   cancelled: {
-    label: 'Đã huỷ',
+    label: 'Cancelled',
     classes: 'bg-gray-100 text-gray-500',
     icon: <XCircle size={11} />,
   },
@@ -123,15 +123,15 @@ function JobRow({
         <div className="flex items-center gap-2 justify-end">
           <button
             onClick={onView}
-            title="Xem chi tiết"
+            title="View details"
             className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors"
           >
-            <Eye size={13} /> Xem
+            <Eye size={13} /> View
           </button>
           {DELETABLE.has(job.status) && (
             <button
               onClick={onDelete}
-              title="Xóa job"
+              title="Delete job"
               className="inline-flex items-center justify-center w-7 h-7 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
             >
               <Trash2 size={14} />
@@ -177,7 +177,7 @@ function JobCard({
             onClick={onView}
             className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors"
           >
-            <Eye size={12} /> Xem
+            <Eye size={12} /> View
           </button>
           {DELETABLE.has(job.status) && (
             <button
@@ -220,17 +220,17 @@ export default function TransferPage() {
               <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
                 <Trash2 size={18} className="text-red-600" />
               </div>
-              <h3 className="text-base font-semibold text-gray-900">Xóa transfer job #{confirmId}?</h3>
+              <h3 className="text-base font-semibold text-gray-900">Delete transfer job #{confirmId}?</h3>
             </div>
             <p className="text-sm text-gray-500 mb-5">
-              Job và toàn bộ kết quả sẽ bị xóa vĩnh viễn. Không thể hoàn tác.
+              The job and all its results will be permanently deleted. This cannot be undone.
             </p>
             <div className="flex gap-3 justify-end">
               <button
                 onClick={() => setConfirmId(null)}
                 className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-xl transition-colors"
               >
-                Hủy
+                Cancel
               </button>
               <button
                 onClick={handleConfirmDelete}
@@ -238,7 +238,7 @@ export default function TransferPage() {
                 className="flex items-center gap-2 px-4 py-2 text-sm font-semibold bg-red-600 text-white hover:bg-red-700 rounded-xl disabled:opacity-50 transition-colors"
               >
                 {deleteJob.isPending ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
-                Xóa
+                Delete
               </button>
             </div>
           </div>
@@ -253,14 +253,14 @@ export default function TransferPage() {
             Transfer WordPress Sites
           </h1>
           <p className="text-gray-500 text-sm mt-1">
-            Import toàn bộ sites từ server cPanel / aaPanel / Plesk về hệ thống này
+            Import all sites from a cPanel / aaPanel / Plesk server into this system
           </p>
         </div>
         <button
           onClick={() => navigate('/transfer/new')}
           className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 text-white rounded-xl hover:bg-blue-700 text-sm font-semibold shadow-sm shadow-blue-200 transition-colors"
         >
-          <Plus size={15} /> Bắt đầu transfer mới
+          <Plus size={15} /> Start new transfer
         </button>
       </div>
 
@@ -271,15 +271,15 @@ export default function TransferPage() {
       ) : jobs.length === 0 ? (
         <div className="bg-white rounded-2xl border border-gray-100 p-16 text-center">
           <ArrowRightLeft size={44} className="mx-auto text-gray-200 mb-4" />
-          <p className="text-gray-600 font-semibold">Chưa có transfer nào</p>
+          <p className="text-gray-600 font-semibold">No transfers yet</p>
           <p className="text-gray-400 text-sm mt-1 mb-6">
-            Nhấn "+ Bắt đầu transfer mới" để import sites từ panel khác
+            Click "+ Start new transfer" to import sites from another panel
           </p>
           <button
             onClick={() => navigate('/transfer/new')}
             className="inline-flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-xl hover:bg-blue-700 text-sm font-semibold transition-colors"
           >
-            <Plus size={15} /> Bắt đầu transfer mới
+            <Plus size={15} /> Start new transfer
           </button>
         </div>
       ) : (
@@ -290,11 +290,11 @@ export default function TransferPage() {
               <thead>
                 <tr className="border-b border-gray-50">
                   <th className="text-left px-5 py-3.5 text-xs font-semibold text-gray-400 uppercase tracking-wide">ID</th>
-                  <th className="text-left px-5 py-3.5 text-xs font-semibold text-gray-400 uppercase tracking-wide">Nguồn</th>
-                  <th className="text-left px-5 py-3.5 text-xs font-semibold text-gray-400 uppercase tracking-wide">Server đích</th>
-                  <th className="text-left px-5 py-3.5 text-xs font-semibold text-gray-400 uppercase tracking-wide">Trạng thái</th>
-                  <th className="text-left px-5 py-3.5 text-xs font-semibold text-gray-400 uppercase tracking-wide">Tiến độ</th>
-                  <th className="text-left px-5 py-3.5 text-xs font-semibold text-gray-400 uppercase tracking-wide">Thời gian</th>
+                  <th className="text-left px-5 py-3.5 text-xs font-semibold text-gray-400 uppercase tracking-wide">Source</th>
+                  <th className="text-left px-5 py-3.5 text-xs font-semibold text-gray-400 uppercase tracking-wide">Target Server</th>
+                  <th className="text-left px-5 py-3.5 text-xs font-semibold text-gray-400 uppercase tracking-wide">Status</th>
+                  <th className="text-left px-5 py-3.5 text-xs font-semibold text-gray-400 uppercase tracking-wide">Progress</th>
+                  <th className="text-left px-5 py-3.5 text-xs font-semibold text-gray-400 uppercase tracking-wide">Time</th>
                   <th className="text-right px-5 py-3.5 text-xs font-semibold text-gray-400 uppercase tracking-wide">Action</th>
                 </tr>
               </thead>
@@ -327,7 +327,7 @@ export default function TransferPage() {
           {meta && meta.total_pages > 1 && (
             <div className="flex items-center justify-between mt-5">
               <p className="text-sm text-gray-500">
-                Trang {meta.page} / {meta.total_pages} ({meta.total} jobs)
+                Page {meta.page} / {meta.total_pages} ({meta.total} jobs)
               </p>
               <div className="flex gap-2">
                 <button
@@ -335,14 +335,14 @@ export default function TransferPage() {
                   disabled={page <= 1}
                   className="px-3 py-1.5 border border-gray-200 rounded-xl text-sm hover:bg-gray-50 disabled:opacity-40 transition-colors"
                 >
-                  Trước
+                  Previous
                 </button>
                 <button
                   onClick={() => setPage((p) => p + 1)}
                   disabled={page >= meta.total_pages}
                   className="px-3 py-1.5 border border-gray-200 rounded-xl text-sm hover:bg-gray-50 disabled:opacity-40 transition-colors"
                 >
-                  Tiếp
+                  Next
                 </button>
               </div>
             </div>

@@ -13,11 +13,11 @@ import api from '@/lib/api'
 import type { Migration, MigrationLog } from '@/types'
 
 const phaseLabels: Record<string, string> = {
-  preparation: 'Chuẩn bị',
-  initial_sync: 'Đồng bộ lần 1',
+  preparation: 'Preparation',
+  initial_sync: 'Initial sync',
   delta_sync: 'Delta Sync',
-  switchover: 'Chuyển đổi',
-  cleanup: 'Dọn dẹp',
+  switchover: 'Switchover',
+  cleanup: 'Cleanup',
 }
 
 const phaseOrder = ['preparation', 'initial_sync', 'delta_sync', 'switchover', 'cleanup']
@@ -38,16 +38,16 @@ function StatusBadge({ status }: { status: string }) {
   return (
     <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${styles[status] || 'bg-gray-100 text-gray-800'}`}>
       {icons[status]}
-      {status === 'running' ? 'Đang chạy' : status === 'completed' ? 'Hoàn tất' : status === 'failed' ? 'Thất bại' : status === 'rolled_back' ? 'Đã rollback' : status}
+      {status === 'running' ? 'Running' : status === 'completed' ? 'Completed' : status === 'failed' ? 'Failed' : status === 'rolled_back' ? 'Rolled back' : status}
     </span>
   )
 }
 
 function ModeBadge({ mode }: { mode?: string }) {
   if (!mode || mode === 'keep_domain') {
-    return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700"><Server size={10} />Giữ domain</span>
+    return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700"><Server size={10} />Keep domain</span>
   }
-  return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-700"><Globe size={10} />Đổi domain</span>
+  return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-700"><Globe size={10} />Change domain</span>
 }
 
 function ProgressBar({ progress, phase }: { progress: number; phase: string }) {
@@ -118,21 +118,21 @@ function MigrationDetailModal({ migrationId, onClose }: { migrationId: number; o
         <div className="p-6 space-y-5 overflow-y-auto flex-1">
           <div className="grid grid-cols-2 gap-4">
             <div className="bg-gray-50 rounded-xl p-3">
-              <p className="text-xs text-gray-500 mb-1">Server nguồn</p>
+              <p className="text-xs text-gray-500 mb-1">Source server</p>
               <p className="text-sm font-semibold text-gray-800">{migration.source_server?.name || `#${migration.source_server_id}`}</p>
               <p className="text-xs text-gray-400 font-mono">{migration.source_server?.ip_address}</p>
             </div>
             <div className="bg-gray-50 rounded-xl p-3">
-              <p className="text-xs text-gray-500 mb-1">Server đích</p>
+              <p className="text-xs text-gray-500 mb-1">Target server</p>
               <p className="text-sm font-semibold text-gray-800">{migration.target_server?.name || `#${migration.target_server_id}`}</p>
               <p className="text-xs text-gray-400 font-mono">{migration.target_server?.ip_address}</p>
             </div>
             <div>
-              <p className="text-xs text-gray-500">Bắt đầu</p>
+              <p className="text-xs text-gray-500">Started</p>
               <p className="text-sm">{new Date(migration.started_at).toLocaleString('vi-VN')}</p>
             </div>
             <div>
-              <p className="text-xs text-gray-500">Hoàn tất</p>
+              <p className="text-xs text-gray-500">Completed</p>
               <p className="text-sm">{migration.completed_at ? new Date(migration.completed_at).toLocaleString('vi-VN') : '—'}</p>
             </div>
           </div>
@@ -165,7 +165,7 @@ function MigrationDetailModal({ migrationId, onClose }: { migrationId: number; o
                   </div>
                 ))
               ) : (
-                <p className="text-slate-500">Chưa có logs...</p>
+                <p className="text-slate-500">No logs yet...</p>
               )}
             </div>
           </div>
@@ -173,7 +173,7 @@ function MigrationDetailModal({ migrationId, onClose }: { migrationId: number; o
 
         <div className="p-4 border-t flex justify-end flex-shrink-0">
           <button onClick={onClose} className="px-4 py-2 text-sm bg-gray-100 hover:bg-gray-200 rounded-xl font-medium">
-            Đóng
+            Close
           </button>
         </div>
       </div>
@@ -255,8 +255,8 @@ function StartMigrationModal({ onClose }: { onClose: () => void }) {
     setAutoPointResult(null)
     try {
       const result = await autoCreateDNS.mutateAsync({ domain: newDomain.trim(), server_ip: targetServer.ip_address })
-      const baseMsg = `✓ Đã ${result.action === 'created' ? 'tạo' : 'cập nhật'} A record: ${result.domain} → ${result.ip} (zone: ${result.zone_name})`
-      const proxyWarn = result.proxied ? '\n⚠️ Cloudflare Proxy đang BẬT — DNS check sẽ thấy IP Cloudflare thay vì IP server. Vào Cloudflare tắt proxy (biểu tượng đám mây cam) để kiểm tra trực tiếp.' : ''
+      const baseMsg = `✓ A record ${result.action === 'created' ? 'created' : 'updated'}: ${result.domain} → ${result.ip} (zone: ${result.zone_name})`
+      const proxyWarn = result.proxied ? '\n⚠️ Cloudflare Proxy is ON — the DNS check will see Cloudflare IPs instead of the server IP. Turn off the proxy in Cloudflare (orange cloud icon) to check directly.' : ''
       setAutoPointResult(baseMsg + proxyWarn)
       // Re-check DNS after auto-point
       setTimeout(async () => {
@@ -267,7 +267,7 @@ function StartMigrationModal({ onClose }: { onClose: () => void }) {
         } catch { /* ignore */ }
       }, 2000)
     } catch (e: unknown) {
-      const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Không tìm thấy DNS provider quản lý domain này'
+      const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error || 'No DNS provider found managing this domain'
       setAutoPointResult(`✗ ${msg}`)
     } finally {
       setAutoPointing(false)
@@ -296,26 +296,26 @@ function StartMigrationModal({ onClose }: { onClose: () => void }) {
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg">
         {/* Header */}
         <div className="p-6 border-b">
-          <h3 className="text-lg font-bold text-gray-900">Bắt đầu Migration</h3>
-          <p className="text-sm text-gray-500 mt-0.5">Di chuyển WordPress site sang server khác</p>
+          <h3 className="text-lg font-bold text-gray-900">Start Migration</h3>
+          <p className="text-sm text-gray-500 mt-0.5">Move a WordPress site to another server</p>
         </div>
 
         <div className="p-6 space-y-5">
           {/* Mode selector */}
           <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-2">Chế độ migration</label>
+            <label className="block text-sm font-semibold text-gray-700 mb-2">Migration mode</label>
             <div className="grid grid-cols-2 gap-3">
               {([
                 {
                   value: 'keep_domain' as MigrationMode,
-                  title: 'Giữ nguyên domain',
-                  desc: 'Site chuyển sang server mới với domain cũ. Source sẽ bị suspend, DNS tự động cập nhật.',
+                  title: 'Keep domain',
+                  desc: 'The site moves to the new server with the same domain. The source is suspended and DNS updates automatically.',
                   icon: <Server size={20} className="text-purple-500" />,
                 },
                 {
                   value: 'change_domain' as MigrationMode,
-                  title: 'Đổi domain mới',
-                  desc: 'Site được clone sang server mới với domain khác. Source vẫn chạy bình thường.',
+                  title: 'Change domain',
+                  desc: 'The site is cloned to the new server under a different domain. The source keeps running normally.',
                   icon: <Globe size={20} className="text-indigo-500" />,
                 },
               ] as const).map(opt => (
@@ -342,13 +342,13 @@ function StartMigrationModal({ onClose }: { onClose: () => void }) {
 
           {/* Source site */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Site nguồn</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Source site</label>
             <select
               value={siteId}
               onChange={e => setSiteId(Number(e.target.value))}
               className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-gray-50 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none"
             >
-              <option value={0}>Chọn site...</option>
+              <option value={0}>Select site…</option>
               {sites.filter(s => s.status === 'active').map(site => (
                 <option key={site.id} value={site.id}>{site.domain}</option>
               ))}
@@ -357,13 +357,13 @@ function StartMigrationModal({ onClose }: { onClose: () => void }) {
 
           {/* Target server */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Server đích</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Target server</label>
             <select
               value={targetServerId}
               onChange={e => setTargetServerId(Number(e.target.value))}
               className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-gray-50 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none"
             >
-              <option value={0}>Chọn server đích...</option>
+              <option value={0}>Select target server…</option>
               {servers
                 .filter(s => s.status === 'active' && (!selectedSite || s.id !== selectedSite.server_id))
                 .map(server => (
@@ -375,7 +375,7 @@ function StartMigrationModal({ onClose }: { onClose: () => void }) {
           {/* New domain (change_domain only) */}
           {mode === 'change_domain' && (
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Domain mới <span className="text-red-500">*</span></label>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">New domain <span className="text-red-500">*</span></label>
               <div className="relative">
                 <input
                   type="text"
@@ -399,23 +399,23 @@ function StartMigrationModal({ onClose }: { onClose: () => void }) {
 
               {/* DNS status row */}
               {dnsStatus === 'checking' && (
-                <p className="text-xs text-gray-400 mt-1.5 flex items-center gap-1"><Loader2 size={11} className="animate-spin" /> Đang kiểm tra DNS...</p>
+                <p className="text-xs text-gray-400 mt-1.5 flex items-center gap-1"><Loader2 size={11} className="animate-spin" /> Checking DNS...</p>
               )}
               {dnsStatus === 'pointing' && dnsResult && (
                 <p className="text-xs text-emerald-600 mt-1.5 flex items-center gap-1">
-                  <CheckCircle size={11} /> DNS đang trỏ đúng về {dnsResult.server_ip} — sẵn sàng migrate
+                  <CheckCircle size={11} /> DNS points correctly to {dnsResult.server_ip} — ready to migrate
                 </p>
               )}
               {dnsStatus === 'not_pointing' && dnsResult && (
                 <div className="mt-2 p-2.5 bg-amber-50 border border-amber-200 rounded-xl space-y-2">
                   <p className="text-xs text-amber-800 flex items-center gap-1.5">
                     <WifiOff size={11} className="flex-shrink-0" />
-                    DNS chưa trỏ về {dnsResult.server_ip}.
+                    DNS does not point to {dnsResult.server_ip} yet.
                     {dnsResult.resolved_ips && dnsResult.resolved_ips.length > 0 && (
-                      <span className="text-amber-600"> Hiện trỏ về: {dnsResult.resolved_ips.join(', ')}</span>
+                      <span className="text-amber-600"> Currently points to: {dnsResult.resolved_ips.join(', ')}</span>
                     )}
                     {(!dnsResult.resolved_ips || dnsResult.resolved_ips.length === 0) && (
-                      <span className="text-amber-600"> (domain chưa có A record)</span>
+                      <span className="text-amber-600"> (domain has no A record yet)</span>
                     )}
                   </p>
                   <button
@@ -424,22 +424,22 @@ function StartMigrationModal({ onClose }: { onClose: () => void }) {
                     disabled={autoPointing}
                     className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold rounded-lg transition-colors disabled:opacity-60"
                   >
-                    {autoPointing ? <><Loader2 size={12} className="animate-spin" /> Đang trỏ DNS...</> : <><Zap size={12} /> Tự động trỏ DNS về {dnsResult.server_ip}</>}
+                    {autoPointing ? <><Loader2 size={12} className="animate-spin" /> Pointing DNS...</> : <><Zap size={12} /> Auto-point DNS to {dnsResult.server_ip}</>}
                   </button>
                   <p className="text-xs text-amber-600">
                     {dnsResult?.provider_name
                       ? <>Provider: <strong>{dnsResult.provider_name}</strong> ({dnsResult.provider_type})</>
-                      : 'Yêu cầu domain đang dùng DNS provider đã cấu hình (Cloudflare, GoDaddy, Route53...)'}
+                      : 'Requires the domain to use a configured DNS provider (Cloudflare, GoDaddy, Route53...)'}
                   </p>
                 </div>
               )}
               {dnsStatus === 'error' && (
                 <p className="text-xs text-red-500 mt-1.5 flex items-center gap-1">
-                  <AlertCircle size={11} /> Không thể tra cứu DNS — kiểm tra lại tên domain
+                  <AlertCircle size={11} /> Could not look up DNS — check the domain name
                 </p>
               )}
               {dnsStatus === 'idle' && targetServerId === 0 && newDomain.trim().includes('.') && (
-                <p className="text-xs text-gray-400 mt-1">Chọn server đích để kiểm tra DNS tự động</p>
+                <p className="text-xs text-gray-400 mt-1">Select a target server to check DNS automatically</p>
               )}
 
               {/* Auto-point result */}
@@ -454,7 +454,7 @@ function StartMigrationModal({ onClose }: { onClose: () => void }) {
               )}
 
               {dnsStatus === 'idle' && !autoPointResult && (
-                <p className="text-xs text-gray-400 mt-1">Nhập domain để tự động kiểm tra DNS</p>
+                <p className="text-xs text-gray-400 mt-1">Enter a domain to check DNS automatically</p>
               )}
             </div>
           )}
@@ -469,10 +469,10 @@ function StartMigrationModal({ onClose }: { onClose: () => void }) {
                 className="mt-0.5"
               />
               <div>
-                <p className="text-sm font-medium text-gray-700">Tự động cập nhật DNS</p>
+                <p className="text-sm font-medium text-gray-700">Auto-update DNS</p>
                 <p className="text-xs text-gray-500 mt-0.5">
-                  Sau khi migration hoàn tất, hệ thống sẽ tự trỏ A record của domain sang IP server mới
-                  (yêu cầu đã cấu hình DNS Provider).
+                  After the migration completes, the system will point the domain A record to the new server IP
+                  (requires a configured DNS Provider).
                 </p>
               </div>
             </label>
@@ -487,9 +487,9 @@ function StartMigrationModal({ onClose }: { onClose: () => void }) {
               className="mt-0.5"
             />
             <div>
-              <p className="text-sm font-medium text-red-700">Xóa site trên server nguồn sau khi migrate</p>
+              <p className="text-sm font-medium text-red-700">Delete the site from the source server after migrating</p>
               <p className="text-xs text-red-500 mt-0.5">
-                Sẽ xóa toàn bộ files, database, cấu hình Nginx/PHP-FPM và SSL cert của site khỏi server nguồn. <strong>Không thể hoàn tác.</strong>
+                Removes all files, the database, Nginx/PHP-FPM config, and the SSL cert of the site from the source server. <strong>This cannot be undone.</strong>
               </p>
             </div>
           </label>
@@ -498,26 +498,26 @@ function StartMigrationModal({ onClose }: { onClose: () => void }) {
           {mode === 'keep_domain' && (
             <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800">
               <AlertTriangle size={14} className="flex-shrink-0 mt-0.5" />
-              <span>Site sẽ bị <strong>tạm ngưng</strong> trong lúc chuyển đổi database. Thời gian downtime thường dưới 1 phút.</span>
+              <span>The site will be <strong>suspended</strong> during the database switchover. Downtime is usually under 1 minute.</span>
             </div>
           )}
           {mode === 'change_domain' && (
             <div className="flex items-start gap-2 p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-800">
               <Info size={14} className="flex-shrink-0 mt-0.5" />
-              <span>Site nguồn <strong>vẫn hoạt động bình thường</strong>. Kết quả là 2 site chạy song song với 2 domain khác nhau.</span>
+              <span>The source site <strong>keeps running normally</strong>. You end up with 2 sites running in parallel on 2 different domains.</span>
             </div>
           )}
 
           {startMigration.isError && (
             <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
-              {(startMigration.error as Error).message || 'Không thể bắt đầu migration'}
+              {(startMigration.error as Error).message || 'Could not start migration'}
             </div>
           )}
         </div>
 
         <div className="p-4 border-t flex justify-end gap-2">
           <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-xl transition-colors">
-            Huỷ
+            Cancel
           </button>
           <button
             onClick={handleSubmit}
@@ -525,7 +525,7 @@ function StartMigrationModal({ onClose }: { onClose: () => void }) {
             className="px-5 py-2 text-sm bg-blue-600 text-white hover:bg-blue-700 rounded-xl disabled:opacity-50 flex items-center gap-2 font-semibold transition-colors"
           >
             {startMigration.isPending ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
-            {startMigration.isPending ? 'Đang khởi động...' : 'Bắt đầu Migration'}
+            {startMigration.isPending ? 'Starting...' : 'Start Migration'}
           </button>
         </div>
       </div>
@@ -554,7 +554,7 @@ export default function MigrationsPage() {
           <h1 className="text-2xl font-bold text-gray-900 leading-none flex items-center gap-2">
             <ArrowRightLeft size={22} className="text-blue-500" /> Migrations
           </h1>
-          <p className="text-gray-500 text-sm mt-1">Di chuyển WordPress sites giữa các VPS</p>
+          <p className="text-gray-500 text-sm mt-1">Move WordPress sites between VPS servers</p>
         </div>
         {can('sites', 'manage') && (
           <button
@@ -573,8 +573,8 @@ export default function MigrationsPage() {
       ) : migrations.length === 0 ? (
         <div className="bg-white rounded-2xl border border-gray-100 p-14 text-center">
           <ArrowRightLeft size={40} className="mx-auto text-gray-200 mb-4" />
-          <p className="text-gray-500 font-medium">Chưa có migration nào</p>
-          <p className="text-gray-400 text-sm mt-1">Nhấn "New Migration" để di chuyển site sang server mới</p>
+          <p className="text-gray-500 font-medium">No migrations yet</p>
+          <p className="text-gray-400 text-sm mt-1">Click "New Migration" to move a site to a new server</p>
         </div>
       ) : (
         <>
@@ -587,9 +587,9 @@ export default function MigrationsPage() {
                   <th className="text-left px-5 py-3.5 text-xs font-semibold text-gray-400 uppercase tracking-wide">Site</th>
                   <th className="text-left px-5 py-3.5 text-xs font-semibold text-gray-400 uppercase tracking-wide">Servers</th>
                   <th className="text-left px-5 py-3.5 text-xs font-semibold text-gray-400 uppercase tracking-wide">Mode</th>
-                  <th className="text-left px-5 py-3.5 text-xs font-semibold text-gray-400 uppercase tracking-wide w-44">Tiến trình</th>
-                  <th className="text-left px-5 py-3.5 text-xs font-semibold text-gray-400 uppercase tracking-wide">Trạng thái</th>
-                  <th className="text-left px-5 py-3.5 text-xs font-semibold text-gray-400 uppercase tracking-wide">Thời gian</th>
+                  <th className="text-left px-5 py-3.5 text-xs font-semibold text-gray-400 uppercase tracking-wide w-44">Progress</th>
+                  <th className="text-left px-5 py-3.5 text-xs font-semibold text-gray-400 uppercase tracking-wide">Status</th>
+                  <th className="text-left px-5 py-3.5 text-xs font-semibold text-gray-400 uppercase tracking-wide">Time</th>
                   <th className="text-right px-5 py-3.5 text-xs font-semibold text-gray-400 uppercase tracking-wide">Actions</th>
                 </tr>
               </thead>
@@ -621,14 +621,14 @@ export default function MigrationsPage() {
                     </td>
                     <td className="px-5 py-3.5 text-right">
                       <div className="flex items-center justify-end gap-1">
-                        <button onClick={() => setViewId(m.id)} className="p-1.5 text-gray-300 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Xem chi tiết">
+                        <button onClick={() => setViewId(m.id)} className="p-1.5 text-gray-300 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="View details">
                           <Eye size={15} />
                         </button>
                         {m.status === 'running' && can('sites', 'manage') && (
                           <button
-                            onClick={() => { if (confirm('Huỷ migration này?')) cancel.mutate(m.id) }}
+                            onClick={() => { if (confirm('Cancel this migration?')) cancel.mutate(m.id) }}
                             className="p-1.5 text-gray-300 hover:text-orange-600 hover:bg-orange-50 rounded-lg transition-colors"
-                            title="Huỷ"
+                            title="Cancel"
                           >
                             <XCircle size={15} />
                           </button>
@@ -636,17 +636,17 @@ export default function MigrationsPage() {
                         {m.status === 'failed' && can('sites', 'manage') && (
                           m.mode === 'change_domain' ? (
                             <button
-                              onClick={() => { if (confirm(`Hủy đổi domain và dọn dẹp domain mới "${m.new_domain}"?`)) rollback.mutate(m.id) }}
+                              onClick={() => { if (confirm(`Cancel the domain change and clean up the new domain "${m.new_domain}"?`)) rollback.mutate(m.id) }}
                               className="p-1.5 text-gray-300 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors"
-                              title="Hủy đổi domain / dọn dẹp domain mới"
+                              title="Cancel domain change / clean up new domain"
                             >
                               <RotateCcw size={15} />
                             </button>
                           ) : (
                             <button
-                              onClick={() => { if (confirm('Khôi phục site về server nguồn?')) rollback.mutate(m.id) }}
+                              onClick={() => { if (confirm('Restore the site to the source server?')) rollback.mutate(m.id) }}
                               className="p-1.5 text-gray-300 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors"
-                              title="Khôi phục site về server nguồn"
+                              title="Restore site to source server"
                             >
                               <RotateCcw size={15} />
                             </button>
@@ -654,15 +654,15 @@ export default function MigrationsPage() {
                         )}
                         {m.status === 'completed' && !m.source_cleaned_up && m.mode !== 'change_domain' && can('sites', 'manage') && (
                           <button
-                            onClick={() => { if (confirm('Xóa toàn bộ files, DB, configs của site khỏi server nguồn? Không thể hoàn tác!')) cleanupSource.mutate(m.id) }}
+                            onClick={() => { if (confirm('Delete all site files, DB, and configs from the source server? This cannot be undone!')) cleanupSource.mutate(m.id) }}
                             className="p-1.5 text-gray-300 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                            title="Dọn dẹp server nguồn"
+                            title="Clean up source server"
                           >
                             <Trash2 size={15} />
                           </button>
                         )}
                         {m.status === 'completed' && m.source_cleaned_up && m.mode !== 'change_domain' && (
-                          <span className="p-1.5 text-emerald-400" title="Server nguồn đã được dọn dẹp">
+                          <span className="p-1.5 text-emerald-400" title="Source server cleaned up">
                             <CheckCircle size={15} />
                           </span>
                         )}
@@ -698,23 +698,23 @@ export default function MigrationsPage() {
                   <span className="flex items-center gap-1"><Clock size={11} />{new Date(m.started_at).toLocaleDateString('vi-VN')}</span>
                   <div className="flex gap-1">
                     {m.status === 'running' && can('sites', 'manage') && (
-                      <button onClick={() => { if (confirm('Huỷ?')) cancel.mutate(m.id) }} className="p-1 text-orange-400 hover:text-orange-600">
+                      <button onClick={() => { if (confirm('Cancel?')) cancel.mutate(m.id) }} className="p-1 text-orange-400 hover:text-orange-600">
                         <XCircle size={14} />
                       </button>
                     )}
                     {m.status === 'failed' && can('sites', 'manage') && (
                       m.mode === 'change_domain' ? (
-                        <button onClick={() => { if (confirm(`Hủy đổi domain và dọn dẹp domain mới "${m.new_domain}"?`)) rollback.mutate(m.id) }} className="p-1 text-amber-400 hover:text-amber-600" title="Hủy đổi domain">
+                        <button onClick={() => { if (confirm(`Cancel the domain change and clean up the new domain "${m.new_domain}"?`)) rollback.mutate(m.id) }} className="p-1 text-amber-400 hover:text-amber-600" title="Cancel domain change">
                           <RotateCcw size={14} />
                         </button>
                       ) : (
-                        <button onClick={() => { if (confirm('Khôi phục site về server nguồn?')) rollback.mutate(m.id) }} className="p-1 text-amber-400 hover:text-amber-600" title="Khôi phục">
+                        <button onClick={() => { if (confirm('Restore the site to the source server?')) rollback.mutate(m.id) }} className="p-1 text-amber-400 hover:text-amber-600" title="Restore">
                           <RotateCcw size={14} />
                         </button>
                       )
                     )}
                     {m.status === 'completed' && !m.source_cleaned_up && m.mode !== 'change_domain' && can('sites', 'manage') && (
-                      <button onClick={() => { if (confirm('Xóa site khỏi server nguồn? Không thể hoàn tác!')) cleanupSource.mutate(m.id) }} className="p-1 text-red-400 hover:text-red-600" title="Dọn dẹp server nguồn">
+                      <button onClick={() => { if (confirm('Delete the site from the source server? This cannot be undone!')) cleanupSource.mutate(m.id) }} className="p-1 text-red-400 hover:text-red-600" title="Clean up source server">
                         <Trash2 size={14} />
                       </button>
                     )}
@@ -728,7 +728,7 @@ export default function MigrationsPage() {
           {meta && meta.total_pages > 1 && (
             <div className="flex items-center justify-between mt-5">
               <p className="text-sm text-gray-500">
-                Trang {meta.page} / {meta.total_pages} ({meta.total} migrations)
+                Page {meta.page} / {meta.total_pages} ({meta.total} migrations)
               </p>
               <div className="flex gap-2">
                 <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1}

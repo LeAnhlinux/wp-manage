@@ -74,17 +74,17 @@ export default function LoginPage() {
             </div>
           </div>
           <h2 className="text-3xl font-bold text-white leading-snug mb-4">
-            Quản lý VPS &amp; WordPress<br />trong một nơi duy nhất
+            Manage VPS &amp; WordPress<br />all in one place
           </h2>
           <p className="text-slate-400 text-base leading-relaxed">
-            Nền tảng quản lý hosting WordPress chuyên nghiệp — provisioning, bảo mật, giám sát và hơn thế nữa.
+            Professional WordPress hosting management platform — provisioning, security, monitoring, and more.
           </p>
 
           <div className="mt-10 space-y-4">
             {[
               'Provisioning Nginx · PHP-FPM · MariaDB',
-              'SSL tự động với Let\'s Encrypt',
-              'Giám sát realtime CPU · RAM · Disk',
+              'Automatic SSL with Let\'s Encrypt',
+              'Real-time CPU · RAM · Disk monitoring',
               'Backup · Migration · WP-CLI',
             ].map((feature) => (
               <div key={feature} className="flex items-center gap-3">
@@ -117,8 +117,8 @@ export default function LoginPage() {
           {!requires2FA ? (
             <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8">
               <div className="mb-7">
-                <h1 className="text-2xl font-bold text-gray-900">Đăng nhập</h1>
-                <p className="text-gray-500 text-sm mt-1">Chào mừng trở lại! Vui lòng nhập thông tin của bạn.</p>
+                <h1 className="text-2xl font-bold text-gray-900">Sign in</h1>
+                <p className="text-gray-500 text-sm mt-1">Welcome back! Enter your credentials.</p>
               </div>
 
               {error && (
@@ -143,7 +143,7 @@ export default function LoginPage() {
 
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
-                    <label className="block text-sm font-medium text-gray-700">Mật khẩu</label>
+                    <label className="block text-sm font-medium text-gray-700">Password</label>
                   </div>
                   <div className="relative">
                     <input
@@ -175,9 +175,9 @@ export default function LoginPage() {
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
                       </svg>
-                      Đang đăng nhập...
+                      Signing in...
                     </span>
-                  ) : 'Đăng nhập'}
+                  ) : 'Sign in'}
                 </button>
               </form>
             </div>

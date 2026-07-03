@@ -251,11 +251,11 @@ function ChangePasswordModal({ userId, userName, onClose }: { userId: number; us
     e.preventDefault()
     setError('')
     if (newPassword.length < 8) {
-      setError('Mật khẩu phải có ít nhất 8 ký tự')
+      setError('Password must be at least 8 characters')
       return
     }
     if (newPassword !== confirmPassword) {
-      setError('Mật khẩu xác nhận không khớp')
+      setError('Passwords do not match')
       return
     }
     try {
@@ -263,7 +263,7 @@ function ChangePasswordModal({ userId, userName, onClose }: { userId: number; us
       setSuccess(true)
       setTimeout(onClose, 1500)
     } catch {
-      setError('Đổi mật khẩu thất bại. Vui lòng thử lại.')
+      setError('Failed to change password. Try again.')
     }
   }
 
@@ -273,25 +273,25 @@ function ChangePasswordModal({ userId, userName, onClose }: { userId: number; us
         <div className="flex items-center justify-between p-6 border-b">
           <div className="flex items-center gap-2">
             <KeyRound size={18} className="text-amber-600" />
-            <h2 className="text-lg font-semibold">Đổi mật khẩu</h2>
+            <h2 className="text-lg font-semibold">Change Password</h2>
           </div>
           <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-600"><X size={20} /></button>
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
           <p className="text-sm text-gray-500">
-            Đổi mật khẩu cho <span className="font-medium text-gray-800">{userName}</span>
+            Change the password for <span className="font-medium text-gray-800">{userName}</span>
           </p>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Mật khẩu mới</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">New password</label>
             <div className="relative">
               <input
                 type={showNew ? 'text' : 'password'}
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
                 className="w-full px-4 py-2 pr-10 border border-gray-300 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none"
-                placeholder="Tối thiểu 8 ký tự"
+                placeholder="At least 8 characters"
                 autoFocus
               />
               <button type="button" onClick={() => setShowNew(v => !v)}
@@ -300,19 +300,19 @@ function ChangePasswordModal({ userId, userName, onClose }: { userId: number; us
               </button>
             </div>
             {newPassword && newPassword.length < 8 && (
-              <p className="mt-1 text-xs text-red-500">Cần ít nhất 8 ký tự</p>
+              <p className="mt-1 text-xs text-red-500">At least 8 characters required</p>
             )}
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Xác nhận mật khẩu</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Confirm password</label>
             <div className="relative">
               <input
                 type={showConfirm ? 'text' : 'password'}
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 className="w-full px-4 py-2 pr-10 border border-gray-300 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none"
-                placeholder="Nhập lại mật khẩu mới"
+                placeholder="Re-enter new password"
               />
               <button type="button" onClick={() => setShowConfirm(v => !v)}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
@@ -320,7 +320,7 @@ function ChangePasswordModal({ userId, userName, onClose }: { userId: number; us
               </button>
             </div>
             {confirmPassword && newPassword !== confirmPassword && (
-              <p className="mt-1 text-xs text-red-500">Mật khẩu không khớp</p>
+              <p className="mt-1 text-xs text-red-500">Passwords do not match</p>
             )}
           </div>
 
@@ -328,18 +328,18 @@ function ChangePasswordModal({ userId, userName, onClose }: { userId: number; us
             <div className="px-3 py-2 bg-red-50 text-red-700 text-sm rounded-lg">✗ {error}</div>
           )}
           {success && (
-            <div className="px-3 py-2 bg-green-50 text-green-700 text-sm rounded-lg">✓ Đổi mật khẩu thành công!</div>
+            <div className="px-3 py-2 bg-green-50 text-green-700 text-sm rounded-lg">✓ Password changed successfully!</div>
           )}
 
           <div className="flex gap-3 pt-2">
             <button type="submit"
               disabled={updateUser.isPending || success}
               className="flex-1 px-4 py-2 bg-amber-600 text-white font-medium rounded-lg hover:bg-amber-700 disabled:opacity-50 transition-colors">
-              {updateUser.isPending ? 'Đang lưu...' : 'Đổi mật khẩu'}
+              {updateUser.isPending ? 'Saving...' : 'Change Password'}
             </button>
             <button type="button" onClick={onClose}
               className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200">
-              Hủy
+              Cancel
             </button>
           </div>
         </form>

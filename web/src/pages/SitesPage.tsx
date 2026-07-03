@@ -134,14 +134,14 @@ function CreationProgressCard({
 
       {isDone && currentStatus === 'active' && (
         <div className="mt-5 p-4 bg-emerald-50 border border-emerald-200 rounded-xl text-sm text-emerald-700">
-          🎉 <strong>{domain}</strong> đã live!{' '}
-          <Link to={`/sites/${siteId}`} className="underline font-medium">Xem chi tiết →</Link>
+          🎉 <strong>{domain}</strong> is live!{' '}
+          <Link to={`/sites/${siteId}`} className="underline font-medium">View details →</Link>
         </div>
       )}
       {isDone && currentStatus === 'error' && (
         <div className="mt-5 p-4 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
           Site creation failed.{' '}
-          <Link to={`/sites/${siteId}`} className="underline font-medium">Xem chi tiết</Link> để biết lỗi.
+          <Link to={`/sites/${siteId}`} className="underline font-medium">View details</Link> for the error.
         </div>
       )}
     </div>
@@ -236,14 +236,14 @@ export default function SitesPage() {
               : 'Cloudflare'
             setDnsProviderLabel(providerLabel)
             setDnsOffer('offered')
-            setDnsOfferMsg(`Tìm thấy DNS provider cho <strong>${matched.domain}</strong> (${providerLabel}). Tạo A record <code>${domain} → ${server.ip_address}</code> qua ${providerLabel} ngay bây giờ?`)
+            setDnsOfferMsg(`Found a DNS provider for <strong>${matched.domain}</strong> (${providerLabel}). Create A record <code>${domain} → ${server.ip_address}</code> via ${providerLabel} now?`)
           }
         }
       } else {
         setDnsOffer(null)
       }
     } catch {
-      setDnsStatus({ pointing: false, message: 'Không thể kiểm tra DNS', checked: true })
+      setDnsStatus({ pointing: false, message: 'Could not check DNS', checked: true })
     } finally {
       setDnsChecking(false)
     }
@@ -256,10 +256,10 @@ export default function SitesPage() {
     try {
       const res = await autoCreateDNS.mutateAsync({ domain: form.domain, server_ip: server.ip_address })
       setDnsOffer('done')
-      setDnsOfferMsg(`✅ A record đã được ${res.action === 'created' ? 'tạo' : 'cập nhật'}: <code>${form.domain} → ${server.ip_address}</code>. DNS có thể mất vài phút để propagate.`)
+      setDnsOfferMsg(`✅ A record ${res.action === 'created' ? 'created' : 'updated'}: <code>${form.domain} → ${server.ip_address}</code>. DNS may take a few minutes to propagate.`)
     } catch (err: any) {
       setDnsOffer('offered') // revert to offered state so user can retry
-      setDnsOfferMsg(`❌ Lỗi: ${err?.response?.data?.error || 'Không thể tạo A record'}. Thử lại?`)
+      setDnsOfferMsg(`❌ Error: ${err?.response?.data?.error || 'Could not create A record'}. Try again?`)
     }
   }
 
@@ -308,13 +308,13 @@ export default function SitesPage() {
       <div className="flex items-center justify-between mb-7">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 leading-none">Sites</h1>
-          <p className="text-gray-500 text-sm mt-1">{sites.length} site{sites.length !== 1 ? 's' : ''} được quản lý</p>
+          <p className="text-gray-500 text-sm mt-1">{sites.length} site{sites.length !== 1 ? 's' : ''} managed</p>
         </div>
         <button
           onClick={() => setShowCreate(!showCreate)}
           className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-colors text-sm font-semibold shadow-sm shadow-blue-200"
         >
-          <Plus size={16} /> Tạo Site
+          <Plus size={16} /> New Site
         </button>
       </div>
 
@@ -322,7 +322,7 @@ export default function SitesPage() {
       {showCreate && (
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 mb-6">
           <div className="flex items-center justify-between mb-5">
-            <h2 className="text-base font-semibold text-gray-900">Tạo Site Mới</h2>
+            <h2 className="text-base font-semibold text-gray-900">Create New Site</h2>
             <button onClick={() => { setShowCreate(false); setDnsStatus(null); setDnsOffer(null) }} className="text-gray-400 hover:text-gray-600">
               <X size={18} />
             </button>
@@ -331,8 +331,8 @@ export default function SitesPage() {
           {/* Install type */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-5">
             {([
-              { value: 'auto', label: '⚡ Auto Install WordPress', desc: 'Tự động cài WP, tạo DB, Nginx, PHP-FPM + SSL' },
-              { value: 'manual', label: '📦 Upload Source / Import DB', desc: 'Chỉ tạo hạ tầng, bạn tự upload source và import DB' },
+              { value: 'auto', label: '⚡ Auto Install WordPress', desc: 'Automatically installs WP, creates DB, Nginx, PHP-FPM + SSL' },
+              { value: 'manual', label: '📦 Upload Source / Import DB', desc: 'Creates infrastructure only — you upload the source and import the DB' },
             ] as const).map(opt => (
               <button key={opt.value} type="button"
                 onClick={() => setForm({ ...form, install_type: opt.value })}
@@ -357,7 +357,7 @@ export default function SitesPage() {
                     setDnsStatus(null) // reset DNS when server changes (useEffect will re-check)
                   }}
                   className={selectCls} required>
-                  <option value={0}>Chọn server...</option>
+                  <option value={0}>Select server…</option>
                   {servers.filter(s => s.status === 'active').map(s => (
                     <option key={s.id} value={s.id}>{s.name} ({s.ip_address})</option>
                   ))}
@@ -387,7 +387,7 @@ export default function SitesPage() {
                     <button type="button"
                       onClick={() => triggerDNSCheck(form.domain, form.server_id)}
                       disabled={dnsChecking}
-                      title="Kiểm tra DNS"
+                      title="Check DNS"
                       className="px-3 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50 flex items-center gap-1.5 shrink-0">
                       {dnsChecking
                         ? <Loader2 size={14} className="animate-spin" />
@@ -410,7 +410,7 @@ export default function SitesPage() {
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1.5">
                   PHP Version
-                  {phpFetching && <span className="ml-2 text-xs text-gray-400">(đang kiểm tra...)</span>}
+                  {phpFetching && <span className="ml-2 text-xs text-gray-400">(checking...)</span>}
                 </label>
                 {/* If we have server-specific PHP info, show only installed versions */}
                 {installedPHP.length > 0 ? (
@@ -426,7 +426,7 @@ export default function SitesPage() {
                     </select>
                     {!phpVersionOK && (
                       <p className="mt-1.5 text-xs text-red-600">
-                        ⚠️ PHP {form.php_version} chưa được cài trên server này
+                        ⚠️ PHP {form.php_version} is not installed on this server
                       </p>
                     )}
                   </>
@@ -440,7 +440,7 @@ export default function SitesPage() {
                       ))}
                     </select>
                     {form.server_id > 0 && !phpFetching && (
-                      <p className="mt-1.5 text-xs text-gray-400">Chọn server để xem các PHP version đã cài</p>
+                      <p className="mt-1.5 text-xs text-gray-400">Select a server to see installed PHP versions</p>
                     )}
                   </>
                 )}
@@ -486,10 +486,10 @@ export default function SitesPage() {
                 <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-700">
                   <XCircle size={15} className="shrink-0 mt-0.5" />
                   <div>
-                    <p className="font-medium">DNS chưa trỏ về server — đã tắt Auto SSL</p>
+                    <p className="font-medium">DNS does not point to this server — Auto SSL disabled</p>
                     <p className="text-xs mt-0.5 text-amber-600">{dnsStatus.message}</p>
                     <p className="text-xs mt-0.5 text-amber-600">
-                      Trỏ DNS về đúng IP rồi bật lại SSL, hoặc bật thủ công sau khi tạo site.
+                      Point DNS to the correct IP and re-enable SSL, or enable it manually after the site is created.
                     </p>
                   </div>
                 </div>
@@ -518,26 +518,26 @@ export default function SitesPage() {
                           onClick={handleAutoCreateDNS}
                           className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-semibold hover:bg-blue-700 transition-colors"
                         >
-                          <Network size={13} /> Tạo A record
+                          <Network size={13} /> Create A record
                         </button>
                         <button
                           type="button"
                           onClick={() => setDnsOffer('skipped')}
                           className="px-3 py-1.5 text-blue-600 rounded-lg text-xs hover:bg-blue-100 transition-colors"
                         >
-                          Bỏ qua, tạo site thôi
+                          Skip, just create the site
                         </button>
                       </div>
                     )}
                     {dnsOffer === 'creating' && (
                       <div className="flex items-center gap-2 mt-2 text-xs text-blue-500">
                         <Loader2 size={13} className="animate-spin" />
-                        Đang tạo A record qua {dnsProviderLabel}...
+                        Creating A record via {dnsProviderLabel}...
                       </div>
                     )}
                     {dnsOffer === 'done' && (
                       <p className="text-xs mt-1.5 text-emerald-600">
-                        DNS propagation có thể mất 1–5 phút. Bạn vẫn có thể tạo site ngay bây giờ.
+                        DNS propagation can take 1–5 minutes. You can still create the site now.
                       </p>
                     )}
                   </div>
@@ -547,7 +547,7 @@ export default function SitesPage() {
 
             {form.install_type === 'manual' && (
               <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 text-sm text-blue-700">
-                💡 Sau khi tạo xong, vào chi tiết site để <b>upload source .zip</b> và <b>import database .sql</b>
+                💡 After creation, open the site details to <b>upload the source .zip</b> and <b>import the database .sql</b>
               </div>
             )}
 
@@ -561,12 +561,12 @@ export default function SitesPage() {
               <button type="submit" disabled={createSite.isPending || !!domainError}
                 className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:opacity-50 text-sm font-semibold transition-colors">
                 {createSite.isPending ? (
-                  <><Loader2 size={15} className="animate-spin" /> Đang tạo...</>
-                ) : form.install_type === 'manual' ? 'Tạo Site (Manual)' : 'Tạo Site'}
+                  <><Loader2 size={15} className="animate-spin" /> Creating...</>
+                ) : form.install_type === 'manual' ? 'Create Site (Manual)' : 'Create Site'}
               </button>
               <button type="button" onClick={() => setShowCreate(false)}
                 className="px-5 py-2.5 text-gray-500 rounded-xl hover:bg-gray-100 text-sm transition-colors">
-                Huỷ
+                Cancel
               </button>
             </div>
           </form>
@@ -589,7 +589,7 @@ export default function SitesPage() {
           <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
           <input
             type="text"
-            placeholder="Tìm theo domain hoặc server..."
+            placeholder="Search by domain or server…"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="w-full pl-9 pr-4 py-2.5 border border-gray-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-colors"
@@ -637,7 +637,7 @@ export default function SitesPage() {
                     <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-500 to-violet-700 flex items-center justify-center flex-shrink-0">
                       <Globe size={14} className="text-white" />
                     </div>
-                    <Link to={`/sites/${site.id}`} className="font-semibold text-sm text-gray-900 hover:text-blue-600 transition-colors">
+                    <Link to={`/sites/${site.id}`} className="font-mono font-medium text-[13px] text-gray-900 hover:text-blue-600 transition-colors">
                       {site.domain}
                     </Link>
                   </div>
@@ -688,9 +688,9 @@ export default function SitesPage() {
                         try {
                           const res = await autologinMut.mutateAsync(site.id)
                           if (res?.data?.url) window.open(res.data.url, '_blank')
-                          else alert(res?.error || 'Autologin đang được cài đặt. Thử lại sau 30 giây.')
+                          else alert(res?.error || 'Autologin is being set up. Try again in 30 seconds.')
                         } catch (e: any) {
-                          alert(e?.response?.data?.error || 'Không thể mở WP Admin.')
+                          alert(e?.response?.data?.error || 'Could not open WP Admin.')
                         }
                       }}
                       disabled={autologinMut.isPending}
@@ -699,7 +699,7 @@ export default function SitesPage() {
                       {autologinMut.isPending ? <Loader2 size={14} className="animate-spin" /> : <ExternalLink size={14} />}
                     </button>
                     <button
-                      onClick={() => { if (confirm(`Xoá site ${site.domain}?`)) deleteSite.mutate(site.id) }}
+                      onClick={() => { if (confirm(`Delete site ${site.domain}?`)) deleteSite.mutate(site.id) }}
                       disabled={deleteSite.isPending}
                       title="Delete"
                       className="p-1.5 text-gray-300 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
@@ -714,7 +714,7 @@ export default function SitesPage() {
                 <td colSpan={6} className="px-6 py-14 text-center">
                   <Globe size={32} className="text-gray-200 mx-auto mb-3" />
                   <p className="text-gray-400 text-sm">
-                    {sites.length === 0 ? 'Chưa có site nào.' : 'Không có site nào khớp.'}
+                    {sites.length === 0 ? 'No sites yet.' : 'No sites match your filters.'}
                   </p>
                 </td>
               </tr>
@@ -766,9 +766,9 @@ export default function SitesPage() {
                     try {
                       const res = await autologinMut.mutateAsync(site.id)
                       if (res?.data?.url) window.open(res.data.url, '_blank')
-                      else alert(res?.error || 'Autologin đang được cài đặt. Thử lại sau 30 giây.')
+                      else alert(res?.error || 'Autologin is being set up. Try again in 30 seconds.')
                     } catch (e: any) {
-                      alert(e?.response?.data?.error || 'Không thể mở WP Admin.')
+                      alert(e?.response?.data?.error || 'Could not open WP Admin.')
                     }
                   }}
                   disabled={autologinMut.isPending}
@@ -776,7 +776,7 @@ export default function SitesPage() {
                   className="p-1.5 text-gray-300 hover:text-violet-600 rounded-lg transition-colors disabled:opacity-40">
                   {autologinMut.isPending ? <Loader2 size={13} className="animate-spin" /> : <ExternalLink size={13} />}
                 </button>
-                <button onClick={() => { if (confirm(`Xoá site ${site.domain}?`)) deleteSite.mutate(site.id) }}
+                <button onClick={() => { if (confirm(`Delete site ${site.domain}?`)) deleteSite.mutate(site.id) }}
                   disabled={deleteSite.isPending}
                   title="Delete"
                   className="p-1.5 text-gray-300 hover:text-red-600 rounded-lg transition-colors disabled:opacity-40">
@@ -790,7 +790,7 @@ export default function SitesPage() {
           <div className="bg-white rounded-2xl border border-gray-100 p-10 text-center">
             <Globe size={32} className="text-gray-200 mx-auto mb-3" />
             <p className="text-gray-400 text-sm">
-              {sites.length === 0 ? 'Chưa có site nào.' : 'Không có site nào khớp.'}
+              {sites.length === 0 ? 'No sites yet.' : 'No sites match your filters.'}
             </p>
           </div>
         )}
