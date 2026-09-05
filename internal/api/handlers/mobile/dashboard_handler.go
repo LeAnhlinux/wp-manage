@@ -119,10 +119,16 @@ func (h *DashboardHandler) Overview(c *fiber.Ctx) error {
 			LastHeartbeat: s.LastHeartbeat,
 			SitesCount:   len(s.Sites),
 		}
-		// Metrics come from the last heartbeat stored on the server row
-		// (UpdateHeartbeat stores cpu/ram/disk via gob in a text column — reuse via raw query)
-		h.db.Raw("SELECT cpu_usage, ram_usage, disk_usage FROM server_metrics WHERE server_id = ? ORDER BY recorded_at DESC LIMIT 1", s.ID).
-			Scan(&item.Metrics)
+		// Metrics come straight off the server row: UpdateHeartbeat caches the
+		// latest cpu/ram/disk there on every heartbeat, precisely so the dashboard
+		// does not have to touch the time-series table. This used to run one
+		// ORDER BY ... LIMIT 1 query per server against server_metrics — an N+1 that
+		// returned these exact numbers from a table that grows by ~1M rows/server/year.
+		item.Metrics = models.MobileServerMetrics{
+			CPUUsage:  s.CPUUsage,
+			RAMUsage:  s.RAMUsage,
+			DiskUsage: s.DiskUsage,
+		}
 		serverItems = append(serverItems, item)
 	}
 

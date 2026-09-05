@@ -187,20 +187,18 @@ func (s *AuthService) Enable2FA(userID uint64) (*models.TwoFactorSetup, error) {
 	// Generate 10 recovery codes
 	codes := make([]string, 10)
 	for i := range codes {
-		b := make([]byte, 4)
+		b := make([]byte, recoveryCodeBytes)
 		rand.Read(b)
 		codes[i] = hex.EncodeToString(b)
 	}
 
-	// Store hashed recovery codes
+	// Store hashed recovery codes. SHA-256, not bcrypt — see consumeRecoveryCode.
 	s.db.Where("user_id = ?", userID).Delete(&models.RecoveryCode{})
+	rows := make([]models.RecoveryCode, 0, len(codes))
 	for _, code := range codes {
-		hash, _ := utils.HashPassword(code)
-		s.db.Create(&models.RecoveryCode{
-			UserID:   userID,
-			CodeHash: hash,
-		})
+		rows = append(rows, models.RecoveryCode{UserID: userID, CodeHash: hashToken(code)})
 	}
+	s.db.Create(&rows)
 
 	return &models.TwoFactorSetup{
 		Secret:        key.Secret(),
@@ -236,16 +234,44 @@ func (s *AuthService) Disable2FA(userID uint64) error {
 	}).Error
 }
 
-func (s *AuthService) useRecoveryCode(userID uint64, code string) bool {
-	var codes []models.RecoveryCode
-	s.db.Where("user_id = ? AND used = false", userID).Find(&codes)
-	for _, rc := range codes {
-		if utils.CheckPassword(code, rc.CodeHash) {
-			s.db.Model(&rc).Update("used", true)
-			return true
+// recoveryCodeBytes is the entropy behind each recovery code. This was 4 bytes
+// (32 bits), which is why the codes had to sit behind bcrypt: 4 billion
+// candidates is trivially enumerable offline if the database leaks. 10 bytes
+// (80 bits, 20 hex characters) is far past brute-force range, which is what makes
+// a fast hash safe here.
+const recoveryCodeBytes = 10
+
+// consumeRecoveryCode marks a matching unused recovery code as used and reports
+// whether one was found. Shared by the panel and mobile auth services.
+//
+// Codes are machine-generated, single-use and high-entropy, so bcrypt's work
+// factor protects nothing here while costing a great deal: verification used to
+// run up to 10 sequential bcrypt(cost 14) comparisons — several seconds of pegged
+// CPU for a *wrong* code, on a path the rate limiter does not cover (it only
+// applies to API-key traffic). SHA-256 makes it one indexed lookup.
+//
+// Codes issued before this change are bcrypt hashes and keep working through the
+// legacy branch; they are replaced the next time the user sets up 2FA.
+func consumeRecoveryCode(db *gorm.DB, userID uint64, code string) bool {
+	var rc models.RecoveryCode
+	if err := db.Where("user_id = ? AND used = false AND code_hash = ?", userID, hashToken(code)).
+		First(&rc).Error; err == nil {
+		return db.Model(&rc).Update("used", true).Error == nil
+	}
+
+	// Legacy bcrypt hashes ($2a$/$2b$/$2y$ prefix) can only be compared one by one.
+	var legacy []models.RecoveryCode
+	db.Where("user_id = ? AND used = false AND code_hash LIKE '$2%'", userID).Find(&legacy)
+	for _, l := range legacy {
+		if utils.CheckPassword(code, l.CodeHash) {
+			return db.Model(&l).Update("used", true).Error == nil
 		}
 	}
 	return false
+}
+
+func (s *AuthService) useRecoveryCode(userID uint64, code string) bool {
+	return consumeRecoveryCode(s.db, userID, code)
 }
 
 func (s *AuthService) GetUserByID(id uint64) (*models.User, error) {

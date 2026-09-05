@@ -291,15 +291,7 @@ func hashToken(raw string) string {
 }
 
 func (s *MobileAuthService) useRecoveryCode(userID uint64, code string) bool {
-	var codes []models.RecoveryCode
-	s.db.Where("user_id = ? AND used = false", userID).Find(&codes)
-	for _, rc := range codes {
-		if utils.CheckPassword(code, rc.CodeHash) {
-			s.db.Model(&rc).Update("used", true)
-			return true
-		}
-	}
-	return false
+	return consumeRecoveryCode(s.db, userID, code)
 }
 
 // validateTOTP reuses totp.Validate from the pquerna/otp package which is

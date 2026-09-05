@@ -68,6 +68,35 @@ func RunManualMigrations(db *gorm.DB) {
 	db.Exec("ALTER TABLE transfer_jobs MODIFY COLUMN IF EXISTS discovered_sites LONGTEXT")
 	db.Exec("ALTER TABLE transfer_jobs MODIFY COLUMN IF EXISTS target_php_versions LONGTEXT")
 	db.Exec("ALTER TABLE transfer_jobs MODIFY COLUMN IF EXISTS selected_sites LONGTEXT")
+
+	// --- Composite indexes for the hot query paths -------------------------------
+	// GORM's `index` tag only ever produces single-column indexes, so before this
+	// block the schema had none. Each query below filters on several columns and/or
+	// sorts by one, which a single-column index cannot serve: MariaDB range-scans
+	// one column then filters the rest row by row, and sorts with a filesort.
+	// These are pure additions — no column or data changes.
+
+	// Agent task dispatch (SiteService.GetPendingTasks). The hottest query in the
+	// system: every agent polls it every 3 seconds, and task_queue grows with
+	// operator activity, so an unindexed scan gets slower without bound.
+	db.Exec("ALTER TABLE task_queue ADD INDEX IF NOT EXISTS idx_tq_dispatch (server_id, status, created_at)")
+	// Stale-task requeue in the same function, and the retention sweep.
+	db.Exec("ALTER TABLE task_queue ADD INDEX IF NOT EXISTS idx_tq_stale (status, updated_at)")
+
+	// Dashboard metrics chart: WHERE server_id = ? AND recorded_at >= ?
+	// (mobile.MetricsHistory), the latest-metric lookup, and the retention sweep.
+	db.Exec("ALTER TABLE server_metrics ADD INDEX IF NOT EXISTS idx_sm_server_time (server_id, recorded_at)")
+
+	// Uptime history: WHERE check_id = ? ORDER BY created_at DESC LIMIT 100,
+	// plus CleanupOldLogs' WHERE created_at < ?.
+	db.Exec("ALTER TABLE uptime_logs ADD INDEX IF NOT EXISTS idx_ul_check_time (check_id, created_at)")
+
+	// Activity log list (ORDER BY created_at DESC with no filter — the default
+	// panel view) and the daily retention sweep.
+	db.Exec("ALTER TABLE activity_logs ADD INDEX IF NOT EXISTS idx_al_created (created_at)")
+
+	// Malware scan history: WHERE site_id = ? ORDER BY started_at DESC.
+	db.Exec("ALTER TABLE malware_scans ADD INDEX IF NOT EXISTS idx_ms_site_started (site_id, started_at)")
 }
 
 func AutoMigrate(db *gorm.DB) error {

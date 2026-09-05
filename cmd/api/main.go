@@ -135,7 +135,7 @@ func main() {
 		db, serverService, siteService, uptimeService,
 		alertService, activityService, backupService, migrationService, securityService,
 	)
-	mobileServerHandler := mobileHandlers.NewServerHandler(db, serverService, alertService)
+	mobileServerHandler := mobileHandlers.NewServerHandler(db, serverService, alertService, userService)
 	mobileSiteHandler := mobileHandlers.NewSiteHandler(db, siteService, uptimeService, backupService)
 	mobileMonitoringHandler := mobileHandlers.NewMonitoringHandler(db, uptimeService, alertService, activityService, serverService)
 	mobileOperationsHandler := mobileHandlers.NewOperationsHandler(db, backupService, securityService, migrationService, siteService, fileService)
@@ -209,6 +209,12 @@ func main() {
 
 	activityCleanupWorker := workers.NewActivityCleanupWorker(activityService)
 	activityCleanupWorker.Start()
+
+	// Prunes task_queue, server_metrics and uptime_logs, none of which had any
+	// retention before — task_queue in particular sets the cost of the agent poll
+	// that every server runs every 3 seconds.
+	retentionWorker := workers.NewRetentionWorker(db)
+	retentionWorker.Start()
 
 	autoUpdateWorker := workers.NewAutoUpdateWorker(db)
 	autoUpdateWorker.Start()

@@ -8,10 +8,19 @@ type MessageHandler = (data: unknown) => void
 export function useWebSocket(channels: string[], onMessage?: MessageHandler) {
   const wsRef = useRef<WebSocket | null>(null)
   const [connected, setConnected] = useState(false)
-  const [lastMessage, setLastMessage] = useState<WebSocketMessage | null>(null)
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const channelsRef = useRef(channels)
   channelsRef.current = channels
+
+  // Callers pass a fresh array literal on every render, so `channels` identity is
+  // never stable. Key the resubscribe effect on the contents instead — with the
+  // raw array as the dep, the effect fired on EVERY render and sent another
+  // `subscribe` frame; the server answers a dashboard:metrics subscribe by
+  // replaying its whole metrics cache, each replayed message updates state, and
+  // that render resubscribes again. A self-sustaining loop bounded only by network
+  // round-trip time, hammering the browser and the API for as long as the tab was
+  // open.
+  const channelKey = channels.join('|')
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return
@@ -30,7 +39,9 @@ export function useWebSocket(channels: string[], onMessage?: MessageHandler) {
       ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data) as WebSocketMessage
-          setLastMessage(msg)
+          // Deliberately no `setLastMessage` here. It existed but was never read by
+          // any consumer, and forcing a re-render per inbound message was one half
+          // of the resubscribe loop described above.
           onMessage?.(msg.data)
         } catch {
           // ignore invalid messages
@@ -66,16 +77,16 @@ export function useWebSocket(channels: string[], onMessage?: MessageHandler) {
     }
   }, [connect])
 
-  // Re-subscribe when channels change
+  // Re-subscribe only when the channel list actually changes (see channelKey).
   useEffect(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
-      channels.forEach(channel => {
+      channelsRef.current.forEach(channel => {
         wsRef.current?.send(JSON.stringify({ action: 'subscribe', channel }))
       })
     }
-  }, [channels])
+  }, [channelKey])
 
-  return { connected, lastMessage }
+  return { connected }
 }
 
 // Hook specifically for real-time server metrics
@@ -191,18 +202,26 @@ export function useDashboardMetrics(initialServers?: InitialServer[]) {
 
   // Build an allow-set of known server IDs so WebSocket pushes from stale/
   // removed agents (still running on the VPS) are silently dropped.
-  const knownServerIds = new Set(initialServers?.map(s => s.id) ?? [])
+  //
+  // Held in a ref, not a plain const: handleMessage is memoized (it must be, or
+  // the socket would be torn down and reopened on every render), so a captured
+  // Set would freeze at the value from the render that created the callback.
+  // Because the memo key was the server *count*, deleting one server and adding
+  // another left the count unchanged and the callback kept filtering against the
+  // old IDs — the new server's metrics were silently dropped. A ref is read at
+  // call time, so it is always current.
+  const knownServerIds = useRef<Set<number>>(new Set())
+  knownServerIds.current = new Set(initialServers?.map(s => s.id) ?? [])
 
   const handleMessage = useCallback((data: unknown) => {
     const d = data as { server_id: number; server_name: string; ip_address: string; cpu_usage: number; ram_usage: number; disk_usage: number; uptime: number; status: string }
-    if (d?.server_id && knownServerIds.has(d.server_id)) {
+    if (d?.server_id && knownServerIds.current.has(d.server_id)) {
       setMetrics(prev => ({
         ...prev,
         [d.server_id]: d,
       }))
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialServers?.length])
+  }, [])
 
   const { connected } = useWebSocket(['dashboard:metrics'], handleMessage)
 

@@ -12,10 +12,31 @@ type ServerHandler struct {
 	db        *gorm.DB
 	serverSvc *services.ServerService
 	alertSvc  *services.AlertService
+	userSvc   *services.UserService
 }
 
-func NewServerHandler(db *gorm.DB, serverSvc *services.ServerService, alertSvc *services.AlertService) *ServerHandler {
-	return &ServerHandler{db: db, serverSvc: serverSvc, alertSvc: alertSvc}
+func NewServerHandler(db *gorm.DB, serverSvc *services.ServerService, alertSvc *services.AlertService, userSvc *services.UserService) *ServerHandler {
+	return &ServerHandler{db: db, serverSvc: serverSvc, alertSvc: alertSvc, userSvc: userSvc}
+}
+
+// serverIDWithAccess parses :id and enforces the same server-scoping that
+// ServerService.List applies to the collection endpoint. Without it, any
+// authenticated user — including a viewer with no servers assigned — could read
+// another tenant's server details, service status, metrics history and alerts
+// just by changing the id in the URL.
+func (h *ServerHandler) serverIDWithAccess(c *fiber.Ctx) (uint64, error) {
+	id, err := c.ParamsInt("id")
+	if err != nil || id <= 0 {
+		return 0, c.Status(400).JSON(models.MobileErr("BAD_REQUEST", "Invalid server id"))
+	}
+	userID, _ := c.Locals("user_id").(uint64)
+	role, _ := c.Locals("role").(string)
+	if !h.userSvc.HasServerAccess(userID, role, uint64(id)) {
+		// 404 rather than 403: do not confirm that a server id exists to someone
+		// who cannot see it.
+		return 0, c.Status(404).JSON(models.MobileErr("NOT_FOUND", "Server not found"))
+	}
+	return uint64(id), nil
 }
 
 // List godoc
@@ -34,6 +55,13 @@ func (h *ServerHandler) List(c *fiber.Ctx) error {
 		return c.Status(500).JSON(models.MobileErr("SERVER_ERROR", err.Error()))
 	}
 
+	// One batched metrics lookup for the whole page instead of one query per server.
+	serverIDs := make([]uint64, 0, len(servers))
+	for _, s := range servers {
+		serverIDs = append(serverIDs, s.ID)
+	}
+	metrics := h.latestMetricsFor(serverIDs)
+
 	items := make([]models.MobileServerItem, 0, len(servers))
 	for _, s := range servers {
 		item := models.MobileServerItem{
@@ -45,8 +73,8 @@ func (h *ServerHandler) List(c *fiber.Ctx) error {
 			OS:            s.OS,
 			LastHeartbeat: s.LastHeartbeat,
 			SitesCount:    len(s.Sites),
+			Metrics:       metrics[s.ID], // zero value when the server has no metrics yet
 		}
-		h.fillMetrics(s.ID, &item.Metrics)
 		items = append(items, item)
 	}
 
@@ -56,9 +84,9 @@ func (h *ServerHandler) List(c *fiber.Ctx) error {
 // Detail godoc
 // GET /api/mobile/v1/servers/:id
 func (h *ServerHandler) Detail(c *fiber.Ctx) error {
-	id, err := c.ParamsInt("id")
-	if err != nil {
-		return c.Status(400).JSON(models.MobileErr("BAD_REQUEST", "Invalid server id"))
+	id, accessErr := h.serverIDWithAccess(c)
+	if accessErr != nil {
+		return accessErr
 	}
 
 	server, err := h.serverSvc.GetByID(uint64(id))
@@ -99,9 +127,9 @@ func (h *ServerHandler) Detail(c *fiber.Ctx) error {
 // GET /api/mobile/v1/servers/:id/services
 // Returns service health status (nginx, php-fpm, mariadb, redis).
 func (h *ServerHandler) Services(c *fiber.Ctx) error {
-	id, err := c.ParamsInt("id")
-	if err != nil {
-		return c.Status(400).JSON(models.MobileErr("BAD_REQUEST", "Invalid server id"))
+	id, accessErr := h.serverIDWithAccess(c)
+	if accessErr != nil {
+		return accessErr
 	}
 
 	// Read from last known task output or heartbeat ping
@@ -138,9 +166,9 @@ func (h *ServerHandler) Services(c *fiber.Ctx) error {
 // MetricsHistory godoc
 // GET /api/mobile/v1/servers/:id/metrics/history?hours=24
 func (h *ServerHandler) MetricsHistory(c *fiber.Ctx) error {
-	id, err := c.ParamsInt("id")
-	if err != nil {
-		return c.Status(400).JSON(models.MobileErr("BAD_REQUEST", "Invalid server id"))
+	id, accessErr := h.serverIDWithAccess(c)
+	if accessErr != nil {
+		return accessErr
 	}
 	hours := c.QueryInt("hours", 24)
 	if hours > 168 {
@@ -170,9 +198,9 @@ func (h *ServerHandler) MetricsHistory(c *fiber.Ctx) error {
 // AlertHistory godoc
 // GET /api/mobile/v1/servers/:id/alerts
 func (h *ServerHandler) AlertHistory(c *fiber.Ctx) error {
-	id, err := c.ParamsInt("id")
-	if err != nil {
-		return c.Status(400).JSON(models.MobileErr("BAD_REQUEST", "Invalid server id"))
+	id, accessErr := h.serverIDWithAccess(c)
+	if accessErr != nil {
+		return accessErr
 	}
 
 	history, err := h.alertSvc.GetHistory(uint64(id), 50)
@@ -185,4 +213,43 @@ func (h *ServerHandler) AlertHistory(c *fiber.Ctx) error {
 func (h *ServerHandler) fillMetrics(serverID uint64, m *models.MobileServerMetrics) {
 	h.db.Raw(`SELECT cpu_usage, ram_usage, disk_usage, uptime_sec
 		FROM server_metrics WHERE server_id = ? ORDER BY recorded_at DESC LIMIT 1`, serverID).Scan(m)
+}
+
+// latestMetricsFor returns the most recent metric row for each of serverIDs in a
+// single query. List() used to call fillMetrics per server — an N+1 against
+// server_metrics, which grows by ~1M rows per server per year. The cached
+// cpu/ram/disk on the servers row cannot replace this outright because uptime_sec
+// is not cached there, so batch the lookup instead of dropping the field.
+func (h *ServerHandler) latestMetricsFor(serverIDs []uint64) map[uint64]models.MobileServerMetrics {
+	out := make(map[uint64]models.MobileServerMetrics, len(serverIDs))
+	if len(serverIDs) == 0 {
+		return out
+	}
+
+	var rows []struct {
+		ServerID  uint64
+		CPUUsage  float64
+		RAMUsage  float64
+		DiskUsage float64
+		UptimeSec int64
+	}
+	// ROW_NUMBER() picks the newest row per server in one pass; the
+	// idx_sm_server_time (server_id, recorded_at) index feeds the partition
+	// ordering directly.
+	h.db.Raw(`
+		SELECT server_id, cpu_usage, ram_usage, disk_usage, uptime_sec FROM (
+			SELECT server_id, cpu_usage, ram_usage, disk_usage, uptime_sec,
+			       ROW_NUMBER() OVER (PARTITION BY server_id ORDER BY recorded_at DESC) AS rn
+			FROM server_metrics WHERE server_id IN ?
+		) t WHERE rn = 1`, serverIDs).Scan(&rows)
+
+	for _, r := range rows {
+		out[r.ServerID] = models.MobileServerMetrics{
+			CPUUsage:  r.CPUUsage,
+			RAMUsage:  r.RAMUsage,
+			DiskUsage: r.DiskUsage,
+			UptimeSec: r.UptimeSec,
+		}
+	}
+	return out
 }

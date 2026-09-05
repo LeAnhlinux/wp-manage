@@ -92,8 +92,10 @@ export default function BackupsPage() {
     pollIntervalRef.current = setInterval(async () => {
       elapsed += 4000
       try {
+        // refetchBackups() alone updates the cache that getQueryData reads below.
+        // An invalidateQueries here marked the same active query stale and fired a
+        // SECOND request each tick — 30 req/min instead of 15, for up to 5 minutes.
         await refetchBackups()
-        await queryClient.invalidateQueries({ queryKey: ['backups'] })
         // Check if the backup now has a site_id (site record created by TaskComplete)
         const updated = queryClient.getQueryData<{ data: Backup[] }>(['backups', page])
         const b = updated?.data?.find(b => b.id === backupId)

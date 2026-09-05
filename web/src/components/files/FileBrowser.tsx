@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useMemo } from 'react'
 import {
   Folder, File, ChevronRight, Home, Upload, FolderPlus, FilePlus,
   Download, Trash2, Edit3, Lock, MoreVertical, Search,
@@ -399,18 +399,28 @@ export default function FileBrowser({ siteId }: Props) {
     }
   }
 
+  // Memoized because this component holds ~22 pieces of state: without it, every
+  // keystroke in the rename box, every checkbox and every context menu re-copied
+  // and re-sorted the whole directory with localeCompare. WordPress upload and
+  // plugin directories routinely hold hundreds to thousands of entries, and this
+  // is the one list in the app that is not server-paginated.
+  const sortedFiles = useMemo(
+    () =>
+      files
+        ? [...files].sort((a, b) => {
+            if (a.is_dir && !b.is_dir) return -1
+            if (!a.is_dir && b.is_dir) return 1
+            return a.name.localeCompare(b.name)
+          })
+        : [],
+    [files]
+  )
+
   // If editing a file, show the editor
   if (editingFile) {
     return <FileEditor siteId={siteId} filePath={editingFile} onClose={() => setEditingFile(null)} />
   }
 
-  const sortedFiles = files
-    ? [...files].sort((a, b) => {
-        if (a.is_dir && !b.is_dir) return -1
-        if (!a.is_dir && b.is_dir) return 1
-        return a.name.localeCompare(b.name)
-      })
-    : []
 
   const allSelected = sortedFiles.length > 0 && sortedFiles.every(f => selected.has(f.path))
   const someSelected = selected.size > 0

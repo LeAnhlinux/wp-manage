@@ -377,9 +377,14 @@ export function useCheckServices(serverId: number) {
         return [] as ServiceStatus[]
       }
     },
-    // Don't auto-fetch on mount — user must click "Refresh" explicitly.
-    // The backend call is synchronous (WaitForTaskComplete) and can block 10-30s.
-    enabled: false,
+    // This call is synchronous server-side (WaitForTaskComplete) and can block
+    // 10-30s, so it must not be repeated casually. It used to be `enabled: false`
+    // with ServerDetailPage calling refetch() in a mount effect — but refetch()
+    // ignores BOTH `enabled` and `staleTime`, so every visit to a server page fired
+    // the blocking call again, even seconds apart. Letting the query enable itself
+    // keeps the load-on-open behaviour while allowing staleTime to suppress the
+    // repeats.
+    enabled: serverId > 0,
     staleTime: 60_000,
   })
 }

@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, lazy, Suspense } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, Globe, Lock, LockOpen, ExternalLink,
@@ -13,24 +13,28 @@ import { formatDate } from '@/lib/utils'
 import FileBrowser from '@/components/files/FileBrowser'
 
 import { StatCard } from './site-tabs/shared'
-import { OverviewTab } from './site-tabs/OverviewTab'
-import { StagingPanel } from './site-tabs/StagingPanel'
-import { UpdatesPanel } from './site-tabs/UpdatesPanel'
-import { DatabasePanel } from './site-tabs/DatabasePanel'
-import { PerformancePanel } from './site-tabs/PerformancePanel'
-import { ImagesPanel } from './site-tabs/ImagesPanel'
-import { MultisitePanel } from './site-tabs/MultisitePanel'
-import { DomainsPanel } from './site-tabs/DomainsPanel'
-import { RedisPanel } from './site-tabs/RedisPanel'
-import { CronPanel } from './site-tabs/CronPanel'
-import { SFTPPanel } from './site-tabs/SFTPPanel'
-import { WAFPanel } from './site-tabs/WAFPanel'
-import { SecurityPanel } from './site-tabs/SecurityPanel'
-import { WPCLIPanel } from './site-tabs/WPCLIPanel'
-import { CachePanel } from './site-tabs/CachePanel'
-import { SSLPanel } from './site-tabs/SSLPanel'
-import { BackupPanel } from './site-tabs/BackupPanel'
-import { ResourceLimitsPanel } from './site-tabs/ResourceLimitsPanel'
+
+// Tab panels are code-split: 18 panels live on this page but only one is ever
+// mounted, and together they were ~4.3k lines sitting in the entry chunk. They are
+// named exports, so each import is mapped onto `default` for React.lazy.
+const OverviewTab = lazy(() => import('./site-tabs/OverviewTab').then(m => ({ default: m.OverviewTab })))
+const StagingPanel = lazy(() => import('./site-tabs/StagingPanel').then(m => ({ default: m.StagingPanel })))
+const UpdatesPanel = lazy(() => import('./site-tabs/UpdatesPanel').then(m => ({ default: m.UpdatesPanel })))
+const DatabasePanel = lazy(() => import('./site-tabs/DatabasePanel').then(m => ({ default: m.DatabasePanel })))
+const PerformancePanel = lazy(() => import('./site-tabs/PerformancePanel').then(m => ({ default: m.PerformancePanel })))
+const ImagesPanel = lazy(() => import('./site-tabs/ImagesPanel').then(m => ({ default: m.ImagesPanel })))
+const MultisitePanel = lazy(() => import('./site-tabs/MultisitePanel').then(m => ({ default: m.MultisitePanel })))
+const DomainsPanel = lazy(() => import('./site-tabs/DomainsPanel').then(m => ({ default: m.DomainsPanel })))
+const RedisPanel = lazy(() => import('./site-tabs/RedisPanel').then(m => ({ default: m.RedisPanel })))
+const CronPanel = lazy(() => import('./site-tabs/CronPanel').then(m => ({ default: m.CronPanel })))
+const SFTPPanel = lazy(() => import('./site-tabs/SFTPPanel').then(m => ({ default: m.SFTPPanel })))
+const WAFPanel = lazy(() => import('./site-tabs/WAFPanel').then(m => ({ default: m.WAFPanel })))
+const SecurityPanel = lazy(() => import('./site-tabs/SecurityPanel').then(m => ({ default: m.SecurityPanel })))
+const WPCLIPanel = lazy(() => import('./site-tabs/WPCLIPanel').then(m => ({ default: m.WPCLIPanel })))
+const CachePanel = lazy(() => import('./site-tabs/CachePanel').then(m => ({ default: m.CachePanel })))
+const SSLPanel = lazy(() => import('./site-tabs/SSLPanel').then(m => ({ default: m.SSLPanel })))
+const BackupPanel = lazy(() => import('./site-tabs/BackupPanel').then(m => ({ default: m.BackupPanel })))
+const ResourceLimitsPanel = lazy(() => import('./site-tabs/ResourceLimitsPanel').then(m => ({ default: m.ResourceLimitsPanel })))
 
 type TabId = 'overview' | 'files' | 'staging' | 'updates' | 'database' | 'performance' |
   'multisite' | 'images' | 'domains' | 'redis' | 'cron' | 'sftp' | 'security' |
@@ -218,6 +222,9 @@ export default function SiteDetailPage() {
 
         {/* Right content */}
         <div className="flex-1 min-w-0">
+          {/* Panels are lazy-loaded; this keeps the page frame visible while a tab's
+              chunk is fetched instead of blanking the whole route. */}
+          <Suspense fallback={<div className="py-12 text-center text-sm text-gray-500">Loading…</div>}>
           {activeTab === 'overview' && (
             <OverviewTab site={site} onDeleted={() => navigate('/sites')} onMessage={showMsg} canManage={can('sites', 'manage')} />
           )}
@@ -243,6 +250,7 @@ export default function SiteDetailPage() {
           )}
           {activeTab === 'wpcli' && <WPCLIPanel siteId={site.id} canManage={can('sites', 'manage')} />}
           {activeTab === 'cache' && <CachePanel siteId={site.id} canManage={can('sites', 'manage')} domain={site.domain} />}
+          </Suspense>
         </div>
 
       </div>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, Server, Globe, HardDrive, Cpu, MemoryStick, Clock, Wifi, WifiOff,
@@ -51,10 +51,9 @@ export default function ServerDetailPage() {
   const { data: servicesData, isLoading: servicesLoading, refetch: refetchServices, isFetching: servicesFetching } = useCheckServices(serverId)
   const installService = useInstallService(serverId)
 
-  // Auto-check services on mount
-  useEffect(() => {
-    refetchServices()
-  }, [serverId])
+  // No mount effect here: useCheckServices now enables itself, so the data loads
+  // on open and its staleTime actually suppresses repeat fetches. Calling
+  // refetch() from an effect bypassed both.
 
   if (isLoading) {
     return (
