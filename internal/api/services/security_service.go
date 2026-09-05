@@ -3,6 +3,7 @@ package services
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -116,6 +117,26 @@ func (s *SecurityService) UpdateWAFConfig(siteID uint64, req models.UpdateWAFReq
 
 // --- Malware Scan ---
 
+// failStaleScans marks scans still 'running' after maxAge as failed. The agent
+// only ever writes a terminal status by POSTing back, so a restarted or wedged
+// agent leaves the row 'running' forever — and because StartMalwareScan refuses
+// to start while one is running, that site could never be scanned again, with no
+// way to clear it from the UI. Mirrors failStaleRollouts in rollout_service.go.
+func (s *SecurityService) failStaleScans(siteID uint64, maxAge time.Duration) {
+	cutoff := time.Now().Add(-maxAge)
+	now := time.Now()
+	res := s.db.Model(&models.MalwareScan{}).
+		Where("site_id = ? AND status = ? AND started_at < ?", siteID, "running", cutoff).
+		Updates(map[string]interface{}{
+			"status":       "failed",
+			"completed_at": &now,
+			"error":        "Scan did not report back within " + maxAge.String() + " — the agent was likely restarted or the scan stalled.",
+		})
+	if res.RowsAffected > 0 {
+		slog.Warn("Auto-failed stale malware scan(s)", "site_id", siteID, "count", res.RowsAffected)
+	}
+}
+
 // StartMalwareScan creates a scan record and queues task for agent
 func (s *SecurityService) StartMalwareScan(siteID uint64, req models.StartMalwareScanRequest) (*models.MalwareScan, error) {
 	var site models.Site
@@ -125,6 +146,11 @@ func (s *SecurityService) StartMalwareScan(siteID uint64, req models.StartMalwar
 	if site.Status != "active" {
 		return nil, fmt.Errorf("site must be active to scan")
 	}
+
+	// Clear out scans that got stuck before checking, so a wedged or restarted
+	// agent can't block this site's scans permanently. A ClamAV run is bounded to
+	// 30 minutes agent-side, so anything past 2h is definitively dead.
+	s.failStaleScans(siteID, 2*time.Hour)
 
 	// Check no existing running scan
 	var count int64

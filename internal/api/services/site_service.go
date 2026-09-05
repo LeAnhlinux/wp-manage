@@ -512,14 +512,53 @@ func (s *SiteService) CreateJSONTaskReturn(serverID, siteID uint64, taskType str
 	return &task, nil
 }
 
+// longRunningTaskTypes are task types that legitimately run far longer than the
+// default stale threshold. `updated_at` is stamped when the agent picks a task up
+// and is not refreshed while it runs, so it measures dispatch age, not liveness —
+// which means the reset below cannot tell "the agent crashed" from "still working".
+//
+// Re-dispatching these is not merely wasteful, it is destructive: a second
+// create_backup runs a concurrent mysqldump/tar writing the same output path
+// (corrupt archive), a second scan_disk_usage puts competing `du` sweeps on the
+// same disk, and a second malware_scan stacks up behind the agent's 2-slot scan
+// semaphore. Give them a long threshold so only a genuinely dead agent trips it.
+var longRunningTaskTypes = []string{
+	"create_backup", "restore_backup", "delete_backup_file",
+	"malware_scan", "scan_disk_usage",
+	"migrate_site", "rollback_migration", "cleanup_source_migration", "cleanup_target_migration",
+	"transfer_discover", "transfer_import_site",
+	"create_site", "import_db_sql", "import_external", "upload_source_zip",
+	"apply_updates", "check_updates",
+	"optimize_images", "revert_images", "delete_image_originals", "image_originals_stats",
+	"staging_create", "staging_push", "staging_delete",
+	"enable_multisite", "create_subsite", "delete_subsite", "sync_subsites",
+	"install_service", "install_clamav", "install_php_version",
+	"db_optimize", "harden_wordpress", "agent_update",
+}
+
+const (
+	// staleTaskAge is how long a short task may sit in 'processing' before we
+	// assume the agent died. Short tasks are agent round-trips of seconds; the
+	// slowest blocking handlers wait 120s.
+	staleTaskAge = 5 * time.Minute
+	// staleLongTaskAge is the same for longRunningTaskTypes. A full ClamAV scan is
+	// capped at 30 minutes agent-side and a multi-GB backup can take longer, so 2h
+	// is comfortably past any real run while still recovering from a dead agent.
+	staleLongTaskAge = 2 * time.Hour
+)
+
 func (s *SiteService) GetPendingTasks(serverID uint64) ([]models.TaskQueue, error) {
-	// Reset tasks that got stuck in 'processing' (agent crashed mid-task) after 5 minutes.
-	// This is safe because any legitimately running task completes well within 5 minutes
-	// for lightweight tasks; long-running tasks (transfer, backup) are handled in goroutines
-	// and update their own status via callbacks.
-	staleThreshold := time.Now().Add(-5 * time.Minute)
+	// Requeue tasks abandoned by a crashed agent, using a threshold that depends on
+	// how long the task type can legitimately run (see longRunningTaskTypes).
+	now := time.Now()
 	s.db.Model(&models.TaskQueue{}).
-		Where("server_id = ? AND status = ? AND updated_at < ?", serverID, "processing", staleThreshold).
+		Where("server_id = ? AND status = ? AND task_type NOT IN ? AND updated_at < ?",
+			serverID, "processing", longRunningTaskTypes, now.Add(-staleTaskAge)).
+		Update("status", "pending")
+
+	s.db.Model(&models.TaskQueue{}).
+		Where("server_id = ? AND status = ? AND task_type IN ? AND updated_at < ?",
+			serverID, "processing", longRunningTaskTypes, now.Add(-staleLongTaskAge)).
 		Update("status", "pending")
 
 	var tasks []models.TaskQueue

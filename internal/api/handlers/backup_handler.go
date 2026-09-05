@@ -98,10 +98,10 @@ func (h *BackupHandler) Download(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(400).JSON(models.APIResponse{Error: err.Error()})
 	}
-	defer resp.Body.Close()
 
 	// Forward agent-side errors (404/403/500) verbatim.
 	if resp.StatusCode != 200 {
+		defer resp.Body.Close()
 		body, _ := io.ReadAll(resp.Body)
 		c.Set("Content-Type", "application/json")
 		return c.Status(resp.StatusCode).Send(body)
@@ -109,12 +109,21 @@ func (h *BackupHandler) Download(c *fiber.Ctx) error {
 
 	c.Set("Content-Type", "application/gzip")
 	c.Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
-	if cl := resp.Header.Get("Content-Length"); cl != "" {
-		c.Set("Content-Length", cl)
-	}
 	c.Status(200)
-	_, streamErr := io.Copy(c.Context().Response.BodyWriter(), resp.Body)
-	return streamErr
+
+	// Stream straight through. Do NOT io.Copy into Response.BodyWriter(): that
+	// writer appends to an in-memory buffer, so a multi-GB backup is fully
+	// allocated in RAM (with slice growth, ~2x peak) before a single byte is sent
+	// — an OOM of the whole API process. SendStream hands the reader to fasthttp,
+	// which streams it out.
+	//
+	// resp.Body is deliberately NOT closed here: fasthttp reads the stream after
+	// this handler returns and closes it itself (it is an io.Closer).
+	size := -1 // unknown length -> chunked
+	if n, convErr := strconv.Atoi(resp.Header.Get("Content-Length")); convErr == nil && n >= 0 {
+		size = n
+	}
+	return c.SendStream(resp.Body, size)
 }
 
 func (h *BackupHandler) Delete(c *fiber.Ctx) error {

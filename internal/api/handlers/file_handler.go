@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"encoding/json"
-	"io"
 	"strconv"
 
 	"github.com/gofiber/fiber/v2"
@@ -138,7 +137,6 @@ func (h *FileHandler) Download(c *fiber.Ctx) error {
 	if proxyErr != nil {
 		return c.Status(502).JSON(models.APIResponse{Error: "Failed to connect to agent: " + proxyErr.Error()})
 	}
-	defer resp.Body.Close()
 
 	// Forward headers from agent response
 	if ct := resp.Header.Get("Content-Type"); ct != "" {
@@ -147,14 +145,20 @@ func (h *FileHandler) Download(c *fiber.Ctx) error {
 	if cd := resp.Header.Get("Content-Disposition"); cd != "" {
 		c.Set("Content-Disposition", cd)
 	}
-	if cl := resp.Header.Get("Content-Length"); cl != "" {
-		c.Set("Content-Length", cl)
-	}
 
 	c.Status(resp.StatusCode)
-	// Stream the response body
-	_, streamErr := io.Copy(c.Context().Response.BodyWriter(), resp.Body)
-	return streamErr
+
+	// Stream rather than io.Copy into Response.BodyWriter(): that writer buffers
+	// the whole body in memory, so downloading a large file (a DB dump, a media
+	// archive) allocates it entirely in the API process. See BackupHandler.Download.
+	//
+	// resp.Body is NOT closed here — fasthttp reads the stream after this handler
+	// returns and closes it itself.
+	size := -1 // unknown length -> chunked
+	if n, convErr := strconv.Atoi(resp.Header.Get("Content-Length")); convErr == nil && n >= 0 {
+		size = n
+	}
+	return c.SendStream(resp.Body, size)
 }
 
 // Mkdir creates a new directory

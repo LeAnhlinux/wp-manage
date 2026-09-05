@@ -1402,6 +1402,17 @@ func (s *AgentServer) executeMalwareScan(taskID uint64, task models.AgentMalware
 	slog.Info("Starting malware scan", "domain", task.Domain, "scan_id", task.ScanID)
 	scanResult := agentsecurity.RunMalwareScan(task)
 	s.reportScanResult(scanResult)
+
+	// Close out the queue row as well — reportScanResult only updates the
+	// MalwareScan record. Without this the task sits at 'processing' forever, the
+	// API's 5-minute stale-task reset flips it back to 'pending', and the agent is
+	// handed the same scan again every 5 minutes indefinitely; each re-dispatch
+	// spawns another RunMalwareScan goroutine until malwareScanSem is exhausted.
+	errMsg := ""
+	if scanResult.Status == "failed" {
+		errMsg = scanResult.Error
+	}
+	s.completeTask(taskID, scanResult.Status, errMsg)
 }
 
 func (s *AgentServer) executeInstallClamAV(taskID uint64) {

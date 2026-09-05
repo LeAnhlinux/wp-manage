@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/gofiber/contrib/websocket"
 	"github.com/gofiber/fiber/v2"
@@ -19,6 +20,26 @@ type Client struct {
 	Conn     *websocket.Conn
 	Channels map[string]bool
 	mu       sync.Mutex
+}
+
+// writeTimeout bounds a single WebSocket write. Without a deadline, a client on a
+// stalled connection (dead mobile network, suspended laptop) fills its TCP send
+// buffer and WriteMessage blocks indefinitely. That stops the hub's broadcast
+// loop while it still holds h.mu, so Subscribe and register/unregister block too;
+// the broadcast channel then fills and Broadcast() starts blocking its caller —
+// the agent heartbeat handler. One stuck browser tab could stall heartbeats for
+// every agent on the panel.
+const writeTimeout = 5 * time.Second
+
+// write sends one message with a deadline. A returned error means the client is
+// unresponsive and should be dropped.
+func (c *Client) write(data []byte) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.Conn.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil {
+		return err
+	}
+	return c.Conn.WriteMessage(websocket.TextMessage, data)
 }
 
 type Hub struct {
@@ -55,31 +76,44 @@ func (h *Hub) Run() {
 			h.mu.Unlock()
 
 		case client := <-h.unregister:
-			h.mu.Lock()
-			if _, ok := h.clients[client]; ok {
-				delete(h.clients, client)
-				for ch := range client.Channels {
-					delete(h.channels[ch], client)
-				}
-				client.Conn.Close()
-			}
-			h.mu.Unlock()
+			h.removeClient(client)
 
 		case msg := <-h.broadcast:
+			// Collect unresponsive clients while holding only the read lock, then
+			// drop them afterwards — removeClient takes the write lock, and this is
+			// the same goroutine that services h.unregister, so it must not send
+			// there (that would deadlock).
+			var dead []*Client
 			h.mu.RLock()
 			if clients, ok := h.channels[msg.Channel]; ok {
 				data, _ := json.Marshal(msg)
 				for client := range clients {
-					client.mu.Lock()
-					if err := client.Conn.WriteMessage(1, data); err != nil {
-						slog.Error("ws write error", "error", err)
+					if err := client.write(data); err != nil {
+						slog.Warn("ws write failed, dropping client", "channel", msg.Channel, "error", err)
+						dead = append(dead, client)
 					}
-					client.mu.Unlock()
 				}
 			}
 			h.mu.RUnlock()
+			for _, client := range dead {
+				h.removeClient(client)
+			}
 		}
 	}
+}
+
+// removeClient unsubscribes a client from every channel and closes its socket.
+// Safe to call for a client that was already removed.
+func (h *Hub) removeClient(client *Client) {
+	h.mu.Lock()
+	if _, ok := h.clients[client]; ok {
+		delete(h.clients, client)
+		for ch := range client.Channels {
+			delete(h.channels[ch], client)
+		}
+		client.Conn.Close()
+	}
+	h.mu.Unlock()
 }
 
 func (h *Hub) Subscribe(client *Client, channel string) {
@@ -101,13 +135,15 @@ func (h *Hub) Subscribe(client *Client, channel string) {
 		}
 		h.metricsCacheMu.RUnlock()
 
-		client.mu.Lock()
 		for _, msg := range cached {
 			if data, err := json.Marshal(msg); err == nil {
-				_ = client.Conn.WriteMessage(1, data)
+				if err := client.write(data); err != nil {
+					slog.Warn("ws cache replay failed, dropping client", "error", err)
+					h.removeClient(client)
+					return
+				}
 			}
 		}
-		client.mu.Unlock()
 	}
 }
 
@@ -134,7 +170,16 @@ func (h *Hub) Broadcast(channel string, msgType string, data interface{}) {
 			}
 		}
 	}
-	h.broadcast <- msg
+	// Never block the caller. Broadcast runs inside request handlers (notably the
+	// agent heartbeat handler, twice per heartbeat); if the hub is wedged or
+	// saturated, dropping a metrics frame is far better than stalling every
+	// agent's heartbeat behind it. Metrics are re-sent on the next heartbeat and
+	// the latest value is already in metricsCache above.
+	select {
+	case h.broadcast <- msg:
+	default:
+		slog.Warn("ws broadcast queue full, dropping message", "channel", channel, "type", msgType)
+	}
 }
 
 func (h *Hub) Handler() fiber.Handler {
