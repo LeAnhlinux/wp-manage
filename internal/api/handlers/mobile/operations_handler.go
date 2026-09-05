@@ -296,21 +296,33 @@ func (h *OperationsHandler) ExecuteWPCLI(c *fiber.Ctx) error {
 		return c.Status(404).JSON(models.MobileErr("NOT_FOUND", "Site not found"))
 	}
 
-	task, err := h.siteSvc.CreateJSONTaskReturn(site.ServerID, site.ID, "wpcli", map[string]interface{}{
-		"command": "wp " + req.Command,
-		"domain":  site.Domain,
-	})
-	if err != nil {
-		return c.Status(500).JSON(models.MobileErr("SERVER_ERROR", err.Error()))
-	}
-
-	// Create history entry (running)
+	// History must exist before the task: the agent reports the result against
+	// history_id, so queueing first left the result with nowhere to land.
 	history := models.WPCLIHistory{
 		SiteID:  site.ID,
 		Command: req.Command,
 		Status:  "running",
 	}
-	h.db.Create(&history)
+	if err := h.db.Create(&history).Error; err != nil {
+		return c.Status(500).JSON(models.MobileErr("SERVER_ERROR", err.Error()))
+	}
+
+	// Task type must be "wpcli_execute" with the AgentWPCLITask payload. This
+	// previously queued type "wpcli" with an ad-hoc payload; the agent has no such
+	// handler, so it logged "Unknown task type" and ignored it, and the row was
+	// re-dispatched every 5 minutes forever while the app showed "running".
+	// The command is passed WITHOUT a "wp " prefix — the agent adds it.
+	task, err := h.siteSvc.CreateJSONTaskReturn(site.ServerID, site.ID, "wpcli_execute", map[string]interface{}{
+		"history_id":  history.ID,
+		"site_id":     site.ID,
+		"domain":      site.Domain,
+		"php_version": site.PHPVersion,
+		"command":     req.Command,
+	})
+	if err != nil {
+		h.db.Model(&history).Updates(map[string]interface{}{"status": "failed", "output": err.Error()})
+		return c.Status(500).JSON(models.MobileErr("SERVER_ERROR", err.Error()))
+	}
 
 	return c.Status(202).JSON(models.MobileOK(fiber.Map{
 		"history_id": history.ID,

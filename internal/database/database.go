@@ -33,41 +33,59 @@ func Connect(cfg config.DatabaseConfig) (*gorm.DB, error) {
 	return db, nil
 }
 
+// migrate runs one manual migration statement and logs a failure instead of
+// discarding it. Every statement here is written to be idempotent, so an error
+// means something is genuinely wrong — a typo'd table name, a bad column, a
+// permission problem. Bare db.Exec() swallows that silently: an ALTER naming a
+// table that does not exist looked exactly like success, and the index it was
+// supposed to create simply never appeared.
+//
+// Failures are logged, not fatal: a broken migration should not stop the API from
+// booting, but it must be visible in the log.
+func migrate(db *gorm.DB, desc, query string) {
+	if err := db.Exec(query).Error; err != nil {
+		log.Printf("[migration] %s FAILED: %v", desc, err)
+	}
+}
+
 // RunManualMigrations applies schema changes that GORM AutoMigrate cannot handle
 // (e.g. changing column nullability, adding columns to existing tables safely).
+//
+// Note on table names: GORM pluralises model names, so models.TaskQueue lives in
+// `task_queues`, not `task_queue`. Raw SQL here must use the pluralised name.
 func RunManualMigrations(db *gorm.DB) {
 	log.Println("Running manual schema migrations...")
 
 	// Make backups.site_id nullable so backup records survive site deletion.
 	// AutoMigrate will not do this — it only adds columns, never changes nullability.
-	db.Exec("ALTER TABLE backups MODIFY COLUMN site_id BIGINT UNSIGNED NULL")
+	migrate(db, "ALTER TABLE backups MODIFY", "ALTER TABLE backups MODIFY COLUMN site_id BIGINT UNSIGNED NULL")
 
 	// Add domain column to backups (captured at backup time, survives site deletion).
 	// Use IF NOT EXISTS via a safe pattern: GORM AutoMigrate handles new columns,
 	// but we use raw SQL here to ensure it runs AFTER the nullability change.
-	db.Exec("ALTER TABLE backups ADD COLUMN IF NOT EXISTS domain VARCHAR(255) NOT NULL DEFAULT ''")
-	db.Exec("ALTER TABLE backups ADD INDEX IF NOT EXISTS idx_backups_domain (domain)")
+	migrate(db, "ALTER TABLE backups ADD", "ALTER TABLE backups ADD COLUMN IF NOT EXISTS domain VARCHAR(255) NOT NULL DEFAULT ''")
+	migrate(db, "ALTER TABLE backups ADD", "ALTER TABLE backups ADD INDEX IF NOT EXISTS idx_backups_domain (domain)")
 
 	// Backfill domain from the sites table for existing backup records.
-	db.Exec("UPDATE backups b INNER JOIN sites s ON b.site_id = s.id SET b.domain = s.domain WHERE b.domain = ''")
+	migrate(db, "UPDATE backups b INNER", "UPDATE backups b INNER JOIN sites s ON b.site_id = s.id SET b.domain = s.domain WHERE b.domain = ''")
 
 	// Add server_id column to backups (allows restore dispatch even after site deletion).
-	db.Exec("ALTER TABLE backups ADD COLUMN IF NOT EXISTS server_id BIGINT UNSIGNED NOT NULL DEFAULT 0")
-	db.Exec("ALTER TABLE backups ADD INDEX IF NOT EXISTS idx_backups_server_id (server_id)")
+	migrate(db, "ALTER TABLE backups ADD", "ALTER TABLE backups ADD COLUMN IF NOT EXISTS server_id BIGINT UNSIGNED NOT NULL DEFAULT 0")
+	migrate(db, "ALTER TABLE backups ADD", "ALTER TABLE backups ADD INDEX IF NOT EXISTS idx_backups_server_id (server_id)")
 
 	// Backfill server_id from sites for existing records.
-	db.Exec("UPDATE backups b INNER JOIN sites s ON b.site_id = s.id SET b.server_id = s.server_id WHERE b.server_id = 0")
+	migrate(db, "UPDATE backups b INNER", "UPDATE backups b INNER JOIN sites s ON b.site_id = s.id SET b.server_id = s.server_id WHERE b.server_id = 0")
 
 	// Add open_basedir_enabled to sites (per-site PHP open_basedir toggle).
 	// Default 1 = enabled (most secure). Existing sites get open_basedir enabled.
-	db.Exec("ALTER TABLE sites ADD COLUMN IF NOT EXISTS open_basedir_enabled TINYINT(1) NOT NULL DEFAULT 1")
+	migrate(db, "ALTER TABLE sites ADD", "ALTER TABLE sites ADD COLUMN IF NOT EXISTS open_basedir_enabled TINYINT(1) NOT NULL DEFAULT 1")
 
 	// Transfer Tool: change JSON columns → LONGTEXT to remove MariaDB's implicit
 	// JSON_VALID() CHECK constraint which rejects empty string on INSERT.
 	// MariaDB stores JSON and LONGTEXT identically on disk; no data loss.
-	db.Exec("ALTER TABLE transfer_jobs MODIFY COLUMN IF EXISTS discovered_sites LONGTEXT")
-	db.Exec("ALTER TABLE transfer_jobs MODIFY COLUMN IF EXISTS target_php_versions LONGTEXT")
-	db.Exec("ALTER TABLE transfer_jobs MODIFY COLUMN IF EXISTS selected_sites LONGTEXT")
+	migrate(db, "ALTER TABLE transfer_jobs MODIFY", "ALTER TABLE transfer_jobs MODIFY COLUMN IF EXISTS discovered_sites LONGTEXT")
+	migrate(db, "ALTER TABLE transfer_jobs MODIFY", "ALTER TABLE transfer_jobs MODIFY COLUMN IF EXISTS target_php_versions LONGTEXT")
+	migrate(db, "ALTER TABLE transfer_jobs MODIFY", "ALTER TABLE transfer_jobs MODIFY COLUMN IF EXISTS selected_sites LONGTEXT")
 
 	// --- Composite indexes for the hot query paths -------------------------------
 	// GORM's `index` tag only ever produces single-column indexes, so before this
@@ -79,24 +97,24 @@ func RunManualMigrations(db *gorm.DB) {
 	// Agent task dispatch (SiteService.GetPendingTasks). The hottest query in the
 	// system: every agent polls it every 3 seconds, and task_queue grows with
 	// operator activity, so an unindexed scan gets slower without bound.
-	db.Exec("ALTER TABLE task_queue ADD INDEX IF NOT EXISTS idx_tq_dispatch (server_id, status, created_at)")
+	migrate(db, "ALTER TABLE task_queues ADD", "ALTER TABLE task_queues ADD INDEX IF NOT EXISTS idx_tq_dispatch (server_id, status, created_at)")
 	// Stale-task requeue in the same function, and the retention sweep.
-	db.Exec("ALTER TABLE task_queue ADD INDEX IF NOT EXISTS idx_tq_stale (status, updated_at)")
+	migrate(db, "ALTER TABLE task_queues ADD", "ALTER TABLE task_queues ADD INDEX IF NOT EXISTS idx_tq_stale (status, updated_at)")
 
 	// Dashboard metrics chart: WHERE server_id = ? AND recorded_at >= ?
 	// (mobile.MetricsHistory), the latest-metric lookup, and the retention sweep.
-	db.Exec("ALTER TABLE server_metrics ADD INDEX IF NOT EXISTS idx_sm_server_time (server_id, recorded_at)")
+	migrate(db, "ALTER TABLE server_metrics ADD", "ALTER TABLE server_metrics ADD INDEX IF NOT EXISTS idx_sm_server_time (server_id, recorded_at)")
 
 	// Uptime history: WHERE check_id = ? ORDER BY created_at DESC LIMIT 100,
 	// plus CleanupOldLogs' WHERE created_at < ?.
-	db.Exec("ALTER TABLE uptime_logs ADD INDEX IF NOT EXISTS idx_ul_check_time (check_id, created_at)")
+	migrate(db, "ALTER TABLE uptime_logs ADD", "ALTER TABLE uptime_logs ADD INDEX IF NOT EXISTS idx_ul_check_time (check_id, created_at)")
 
 	// Activity log list (ORDER BY created_at DESC with no filter — the default
 	// panel view) and the daily retention sweep.
-	db.Exec("ALTER TABLE activity_logs ADD INDEX IF NOT EXISTS idx_al_created (created_at)")
+	migrate(db, "ALTER TABLE activity_logs ADD", "ALTER TABLE activity_logs ADD INDEX IF NOT EXISTS idx_al_created (created_at)")
 
 	// Malware scan history: WHERE site_id = ? ORDER BY started_at DESC.
-	db.Exec("ALTER TABLE malware_scans ADD INDEX IF NOT EXISTS idx_ms_site_started (site_id, started_at)")
+	migrate(db, "ALTER TABLE malware_scans ADD", "ALTER TABLE malware_scans ADD INDEX IF NOT EXISTS idx_ms_site_started (site_id, started_at)")
 }
 
 func AutoMigrate(db *gorm.DB) error {

@@ -49,7 +49,7 @@ func NewRetentionWorker(db *gorm.DB) *RetentionWorker {
 
 func (w *RetentionWorker) Start() {
 	go w.loop()
-	log.Printf("[Retention] Worker started — daily at 03:00 (task_queue %dd, server_metrics %dd, uptime_logs %dd)",
+	log.Printf("[Retention] Worker started — daily at 03:00 (task_queues %dd, server_metrics %dd, uptime_logs %dd)",
 		taskQueueRetentionDays, serverMetricsRetentionDays, uptimeLogRetentionDays)
 }
 
@@ -72,8 +72,8 @@ func (w *RetentionWorker) loop() {
 func (w *RetentionWorker) RunOnce() {
 	// Only finished tasks are eligible — a pending or processing row may still be
 	// picked up by an agent.
-	w.prune("task_queue",
-		"DELETE FROM task_queue WHERE status IN ('completed','failed') AND updated_at < DATE_SUB(NOW(), INTERVAL ? DAY) LIMIT ?",
+	w.prune("task_queues",
+		"DELETE FROM task_queues WHERE status IN ('completed','failed') AND updated_at < DATE_SUB(NOW(), INTERVAL ? DAY) LIMIT ?",
 		taskQueueRetentionDays)
 
 	w.prune("server_metrics",

@@ -265,7 +265,13 @@ func (h *SiteHandler) CachePurge(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(404).JSON(models.MobileErr("NOT_FOUND", "Site not found"))
 	}
-	if err := h.siteSvc.CreateTask(site.ServerID, site.ID, "purge_cache", map[string]string{
+	// Task type must be "manage_cache" with an action — the agent has no
+	// "purge_cache" handler, so this used to queue a task the agent logged as
+	// "Unknown task type" and ignored. The row then stayed 'processing' and was
+	// re-dispatched every 5 minutes forever (36k occurrences in one log rotation
+	// on a production panel), while the mobile app reported success.
+	if err := h.siteSvc.CreateTask(site.ServerID, site.ID, "manage_cache", map[string]string{
+		"action": "purge",
 		"domain": site.Domain,
 	}); err != nil {
 		return c.Status(500).JSON(models.MobileErr("SERVER_ERROR", err.Error()))

@@ -705,7 +705,17 @@ func (s *AgentServer) pollTasks() {
 			}(task.TaskID, importTask)
 
 		default:
-			slog.Warn("Unknown task type", "type", task.TaskType)
+			// Fail the task instead of just warning. An unrecognised type is never
+			// going to succeed, but leaving the row at 'processing' meant the API's
+			// stale-task reset flipped it back to 'pending' and handed it over again
+			// every 5 minutes — forever. A production panel had two such types
+			// (queued by the mobile API under names the agent never had handlers for)
+			// looping for months: 36k "Unknown task type" warnings in a single log
+			// rotation, and the feature silently doing nothing the whole time.
+			// Completing it as failed stops the loop and surfaces the mismatch in the
+			// panel instead of only in the agent log.
+			slog.Warn("Unknown task type", "type", task.TaskType, "task_id", task.TaskID)
+			s.completeTask(task.TaskID, "failed", "agent does not handle task type: "+task.TaskType)
 		}
 	}
 }
