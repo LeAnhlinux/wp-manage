@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	agentsecurity "github.com/gofiber-team/wp-manage/internal/agent/security"
 	"github.com/gofiber-team/wp-manage/internal/models"
 )
 
@@ -501,9 +502,17 @@ func (r *MigrationRunner) cleanupSourceSite(task models.AgentMigrateTask) {
 	r.reportProgress(task.MigrationID, "cleanup", 99, "running",
 		fmt.Sprintf("Đang xóa toàn bộ dữ liệu site %s trên server nguồn...", domain))
 
+	// Bot-control files are keyed by site id, and the vhost is the only place
+	// this server records which id belongs to the domain — read it before the
+	// vhost is removed, or the files are orphaned in conf.d forever.
+	botSiteID, hadBotRules := agentsecurity.BotSiteIDForDomain(domain)
+
 	// 1. Remove nginx sites-available config (symlink already removed above)
 	os.Remove(fmt.Sprintf("/etc/nginx/sites-available/%s.conf", domain))
 	os.Remove(fmt.Sprintf("/etc/nginx/sites-enabled/%s.conf", domain))
+	if hadBotRules {
+		agentsecurity.RemoveBotFiles(botSiteID)
+	}
 
 	// 2. Remove ModSecurity config
 	os.Remove(fmt.Sprintf("/etc/nginx/modsec/%s.conf", domain))
