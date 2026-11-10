@@ -2,7 +2,9 @@ package database
 
 import (
 	"fmt"
+	"github.com/gofiber-team/wp-manage/pkg/utils"
 	"log"
+	"log/slog"
 
 	"github.com/gofiber-team/wp-manage/internal/config"
 	"github.com/gofiber-team/wp-manage/internal/models"
@@ -185,4 +187,67 @@ func AutoMigrate(db *gorm.DB) error {
 		&models.TransferSiteResult{},
 		&models.CloudflareFirewallConfig{},
 	)
+}
+
+// storedSecretColumns lists every column that holds a third-party credential
+// encrypted at rest. It must match the fields tagged `serializer:secret` in
+// internal/models (TestStoredSecretColumnsMatchModels checks this), using the
+// real column names — GORM names GooglePageSpeedKey "google_page_speed_key".
+var storedSecretColumns = map[string][]string{
+	"dns_providers":        {"api_key", "api_email"},
+	"storage_credentials":  {"secret_key"},
+	"notification_configs": {"telegram_token", "slack_webhook", "smtp_pass"},
+	"integration_configs":  {"google_page_speed_key"},
+}
+
+func dbString(v interface{}) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case []byte:
+		return string(t)
+	}
+	return ""
+}
+
+// EncryptStoredSecrets encrypts credentials that older versions stored as
+// plaintext. It is idempotent: values that are already encrypted are skipped,
+// so it runs on every start. It works on the raw tables (no models) on purpose
+// — a model's serializer hands back decrypted values and would hide which rows
+// still need converting.
+func EncryptStoredSecrets(db *gorm.DB, key []byte) {
+	converted := 0
+	for table, columns := range storedSecretColumns {
+		var rows []map[string]interface{}
+		if err := db.Table(table).Select(append([]string{"id"}, columns...)).Find(&rows).Error; err != nil {
+			slog.Error("EncryptStoredSecrets: could not read table", "table", table, "error", err)
+			continue
+		}
+		for _, row := range rows {
+			updates := map[string]interface{}{}
+			for _, column := range columns {
+				value := dbString(row[column])
+				if value == "" || utils.IsEncryptedSecret(value) {
+					continue
+				}
+				enc, err := utils.EncryptSecret(key, value)
+				if err != nil {
+					slog.Error("EncryptStoredSecrets: encryption failed", "table", table, "column", column, "error", err)
+					continue
+				}
+				updates[column] = enc
+			}
+			if len(updates) == 0 {
+				continue
+			}
+			if err := db.Table(table).Where("id = ?", row["id"]).Updates(updates).Error; err != nil {
+				slog.Error("EncryptStoredSecrets: update failed", "table", table, "id", row["id"], "error", err)
+				continue
+			}
+			converted += len(updates)
+		}
+	}
+	if converted > 0 {
+		slog.Info("Encrypted stored third-party credentials", "values", converted)
+	}
 }

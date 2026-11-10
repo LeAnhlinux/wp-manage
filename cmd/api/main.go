@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"github.com/gofiber-team/wp-manage/internal/models"
+	"github.com/gofiber-team/wp-manage/pkg/utils"
 	"log"
 	"log/slog"
 
@@ -29,6 +31,15 @@ func main() {
 	cfg := config.Load()
 	pkglogger.Init(cfg.Server.Mode)
 
+	// Key for third-party credentials stored in the database (DNS provider
+	// tokens). Must be installed before the first query touches those rows.
+	secretMaterial := cfg.SecretsKey
+	if secretMaterial == "" {
+		secretMaterial = cfg.JWT.Secret
+	}
+	secretKey := utils.DeriveSecretKey(secretMaterial)
+	models.SetSecretKey(secretKey)
+
 	// Database
 	db, err := database.Connect(cfg.Database)
 	if err != nil {
@@ -38,6 +49,7 @@ func main() {
 		log.Fatalf("Database migration failed: %v", err)
 	}
 	database.RunManualMigrations(db)
+	database.EncryptStoredSecrets(db, secretKey)
 
 	// Services
 	authService := services.NewAuthService(db, cfg)

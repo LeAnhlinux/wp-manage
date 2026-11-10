@@ -651,13 +651,14 @@ type AlertHistory struct {
 // NotificationConfig stores global notification settings
 type NotificationConfig struct {
 	ID            uint64 `json:"id" gorm:"primaryKey;autoIncrement"`
-	TelegramToken string `json:"telegram_token,omitempty" gorm:"size:255"`
+	// TelegramToken, SlackWebhook and SMTPPass are encrypted at rest (secret_field.go).
+	TelegramToken string `json:"telegram_token,omitempty" gorm:"size:255;serializer:secret"`
 	TelegramChat  string `json:"telegram_chat,omitempty" gorm:"size:50"`
-	SlackWebhook  string `json:"slack_webhook,omitempty" gorm:"size:500"`
+	SlackWebhook  string `json:"slack_webhook,omitempty" gorm:"size:500;serializer:secret"`
 	SMTPHost      string `json:"smtp_host,omitempty" gorm:"size:255"`
 	SMTPPort      int    `json:"smtp_port,omitempty"`
 	SMTPUser      string `json:"smtp_user,omitempty" gorm:"size:255"`
-	SMTPPass      string `json:"-" gorm:"size:255"`
+	SMTPPass      string `json:"-" gorm:"size:500;serializer:secret"`
 	SMTPFrom      string `json:"smtp_from,omitempty" gorm:"size:255"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
@@ -666,7 +667,7 @@ type NotificationConfig struct {
 // IntegrationConfig stores third-party API keys and integration settings
 type IntegrationConfig struct {
 	ID                  uint64    `json:"id" gorm:"primaryKey;autoIncrement"`
-	GooglePageSpeedKey  string    `json:"google_pagespeed_key,omitempty" gorm:"size:255"`
+	GooglePageSpeedKey  string    `json:"google_pagespeed_key,omitempty" gorm:"size:255;serializer:secret"` // encrypted at rest
 	CreatedAt           time.Time `json:"created_at"`
 	UpdatedAt           time.Time `json:"updated_at"`
 }
@@ -715,9 +716,12 @@ type ExternalImport struct {
 type DNSProvider struct {
 	ID           uint64    `json:"id" gorm:"primaryKey;autoIncrement"`
 	ServerID     *uint64   `json:"server_id,omitempty" gorm:"index"`
-	ProviderType string    `json:"provider_type" gorm:"size:20;not null"` // cloudflare, route53
-	APIKey       string    `json:"-" gorm:"size:500"`
-	APIEmail     string    `json:"api_email,omitempty" gorm:"size:255"`
+	ProviderType string    `json:"provider_type" gorm:"size:20;not null"` // cloudflare, route53, godaddy
+	// Both credentials are encrypted at rest (see secret_field.go). APIEmail is
+	// an e-mail only for Cloudflare; for Route53 / GoDaddy it holds the secret
+	// half of the key pair, which MarshalJSON keeps out of API responses.
+	APIKey   string `json:"-" gorm:"size:500;serializer:secret"`
+	APIEmail string `json:"api_email,omitempty" gorm:"size:500;serializer:secret"`
 	ZoneID       string    `json:"zone_id,omitempty" gorm:"size:100"`
 	Domain       string    `json:"domain" gorm:"size:255"`
 	CreatedAt    time.Time `json:"created_at"`
@@ -733,7 +737,7 @@ type StorageCredential struct {
 	Bucket    string    `json:"bucket"`
 	Region    string    `json:"region"`
 	AccessKey string    `json:"access_key"`
-	SecretKey string    `json:"-"`                        // hidden from JSON
+	SecretKey string    `json:"-" gorm:"serializer:secret"` // hidden from JSON, encrypted at rest
 	Endpoint  string    `json:"endpoint"`                 // for S3-compatible
 	BasePath  string    `json:"base_path"`
 	CreatedAt time.Time `json:"created_at"`

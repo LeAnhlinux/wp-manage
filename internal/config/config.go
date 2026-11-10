@@ -18,6 +18,11 @@ type Config struct {
 	Google       GoogleConfig
 	FCMServerKey string // Firebase Cloud Messaging legacy server key (FCM_SERVER_KEY)
 	FCMProjectID string // GCP project ID for FCM v1 API (FCM_PROJECT_ID)
+	// SecretsKey is the key material for encrypting stored third-party
+	// credentials (SECRETS_KEY). Empty = derive the key from JWT_SECRET, so
+	// existing installs need no new setting. Changing whichever is in use makes
+	// stored credentials unreadable; they must then be entered again.
+	SecretsKey string
 }
 
 type GoogleConfig struct {
@@ -90,6 +95,7 @@ func Load() *Config {
 			Password: getEnv("REDIS_PASSWORD", ""),
 			DB:       getEnvInt("REDIS_DB", 0),
 		},
+		SecretsKey: getEnv("SECRETS_KEY", ""),
 		JWT: JWTConfig{
 			Secret:     getRequiredJWTSecret(),
 			Expiration: time.Duration(getEnvInt("JWT_EXPIRATION_HOURS", 24)) * time.Hour,
