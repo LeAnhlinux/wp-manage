@@ -181,7 +181,7 @@ func (m *Manager) CreateSite(params CreateParams) error {
 	fpmDir := fmt.Sprintf("/etc/php/%s/fpm", phpVer)
 	if _, err := os.Stat(fpmDir); err != nil {
 		// List what IS installed to give a helpful error message
-		allVersions := []string{"7.4", "8.0", "8.1", "8.2", "8.3"}
+		allVersions := []string{"7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5", "8.6"}
 		var installedVersions []string
 		for _, v := range allVersions {
 			if _, e := os.Stat(fmt.Sprintf("/etc/php/%s/fpm", v)); e == nil {

@@ -18,7 +18,7 @@ WordPress VPS Management Platform — a hub-and-spoke system for managing WordPr
 | Frontend | React 18, TypeScript, Tailwind CSS, shadcn/ui, Zustand, TanStack Query |
 | Database | MariaDB 10.11+ |
 | Web Server | Nginx 1.24+ |
-| PHP | PHP-FPM 7.4–8.3+ |
+| PHP | PHP-FPM 7.4–8.6 |
 | SSL | Let's Encrypt (Certbot) |
 | Security | UFW, Fail2Ban |
 
@@ -29,7 +29,7 @@ WordPress VPS Management Platform — a hub-and-spoke system for managing WordPr
 - **Agent auto-deploy**: One-command agent installation on VPS with systemd service
 - **WordPress CRUD**: Create/delete WordPress sites with auto-configured Nginx vhosts, PHP-FPM pools, and MariaDB databases
 - **SSL management**: Let's Encrypt certificate issuance via Certbot
-- **PHP version management**: Switch PHP-FPM version per site (7.4–8.3+)
+- **PHP version management**: Switch PHP-FPM version per site (7.4–8.6)
 - **Site lifecycle**: Suspend/resume/restart sites, auto-login to wp-admin via HMAC-signed URLs
 - **Server monitoring**: Agent heartbeat with system info (CPU, RAM, disk, OS)
 
