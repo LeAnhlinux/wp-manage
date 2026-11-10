@@ -17,8 +17,7 @@ import type {
   MariaDBConfig,
   MariaDBDatabase,
   CreateDatabaseRequest,
-  InstalledPHPVersion,
-} from '@/types'
+  InstalledPHPVersion, PHPUpdateStatus } from '@/types'
 
 // ==================== Firewall ====================
 
@@ -182,6 +181,46 @@ export function useInstallPHPVersion() {
     mutationFn: async ({ serverId, version }: { serverId: number; version: string }) => {
       const { data } = await api.post<APIResponse>(`/servers/${serverId}/phpfpm/install`, { version })
       return data
+    },
+  })
+}
+
+/** Installed vs. available version for every PHP branch on a server. */
+export function usePHPUpdateStatus(serverId: number) {
+  return useQuery({
+    queryKey: ['php-updates', serverId],
+    queryFn: async () => {
+      const { data } = await api.get<APIResponse<PHPUpdateStatus[]>>(`/servers/${serverId}/phpfpm/updates`)
+      return data.data ?? []
+    },
+    enabled: !!serverId,
+    staleTime: 5 * 60 * 1000,
+  })
+}
+
+/** Re-downloads the package lists on the server, then re-reads the status. */
+export function useCheckPHPUpdates(serverId: number) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async () => {
+      const { data } = await api.get<APIResponse<PHPUpdateStatus[]>>(`/servers/${serverId}/phpfpm/updates?refresh=1`, { timeout: 250000 })
+      return data.data ?? []
+    },
+    onSuccess: (status) => qc.setQueryData(['php-updates', serverId], status),
+  })
+}
+
+/** Applies the patch update of one installed PHP branch (restarts its PHP-FPM). */
+export function useUpdatePHPVersion(serverId: number) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (version: string) => {
+      const { data } = await api.post<APIResponse>(`/servers/${serverId}/phpfpm/update`, { version }, { timeout: 620000 })
+      return data
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['php-updates', serverId] })
+      qc.invalidateQueries({ queryKey: ['installed-php', serverId] })
     },
   })
 }

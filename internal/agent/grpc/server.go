@@ -595,6 +595,16 @@ func (s *AgentServer) pollTasks() {
 		case "list_installed_php":
 			go s.executeListInstalledPHP(task.TaskID)
 
+		case "php_update_status":
+			var phpTask models.AgentPHPVersionTask
+			json.Unmarshal(task.Data, &phpTask)
+			go s.executePHPUpdateStatus(task.TaskID, phpTask.Refresh)
+
+		case "update_php_version":
+			var phpTask models.AgentPHPVersionTask
+			json.Unmarshal(task.Data, &phpTask)
+			go s.executeUpdatePHPVersion(task.TaskID, phpTask)
+
 		case "tail_logs":
 			var logTask struct {
 				LogType string `json:"log_type"`
@@ -3012,7 +3022,7 @@ func (s *AgentServer) executeListInstalledPHP(taskID uint64) {
 		OPcacheEnabled bool   `json:"opcache_enabled"`
 	}
 
-	versions := []string{"7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5"}
+	versions := []string{"7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5", "8.6"}
 	var installed []PHPVersion
 
 	for _, v := range versions {
@@ -3040,9 +3050,55 @@ func (s *AgentServer) executeListInstalledPHP(taskID uint64) {
 	s.reportTaskResult(result)
 }
 
+// executePHPUpdateStatus reports installed vs. available version per PHP branch.
+func (s *AgentServer) executePHPUpdateStatus(taskID uint64, refresh bool) {
+	result := models.AgentTaskResult{TaskID: taskID}
+	status, err := agentphpfpm.UpdateStatus(refresh)
+	if status == nil && err != nil {
+		result.Error = err.Error()
+		s.reportTaskResult(result)
+		return
+	}
+	if err != nil {
+		// Package lists could not be refreshed; the cached view is still useful.
+		slog.Warn("PHP update check used cached package lists", "error", err)
+	}
+	out, _ := json.Marshal(status)
+	result.Output = string(out)
+	s.reportTaskResult(result)
+}
+
+// phpUpdateMu serialises PHP package updates: apt holds a global lock anyway,
+// and two branches restarting at once doubles the blast radius.
+var phpUpdateMu sync.Mutex
+
+// executeUpdatePHPVersion applies the patch update of one installed branch.
+func (s *AgentServer) executeUpdatePHPVersion(taskID uint64, task models.AgentPHPVersionTask) {
+	result := models.AgentTaskResult{TaskID: taskID}
+	phpUpdateMu.Lock()
+	defer phpUpdateMu.Unlock()
+
+	slog.Info("Updating PHP branch", "version", task.Version)
+	msg, err := agentphpfpm.UpdateBranch(task.Version)
+	if err != nil {
+		slog.Error("PHP update failed", "version", task.Version, "error", err)
+		result.Error = err.Error()
+	} else {
+		result.Output = msg
+	}
+	s.reportTaskResult(result)
+}
+
 func (s *AgentServer) executeInstallPHPVersion(taskID uint64, task models.AgentPHPVersionTask) {
 	slog.Info("Installing PHP version", "version", task.Version)
 	result := models.AgentTaskResult{TaskID: taskID}
+
+	// The version ends up in package names, paths and unit names.
+	if !models.ValidPHPVersion(task.Version) {
+		result.Error = fmt.Sprintf("unsupported PHP version %q", task.Version)
+		s.reportTaskResult(result)
+		return
+	}
 
 	phpFpmDir := fmt.Sprintf("/etc/php/%s/fpm/pool.d", task.Version)
 	if _, err := os.Stat(phpFpmDir); err == nil {
@@ -3684,7 +3740,7 @@ func (s *AgentServer) executeTransferImport(taskID uint64, task models.AgentTran
 
 // listInstalledPHPVersionsLocal returns PHP version strings installed on the local agent VPS.
 func listInstalledPHPVersionsLocal() []string {
-	versions := []string{"7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5"}
+	versions := []string{"7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5", "8.6"}
 	var installed []string
 	for _, v := range versions {
 		fpmDir := fmt.Sprintf("/etc/php/%s/fpm", v)

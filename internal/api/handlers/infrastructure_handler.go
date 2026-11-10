@@ -286,6 +286,31 @@ func (h *InfrastructureHandler) InstallPHPVersion(c *fiber.Ctx) error {
 	return c.JSON(models.APIResponse{Success: true, Message: "PHP " + req.Version + " installed successfully"})
 }
 
+// PHPUpdateStatus lists installed vs. available version for every PHP branch.
+// ?refresh=1 re-downloads the package lists on the server first.
+func (h *InfrastructureHandler) PHPUpdateStatus(c *fiber.Ctx) error {
+	serverID, _ := strconv.ParseUint(c.Params("id"), 10, 64)
+	status, err := h.svc.PHPUpdateStatus(serverID, c.Query("refresh") == "1")
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Error: "Failed to check PHP updates: " + err.Error()})
+	}
+	return c.JSON(models.APIResponse{Success: true, Data: status})
+}
+
+// UpdatePHPVersion applies the patch update of one installed PHP branch.
+func (h *InfrastructureHandler) UpdatePHPVersion(c *fiber.Ctx) error {
+	serverID, _ := strconv.ParseUint(c.Params("id"), 10, 64)
+	var req models.UpdatePHPVersionRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(models.APIResponse{Error: "Invalid request body"})
+	}
+	msg, err := h.svc.UpdatePHPVersion(serverID, req.Version)
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Error: err.Error()})
+	}
+	return c.JSON(models.APIResponse{Success: true, Message: msg})
+}
+
 func (h *InfrastructureHandler) ChangeSitePHPVersion(c *fiber.Ctx) error {
 	serverID, _ := strconv.ParseUint(c.Params("id"), 10, 64)
 	siteID, _ := strconv.ParseUint(c.Params("siteId"), 10, 64)

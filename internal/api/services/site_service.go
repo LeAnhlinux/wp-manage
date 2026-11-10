@@ -537,7 +537,7 @@ var longRunningTaskTypes = []string{
 	"optimize_images", "revert_images", "delete_image_originals", "image_originals_stats",
 	"staging_create", "staging_push", "staging_delete",
 	"enable_multisite", "create_subsite", "delete_subsite", "sync_subsites",
-	"install_service", "install_clamav", "install_php_version",
+	"install_service", "install_clamav", "install_php_version", "update_php_version", "php_update_status",
 	"db_optimize", "harden_wordpress", "agent_update",
 	// first apply on a server runs apt install + a 4 MB database download
 	"configure_geo_rules", "refresh_geo_data",

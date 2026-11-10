@@ -14,6 +14,7 @@ import {
   useOPcacheAction, useRebuildConfig, useRunHealthCheck, useServerLogs,
   usePHPFPMPool, useUpdatePHPFPMPool,
   useInstallPHPVersion, useChangeSitePHPVersion, useInstalledPHPVersions,
+  usePHPUpdateStatus, useCheckPHPUpdates, useUpdatePHPVersion,
   useMariaDBUsers, useCreateMariaDBUser, useDeleteMariaDBUser,
   useMariaDBConfig, useUpdateMariaDBConfig,
   useMariaDBDatabases, useCreateMariaDBDatabase, useDeleteMariaDBDatabase, useImportMariaDBDatabase,
@@ -1024,7 +1025,12 @@ function IonCubeTab({ serverId }: { serverId: number }) {
 
 // ==================== Config Tab ====================
 
-const PHP_VERSIONS = ['7.4', '8.0', '8.1', '8.2', '8.3', '8.4', '8.5']
+/** The API's error string from a failed request, if any. */
+function apiErrorText(err: unknown): string | undefined {
+  return (err as { response?: { data?: { error?: string } } })?.response?.data?.error
+}
+
+const PHP_VERSIONS = ['7.4', '8.0', '8.1', '8.2', '8.3', '8.4', '8.5', '8.6']
 
 // ==================== PHP-FPM Tab ====================
 
@@ -1036,6 +1042,36 @@ function PHPFPMTab({ serverId, sites }: { serverId: number; sites: Array<{ id: n
   const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [installVersion, setInstallVersion] = useState('8.3')
   const [showInstall, setShowInstall] = useState(false)
+  const { data: updateStatus = [] } = usePHPUpdateStatus(serverId)
+  const checkUpdates = useCheckPHPUpdates(serverId)
+  const updatePHP = useUpdatePHPVersion(serverId)
+  // Branch waiting for the user to confirm its update (the update restarts PHP-FPM).
+  const [confirmUpdate, setConfirmUpdate] = useState<string | null>(null)
+  const statusFor = (v: string) => updateStatus.find(s => s.version === v)
+  const pendingUpdates = updateStatus.filter(s => s.update_available).length
+
+  const handleCheckUpdates = async () => {
+    setMsg(null)
+    try {
+      const status = await checkUpdates.mutateAsync()
+      const n = status.filter(s => s.update_available).length
+      setMsg({ type: 'success', text: n > 0 ? `${n} PHP ${n === 1 ? 'version has' : 'versions have'} an update available.` : 'All installed PHP versions are up to date.' })
+    } catch (err) {
+      setMsg({ type: 'error', text: apiErrorText(err) || 'Failed to check for PHP updates' })
+    }
+  }
+
+  const handleUpdatePHP = async (version: string) => {
+    setMsg(null)
+    setConfirmUpdate(null)
+    try {
+      const result = await updatePHP.mutateAsync(version)
+      setMsg({ type: 'success', text: result.message || `PHP ${version} updated` })
+      refetchVersions()
+    } catch (err) {
+      setMsg({ type: 'error', text: apiErrorText(err) || `Failed to update PHP ${version}` })
+    }
+  }
 
   const handleAutotune = async () => {
     setMsg(null)
@@ -1080,10 +1116,22 @@ function PHPFPMTab({ serverId, sites }: { serverId: number; sites: Array<{ id: n
           <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
             <Settings size={20} className="text-blue-500" /> Installed PHP Versions
           </h2>
-          <button onClick={() => refetchVersions()} className="p-1.5 text-gray-400 hover:text-blue-600">
-            <RefreshCw size={15} />
-          </button>
+          <div className="flex items-center gap-2">
+            <button onClick={handleCheckUpdates} disabled={checkUpdates.isPending || updatePHP.isPending}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-50">
+              {checkUpdates.isPending ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+              {checkUpdates.isPending ? 'Checking…' : 'Check for updates'}
+            </button>
+            <button onClick={() => refetchVersions()} aria-label="Refresh installed versions" className="p-1.5 text-gray-400 hover:text-blue-600">
+              <RefreshCw size={15} />
+            </button>
+          </div>
         </div>
+        {pendingUpdates > 0 && (
+          <p className="text-xs text-amber-700 mb-3">
+            {pendingUpdates} installed PHP {pendingUpdates === 1 ? 'version has' : 'versions have'} a patch update. Updating restarts PHP-FPM for that version — its sites are interrupted for a few seconds.
+          </p>
+        )}
         {versionsLoading ? (
           <div className="flex items-center gap-2 py-3"><Loader2 size={16} className="animate-spin text-gray-400" /><span className="text-sm text-gray-500">Checking server...</span></div>
         ) : installedVersions.length === 0 ? (
@@ -1102,6 +1150,9 @@ function PHPFPMTab({ serverId, sites }: { serverId: number; sites: Array<{ id: n
                   <span className={`text-sm font-semibold ${isInstalled ? (info.fpm_active ? 'text-green-700' : 'text-yellow-700') : 'text-gray-400'}`}>
                     PHP {v}
                   </span>
+                  {isInstalled && statusFor(v)?.installed_version && (
+                    <span className="text-xs font-mono text-gray-600">{statusFor(v)!.installed_version}</span>
+                  )}
                   {isInstalled ? (
                     <div className="flex flex-col gap-1">
                       <span className={`text-xs px-1.5 py-0.5 rounded font-medium w-fit ${info.fpm_active ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
@@ -1110,6 +1161,27 @@ function PHPFPMTab({ serverId, sites }: { serverId: number; sites: Array<{ id: n
                       <span className={`text-xs px-1.5 py-0.5 rounded font-medium w-fit ${info.opcache_enabled ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-500'}`}>
                         OPcache: {info.opcache_enabled ? 'ON' : 'OFF'}
                       </span>
+                      {statusFor(v)?.update_available && (
+                        confirmUpdate === v ? (
+                          <div className="flex flex-col gap-1 mt-1">
+                            <span className="text-xs text-amber-700">Restart PHP-FPM {v} now?</span>
+                            <div className="flex gap-1">
+                              <button onClick={() => handleUpdatePHP(v)}
+                                className="text-xs px-2 py-1 rounded bg-amber-600 text-white hover:bg-amber-700">Confirm</button>
+                              <button onClick={() => setConfirmUpdate(null)}
+                                className="text-xs px-2 py-1 rounded border border-gray-300 text-gray-700 hover:bg-gray-50">Cancel</button>
+                            </div>
+                          </div>
+                        ) : (
+                          <button onClick={() => setConfirmUpdate(v)} disabled={updatePHP.isPending}
+                            aria-label={`Update PHP ${v}`}
+                            className="flex items-center gap-1 text-xs px-2 py-1 mt-1 rounded bg-amber-100 text-amber-800 hover:bg-amber-200 disabled:opacity-50 w-fit">
+                            {updatePHP.isPending && updatePHP.variables === v
+                              ? <><Loader2 size={12} className="animate-spin" /> Updating…</>
+                              : <>Update{statusFor(v)!.package_rebuild ? ' (package fix)' : ` to ${statusFor(v)!.candidate_version}`}</>}
+                          </button>
+                        )
+                      )}
                     </div>
                   ) : (
                     <span className="text-xs px-1.5 py-0.5 rounded bg-gray-200 text-gray-500 w-fit">Not installed</span>
@@ -1141,10 +1213,20 @@ function PHPFPMTab({ serverId, sites }: { serverId: number; sites: Array<{ id: n
               <label className="text-xs text-gray-500 font-medium mb-1 block">PHP Version</label>
               <select value={installVersion} onChange={e => setInstallVersion(e.target.value)}
                 className="w-full px-3 py-2 border rounded-lg text-sm">
-                {PHP_VERSIONS.map(v => (
-                  <option key={v} value={v}>PHP {v}</option>
-                ))}
+                {PHP_VERSIONS.map(v => {
+                  const st = statusFor(v)
+                  return (
+                    <option key={v} value={v}>
+                      PHP {v}{st?.candidate_version ? ` — ${st.candidate_version}` : ''}{st?.prerelease ? ' (pre-release)' : ''}
+                    </option>
+                  )
+                })}
               </select>
+              {statusFor(installVersion)?.prerelease && (
+                <p className="text-xs text-amber-700 mt-1">
+                  PHP {installVersion} is still a pre-release ({statusFor(installVersion)!.candidate_version}). Do not use it for production sites yet.
+                </p>
+              )}
             </div>
             <div className="pt-5">
               <button onClick={handleInstallPHP} disabled={installPHP.isPending}

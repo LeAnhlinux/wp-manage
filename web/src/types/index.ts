@@ -362,6 +362,17 @@ export interface UpdateBotRulesRequest {
   rules: BotRule[]
 }
 
+// PHP patch updates
+export interface PHPUpdateStatus {
+  version: string
+  installed: boolean
+  installed_version: string
+  candidate_version: string
+  update_available: boolean
+  package_rebuild: boolean
+  prerelease: boolean
+}
+
 // Country access types
 export type GeoMode = 'off' | 'blacklist' | 'whitelist'
 export type GeoAction = 'allow' | 'deny'

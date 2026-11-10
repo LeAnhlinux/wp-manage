@@ -459,6 +459,8 @@ func Setup(
 	// PHP version management — static routes MUST be before :siteId wildcard
 	servers.Get("/:id/phpfpm/installed", serverAccess, middleware.PermissionRequired("infrastructure", "read"), infraHandler.ListInstalledPHPVersions)
 	servers.Post("/:id/phpfpm/install", serverAccess, middleware.PermissionRequired("infrastructure", "manage"), infraHandler.InstallPHPVersion)
+	servers.Get("/:id/phpfpm/updates", serverAccess, middleware.PermissionRequired("infrastructure", "read"), infraHandler.PHPUpdateStatus)
+	servers.Post("/:id/phpfpm/update", serverAccess, middleware.PermissionRequired("infrastructure", "manage"), infraHandler.UpdatePHPVersion)
 	// PHP-FPM pool routes (wildcard :siteId — must be after all static segments)
 	servers.Get("/:id/phpfpm/:siteId", serverAccess, middleware.PermissionRequired("infrastructure", "read"), infraHandler.GetPHPFPMPool)
 	servers.Put("/:id/phpfpm/:siteId", serverAccess, middleware.PermissionRequired("infrastructure", "manage"), infraHandler.UpdatePHPFPMPool)

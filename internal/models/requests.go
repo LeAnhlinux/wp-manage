@@ -1070,6 +1070,39 @@ type MariaDBDatabase struct {
 	Collation string `json:"collation"`
 }
 
+// PHPVersions lists every PHP branch the panel can install and manage,
+// oldest first. (Several agent packages still carry their own copy of this
+// list — see memory/php_versions.md when adding a branch.)
+var PHPVersions = []string{"7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5", "8.6"}
+
+// ValidPHPVersion reports whether v is a managed PHP branch. The value is used
+// in package names, paths and unit names, so it must come from this list.
+func ValidPHPVersion(v string) bool {
+	for _, known := range PHPVersions {
+		if v == known {
+			return true
+		}
+	}
+	return false
+}
+
+// PHPUpdateStatus describes one PHP branch on a server: what is installed and
+// what the package repository currently offers.
+type PHPUpdateStatus struct {
+	Version          string `json:"version"`           // branch, e.g. "8.3"
+	Installed        bool   `json:"installed"`
+	InstalledVersion string `json:"installed_version"` // e.g. "8.3.35"
+	CandidateVersion string `json:"candidate_version"` // e.g. "8.3.36"; "" if the repo has no package
+	UpdateAvailable  bool   `json:"update_available"`
+	PackageRebuild   bool   `json:"package_rebuild"` // update keeps the PHP version (repackaged security fix)
+	PreRelease       bool   `json:"prerelease"`      // candidate is an alpha / beta / RC
+}
+
+// UpdatePHPVersionRequest asks for the patch update of one installed branch.
+type UpdatePHPVersionRequest struct {
+	Version string `json:"version"`
+}
+
 type InstalledPHPVersion struct {
 	Version        string `json:"version"`
 	Installed      bool   `json:"installed"`
@@ -1366,6 +1399,7 @@ type ChangePHPVersionRequest struct {
 type AgentPHPVersionTask struct {
 	Action  string `json:"action"` // install, list
 	Version string `json:"version"`
+	Refresh bool   `json:"refresh,omitempty"` // php_update_status: run apt-get update first
 }
 
 // MariaDB user list response from agent

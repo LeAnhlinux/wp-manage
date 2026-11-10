@@ -259,7 +259,7 @@ func (m *Manager) DeleteSite(domain, dbName, dbUser string) error {
 
 	// Remove PHP-FPM pool for all versions and reload each affected FPM service
 	// so that worker processes exit before we try to remove the Linux user.
-	phpVersions := []string{"7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5"}
+	phpVersions := []string{"7.4", "8.0", "8.1", "8.2", "8.3", "8.4", "8.5", "8.6"}
 	for _, v := range phpVersions {
 		poolFile := fmt.Sprintf("/etc/php/%s/fpm/pool.d/%s.conf", v, domain)
 		if err := os.Remove(poolFile); err == nil {

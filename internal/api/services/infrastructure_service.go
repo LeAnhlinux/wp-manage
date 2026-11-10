@@ -464,6 +464,9 @@ func (s *InfrastructureService) GetServerLogs(serverID uint64, logType string, l
 // ==================== PHP Version Management ====================
 
 func (s *InfrastructureService) InstallPHPVersion(serverID uint64, version string) error {
+	if !models.ValidPHPVersion(version) {
+		return fmt.Errorf("unsupported PHP version %q", version)
+	}
 	taskData := models.AgentPHPVersionTask{
 		Action:  "install",
 		Version: version,
@@ -478,6 +481,43 @@ func (s *InfrastructureService) InstallPHPVersion(serverID uint64, version strin
 		return fmt.Errorf("%s", result.Error)
 	}
 	return nil
+}
+
+// PHPUpdateStatus asks the agent which PHP branches are installed and what the
+// package repository offers for each. refresh re-downloads the package lists.
+func (s *InfrastructureService) PHPUpdateStatus(serverID uint64, refresh bool) ([]models.PHPUpdateStatus, error) {
+	task := s.queueTaskReturn(serverID, 0, "php_update_status", models.AgentPHPVersionTask{Action: "status", Refresh: refresh})
+	result, err := WaitForTaskCompleteWithTimeout(s.db, task.ID, 240*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	if result.Error != "" {
+		return nil, fmt.Errorf("%s", result.Error)
+	}
+	status := []models.PHPUpdateStatus{}
+	if result.Output != "" {
+		if err := json.Unmarshal([]byte(result.Output), &status); err != nil {
+			return nil, fmt.Errorf("failed to parse PHP update status: %w", err)
+		}
+	}
+	return status, nil
+}
+
+// UpdatePHPVersion applies the patch update of one installed PHP branch and
+// returns the agent's summary (e.g. "PHP 8.3 updated: 8.3.35 → 8.3.36").
+func (s *InfrastructureService) UpdatePHPVersion(serverID uint64, version string) (string, error) {
+	if !models.ValidPHPVersion(version) {
+		return "", fmt.Errorf("unsupported PHP version %q", version)
+	}
+	task := s.queueTaskReturn(serverID, 0, "update_php_version", models.AgentPHPVersionTask{Action: "update", Version: version})
+	result, err := WaitForTaskCompleteWithTimeout(s.db, task.ID, 600*time.Second)
+	if err != nil {
+		return "", fmt.Errorf("agent timeout: the update may still be running on the server — check again in a few minutes")
+	}
+	if result.Error != "" {
+		return "", fmt.Errorf("%s", result.Error)
+	}
+	return result.Output, nil
 }
 
 func (s *InfrastructureService) ChangeSitePHPVersion(serverID, siteID uint64, newVersion string) error {
