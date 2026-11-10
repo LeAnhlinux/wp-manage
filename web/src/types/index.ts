@@ -362,6 +362,42 @@ export interface UpdateBotRulesRequest {
   rules: BotRule[]
 }
 
+// Country access types
+export type GeoMode = 'off' | 'blacklist' | 'whitelist'
+export type GeoAction = 'allow' | 'deny'
+
+export interface GeoRuleSet {
+  mode: GeoMode
+  countries: string[]
+  providers: Record<string, GeoAction>
+}
+
+export interface GeoRulesResponse extends GeoRuleSet {
+  enabled: boolean
+  inherit: boolean
+  server_enabled: boolean
+  server?: GeoRuleSet
+}
+
+export interface UpdateGeoRulesRequest extends GeoRuleSet {
+  enabled?: boolean
+  inherit?: boolean
+}
+
+export interface GeoProviderStatus {
+  key: string
+  name: string
+  description: string
+  range_count: number
+  fetched_at: string | null
+  last_error?: string
+}
+
+export interface GeoCatalog {
+  countries: string[]
+  providers: GeoProviderStatus[]
+}
+
 // Security types
 export interface WAFConfig {
   id: number

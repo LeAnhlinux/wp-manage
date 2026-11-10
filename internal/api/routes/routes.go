@@ -162,6 +162,7 @@ func Setup(
 	updateCheckHandler *handlers.UpdateCheckHandler,
 	transferHandler *handlers.TransferHandler,
 	botHandler *handlers.BotHandler,
+	geoHandler *handlers.GeoHandler,
 	userSvc *services.UserService,
 	apiKeySvc *services.APIKeyService,
 	rateLimiter *middleware.RateLimiter,
@@ -185,6 +186,7 @@ func Setup(
 	agent.Post("/migrations/:id/setup-ssh", migrationHandler.SetupSSH)
 	agent.Post("/migrations/:id/cleanup-ssh", migrationHandler.CleanupSSH)
 	agent.Post("/scans/complete", securityHandler.ScanComplete)
+	agent.Get("/geo/providers", geoHandler.AgentProviders)
 	agent.Post("/staging/complete", wordpressHandler.StagingComplete)
 	agent.Post("/updates/complete", wordpressHandler.UpdateCheckComplete)
 	agent.Post("/updates/apply-complete", wordpressHandler.ApplyUpdatesComplete)
@@ -310,6 +312,16 @@ func Setup(
 	siteBots := sites.Group("/:siteId/bot-rules")
 	siteBots.Get("/", botHandler.GetSiteRules)
 	siteBots.Put("/", middleware.PermissionRequired("sites", "manage"), botHandler.UpdateSiteRules)
+
+	// Country access (country blacklist / whitelist + provider IP ranges): server defaults + site settings
+	protected.Get("/geo/catalog", geoHandler.GetCatalog)
+	protected.Post("/geo/providers/refresh", middleware.PermissionRequired("infrastructure", "manage"), geoHandler.RefreshProviders)
+	serverGeo := servers.Group("/:id/geo-rules", serverAccess)
+	serverGeo.Get("/", geoHandler.GetServerRules)
+	serverGeo.Put("/", middleware.PermissionRequired("infrastructure", "manage"), geoHandler.UpdateServerRules)
+	siteGeo := sites.Group("/:siteId/geo-rules")
+	siteGeo.Get("/", geoHandler.GetSiteRules)
+	siteGeo.Put("/", middleware.PermissionRequired("sites", "manage"), geoHandler.UpdateSiteRules)
 
 	scans := protected.Group("/scans")
 	scans.Get("/", securityHandler.ListAllScans) // all scans filtered by role

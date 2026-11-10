@@ -35,6 +35,7 @@ import { formatDate } from '@/lib/utils'
 import api from '@/lib/api'
 import type { CronJob, CreateFirewallRuleRequest, CreateNginxConfigRequest, CreateCronJobRequest, CreateSSHKeyRequest, CreateAlertRuleRequest, CreateStorageCredentialRequest, PHPFPMPoolConfig, MariaDBUserRequest, MariaDBConfig, CreateDatabaseRequest, Backup } from '@/types'
 
+const GeoAccessTab = lazy(() => import('@/components/server/GeoAccessTab').then(m => ({ default: m.GeoAccessTab })))
 const BotControlTab = lazy(() => import('@/components/server/BotControlTab').then(m => ({ default: m.BotControlTab })))
 
 export default function ServerDetailPage() {
@@ -150,6 +151,7 @@ export default function ServerDetailPage() {
               { id: 'firewall',  icon: <Shield size={15} />,   label: 'Firewall' },
               { id: 'fail2ban',  icon: <Shield size={15} />,   label: 'Fail2Ban' },
               { id: 'bot-control', icon: <Bot size={15} />,    label: 'Bot Control' },
+              { id: 'geo-access',  icon: <Globe size={15} />,  label: 'Country Access' },
               { id: 'ssh-keys',  icon: <Key size={15} />,      label: 'SSH Keys' },
             ]},
             { group: 'Web Server', items: [
@@ -366,6 +368,11 @@ export default function ServerDetailPage() {
       {activeTab === 'config' && <ConfigTab serverId={serverId} />}
       {activeTab === 'storage' && <StorageTab serverId={serverId} />}
       {activeTab === 'fail2ban' && <Fail2BanTab serverId={serverId} />}
+      {activeTab === 'geo-access' && (
+        <Suspense fallback={<div className="flex justify-center py-10"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600" /></div>}>
+          <GeoAccessTab serverId={serverId} canManage={canManage} />
+        </Suspense>
+      )}
       {activeTab === 'bot-control' && (
         <Suspense fallback={<div className="flex justify-center py-10"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600" /></div>}>
           <BotControlTab serverId={serverId} canManage={canManage} />

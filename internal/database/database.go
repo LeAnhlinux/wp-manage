@@ -136,6 +136,8 @@ func AutoMigrate(db *gorm.DB) error {
 		&models.WAFConfig{},
 		&models.BotConfig{},
 		&models.BotRule{},
+		&models.GeoConfig{},
+		&models.IPProvider{},
 		&models.MalwareScan{},
 		&models.MalwareScanSchedule{},
 		&models.ThreatWhitelist{},

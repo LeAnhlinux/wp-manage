@@ -108,6 +108,7 @@ func (s *ServerService) Delete(id uint64) error {
 	// Bot-control rows are keyed by (scope_type, scope_id), not server_id.
 	s.db.Where("scope_type = ? AND scope_id = ?", "server", id).Delete(&models.BotRule{})
 	s.db.Where("scope_type = ? AND scope_id = ?", "server", id).Delete(&models.BotConfig{})
+	s.db.Where("scope_type = ? AND scope_id = ?", "server", id).Delete(&models.GeoConfig{})
 
 	return s.db.Where("id = ?", id).Delete(&models.Server{}).Error
 }

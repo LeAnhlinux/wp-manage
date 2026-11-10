@@ -4,10 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
-	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/gofiber-team/wp-manage/internal/models"
@@ -20,32 +17,16 @@ import (
 // whole server).
 const (
 	botHTTPConfDir = "/etc/nginx/conf.d"
-	botSnippetDir  = "/etc/nginx/snippets/wpm-bots"
 	botBurst       = 5
 )
-
-// The include uses a glob ("[.]" instead of "."). nginx fails `nginx -t` on a
-// plain include of a missing file, but silently skips a glob with no match.
-// Vhosts get copied verbatim to other servers (migration, backup restore) where
-// the snippet does not exist yet; a plain include there would break nginx for
-// every site on that server.
-var botIncludeRegex = regexp.MustCompile(`(?m)^[ \t]*include /etc/nginx/snippets/wpm-bots/site-(\d+)\[\.\]conf;[ \t]*\n`)
-
-func botIncludeLine(siteID uint64) string {
-	return fmt.Sprintf("    include %s/site-%d[.]conf;\n", botSnippetDir, siteID)
-}
 
 func botHTTPConfPath(siteID uint64) string {
 	return fmt.Sprintf("%s/wpm-bots-site-%d.conf", botHTTPConfDir, siteID)
 }
 
-func botSnippetPath(siteID uint64) string {
-	return fmt.Sprintf("%s/site-%d.conf", botSnippetDir, siteID)
-}
+func botSnippetPath(siteID uint64) string { return botInclude.snippetPath(siteID) }
 
-func botVhostPath(domain string) string {
-	return fmt.Sprintf("/etc/nginx/sites-available/%s.conf", domain)
-}
+func botIncludeLine(siteID uint64) string { return botInclude.line(siteID) }
 
 // validateBotSite checks everything that ends up in a file path or inside
 // nginx config. The API validates too; the agent must not rely on that.
@@ -160,62 +141,11 @@ func BuildBotConfig(site models.AgentBotSite) (httpConf, snippet string, err err
 	return h.String(), s.String(), nil
 }
 
-// setBotInclude removes any bot-control include from a vhost and, when want is
-// true, adds the one for siteID at the end of the FIRST server block. The first
-// block is the real site; with SSL the trailing block is only the port-80
-// redirect, where rules would never see HTTPS traffic.
 func setBotInclude(vhost string, siteID uint64, want bool) string {
-	vhost = botIncludeRegex.ReplaceAllString(vhost, "")
-	if !want {
-		return vhost
-	}
-	end := firstServerBlockEnd(vhost)
-	if end < 0 {
-		return vhost
-	}
-	return vhost[:end] + botIncludeLine(siteID) + vhost[end:]
+	return botInclude.set(vhost, siteID, want)
 }
 
-// botSiteIDFromVhost returns the site id of the bot-control include in a vhost.
-func botSiteIDFromVhost(vhost string) (uint64, bool) {
-	m := botIncludeRegex.FindStringSubmatch(vhost)
-	if m == nil {
-		return 0, false
-	}
-	id, err := strconv.ParseUint(m[1], 10, 64)
-	return id, err == nil
-}
-
-// botFileBackup remembers a file's previous state so a failed apply can undo it.
-type botFileBackup struct {
-	path    string
-	data    []byte
-	existed bool
-}
-
-func backupBotFile(path string) botFileBackup {
-	data, err := os.ReadFile(path)
-	return botFileBackup{path: path, data: data, existed: err == nil}
-}
-
-func (b botFileBackup) restore() {
-	if b.existed {
-		os.WriteFile(b.path, b.data, 0644)
-	} else {
-		os.Remove(b.path)
-	}
-}
-
-// writeOrRemoveBotFile writes content, or removes the file when content is empty.
-func writeOrRemoveBotFile(path, content string) error {
-	if content == "" {
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			return err
-		}
-		return nil
-	}
-	return os.WriteFile(path, []byte(content), 0644)
-}
+func botSiteIDFromVhost(vhost string) (uint64, bool) { return botInclude.siteID(vhost) }
 
 // ApplyBotRules writes the bot-control config for every site in the task, then
 // tests and reloads nginx once. It is all-or-nothing: on any error every file
@@ -240,11 +170,11 @@ func ApplyBotRules(task models.AgentBotRulesTask) error {
 	if len(items) == 0 {
 		return nil
 	}
-	if err := os.MkdirAll(botSnippetDir, 0755); err != nil {
-		return fmt.Errorf("create %s: %w", botSnippetDir, err)
+	if err := os.MkdirAll(botInclude.dir, 0755); err != nil {
+		return fmt.Errorf("create %s: %w", botInclude.dir, err)
 	}
 
-	var backups []botFileBackup
+	var backups []fileBackup
 	rollback := func() {
 		for i := len(backups) - 1; i >= 0; i-- {
 			backups[i].restore()
@@ -252,8 +182,8 @@ func ApplyBotRules(task models.AgentBotRulesTask) error {
 	}
 
 	for _, it := range items {
-		vhostPath := botVhostPath(it.site.Domain)
-		vhostData, err := os.ReadFile(vhostPath)
+		vPath := vhostPath(it.site.Domain)
+		vhostData, err := os.ReadFile(vPath)
 		if err != nil {
 			rollback()
 			return fmt.Errorf("nginx vhost not found for %s", it.site.Domain)
@@ -268,65 +198,20 @@ func ApplyBotRules(task models.AgentBotRulesTask) error {
 		writes := []struct{ path, content string }{
 			{botHTTPConfPath(it.site.SiteID), it.httpConf},
 			{botSnippetPath(it.site.SiteID), it.snippet},
-			{vhostPath, newVhost},
+			{vPath, newVhost},
 		}
 		for _, w := range writes {
-			backups = append(backups, backupBotFile(w.path))
-			if err := writeOrRemoveBotFile(w.path, w.content); err != nil {
+			backups = append(backups, backupFile(w.path))
+			if err := writeOrRemoveFile(w.path, w.content); err != nil {
 				rollback()
 				return fmt.Errorf("write %s: %w", w.path, err)
 			}
 		}
 	}
 
-	if out, err := exec.Command("nginx", "-t").CombinedOutput(); err != nil {
-		rollback()
-		return fmt.Errorf("nginx config test failed, changes rolled back: %s", strings.TrimSpace(string(out)))
-	}
-	if out, err := exec.Command("systemctl", "reload", "nginx").CombinedOutput(); err != nil {
-		return fmt.Errorf("nginx reload failed: %s", strings.TrimSpace(string(out)))
+	if err := nginxTestAndReload(rollback); err != nil {
+		return err
 	}
 	slog.Info("Bot rules applied", "sites", len(items))
 	return nil
-}
-
-// BotSiteIDForDomain reports which site id's bot rules a domain's vhost
-// includes. Call it BEFORE an operation that rewrites or deletes the vhost.
-func BotSiteIDForDomain(domain string) (uint64, bool) {
-	data, err := os.ReadFile(botVhostPath(domain))
-	if err != nil {
-		return 0, false
-	}
-	return botSiteIDFromVhost(string(data))
-}
-
-// RestoreBotInclude re-adds the bot-control include after a vhost was
-// regenerated from the template (which drops it), then tests and reloads.
-func RestoreBotInclude(domain string, siteID uint64) error {
-	if _, err := os.Stat(botSnippetPath(siteID)); err != nil {
-		return nil // rules were removed meanwhile
-	}
-	vhostPath := botVhostPath(domain)
-	backup := backupBotFile(vhostPath)
-	if !backup.existed {
-		return fmt.Errorf("nginx vhost not found for %s", domain)
-	}
-	newVhost := setBotInclude(string(backup.data), siteID, true)
-	if newVhost == string(backup.data) {
-		return nil
-	}
-	if err := os.WriteFile(vhostPath, []byte(newVhost), 0644); err != nil {
-		return err
-	}
-	if out, err := exec.Command("nginx", "-t").CombinedOutput(); err != nil {
-		backup.restore()
-		return fmt.Errorf("nginx config test failed restoring bot rules: %s", strings.TrimSpace(string(out)))
-	}
-	return exec.Command("systemctl", "reload", "nginx").Run()
-}
-
-// RemoveBotFiles deletes a site's bot-control files (after the site's vhost is gone).
-func RemoveBotFiles(siteID uint64) {
-	os.Remove(botSnippetPath(siteID))
-	os.Remove(botHTTPConfPath(siteID))
 }

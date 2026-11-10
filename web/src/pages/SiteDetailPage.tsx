@@ -30,6 +30,7 @@ const CronPanel = lazy(() => import('./site-tabs/CronPanel').then(m => ({ defaul
 const SFTPPanel = lazy(() => import('./site-tabs/SFTPPanel').then(m => ({ default: m.SFTPPanel })))
 const WAFPanel = lazy(() => import('./site-tabs/WAFPanel').then(m => ({ default: m.WAFPanel })))
 const BotControlPanel = lazy(() => import('./site-tabs/BotControlPanel').then(m => ({ default: m.BotControlPanel })))
+const GeoAccessPanel = lazy(() => import('./site-tabs/GeoAccessPanel').then(m => ({ default: m.GeoAccessPanel })))
 const SecurityPanel = lazy(() => import('./site-tabs/SecurityPanel').then(m => ({ default: m.SecurityPanel })))
 const WPCLIPanel = lazy(() => import('./site-tabs/WPCLIPanel').then(m => ({ default: m.WPCLIPanel })))
 const CachePanel = lazy(() => import('./site-tabs/CachePanel').then(m => ({ default: m.CachePanel })))
@@ -247,6 +248,7 @@ export default function SiteDetailPage() {
             <div className="space-y-6">
               <WAFPanel siteId={site.id} canManage={can('sites', 'manage')} />
               <BotControlPanel siteId={site.id} canManage={can('sites', 'manage')} />
+              <GeoAccessPanel siteId={site.id} canManage={can('sites', 'manage')} />
               <SecurityPanel siteId={site.id} canManage={can('sites', 'manage')} />
             </div>
           )}

@@ -339,6 +339,57 @@ func (t *AgentBotRulesTask) Resolve() error {
 	return nil
 }
 
+// --- Country access (geo) ---
+
+// GeoRuleSet is one complete set of country-access rules.
+type GeoRuleSet struct {
+	Mode      string            `json:"mode"`
+	Countries []string          `json:"countries"`
+	Providers map[string]string `json:"providers"` // provider key -> allow|deny
+}
+
+type UpdateGeoRulesRequest struct {
+	Enabled   *bool             `json:"enabled"` // server scope
+	Inherit   *bool             `json:"inherit"` // site scope
+	Mode      string            `json:"mode"`
+	Countries []string          `json:"countries"`
+	Providers map[string]string `json:"providers"`
+}
+
+type GeoRulesResponse struct {
+	Enabled bool `json:"enabled"`
+	Inherit bool `json:"inherit"`
+	GeoRuleSet
+	ServerEnabled bool        `json:"server_enabled"`   // site scope only
+	Server        *GeoRuleSet `json:"server,omitempty"` // site scope only
+}
+
+type AgentGeoSite struct {
+	SiteID uint64 `json:"site_id"`
+	Domain string `json:"domain"`
+	Set    int    `json:"set"` // index into AgentGeoRulesTask.Sets
+}
+
+// AgentGeoRulesTask carries effective country-access rules for one or more
+// sites (task type "configure_geo_rules"). Identical rule sets are sent once.
+type AgentGeoRulesTask struct {
+	Sets  []GeoRuleSet   `json:"sets"`
+	Sites []AgentGeoSite `json:"sites"`
+}
+
+// RuleFor returns the rule set a site references.
+func (t *AgentGeoRulesTask) RuleFor(site AgentGeoSite) (GeoRuleSet, error) {
+	if site.Set < 0 || site.Set >= len(t.Sets) {
+		return GeoRuleSet{}, fmt.Errorf("geo rules: site %d references unknown rule set %d", site.SiteID, site.Set)
+	}
+	return t.Sets[site.Set], nil
+}
+
+// AgentGeoProviders is what GET /agent/geo/providers returns.
+type AgentGeoProviders struct {
+	Providers map[string][]string `json:"providers"` // provider key -> CIDRs
+}
+
 type AgentMalwareScanTask struct {
 	ScanID   uint64   `json:"scan_id"`
 	SiteID   uint64   `json:"site_id"`

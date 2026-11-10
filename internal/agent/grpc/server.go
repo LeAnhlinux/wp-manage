@@ -359,6 +359,14 @@ func (s *AgentServer) pollTasks() {
 			json.Unmarshal(task.Data, &botTask)
 			go s.executeConfigureBotRules(task.TaskID, botTask)
 
+		case "configure_geo_rules":
+			var geoTask models.AgentGeoRulesTask
+			json.Unmarshal(task.Data, &geoTask)
+			go s.executeConfigureGeoRules(task.TaskID, geoTask)
+
+		case "refresh_geo_data":
+			go s.executeRefreshGeoData(task.TaskID)
+
 		case "malware_scan":
 			var scanTask models.AgentMalwareScanTask
 			json.Unmarshal(task.Data, &scanTask)
@@ -932,11 +940,11 @@ func (s *AgentServer) executeDeleteSite(taskID uint64, domain, dbName, dbUser st
 
 	slog.Info("Deleting site", "domain", domain)
 	// Read before the vhost is deleted: it is the only place the agent can
-	// learn which bot-control files belong to this domain.
-	botSiteID, hadBotRules := agentsecurity.BotSiteIDForDomain(domain)
+	// learn which bot-control / country-access files belong to this domain.
+	includes := agentsecurity.ManagedIncludesForDomain(domain)
 	err := s.DeleteSite(domain, dbName, dbUser)
-	if err == nil && hadBotRules {
-		agentsecurity.RemoveBotFiles(botSiteID)
+	if err == nil {
+		agentsecurity.RemoveManagedFiles(includes)
 	}
 
 	result := models.AgentTaskResult{TaskID: taskID}
@@ -1370,13 +1378,13 @@ func (s *AgentServer) executeRestoreBackup(taskID uint64, siteID uint64, task mo
 	}
 
 	// A restore can overwrite the vhost with the copy stored in the backup,
-	// which predates (or simply lacks) the bot-control include.
-	botSiteID, hadBotRules := agentsecurity.BotSiteIDForDomain(task.Domain)
+	// which predates (or simply lacks) the bot-control / country-access includes.
+	includes := agentsecurity.ManagedIncludesForDomain(task.Domain)
 
 	manifest, err := agentbackup.RunRestore(params)
-	if err == nil && hadBotRules {
-		if rerr := agentsecurity.RestoreBotInclude(task.Domain, botSiteID); rerr != nil {
-			slog.Error("Failed to restore bot rules after backup restore", "domain", task.Domain, "error", rerr)
+	if err == nil && includes.Any() {
+		if rerr := agentsecurity.RestoreManagedIncludes(task.Domain, includes); rerr != nil {
+			slog.Error("Failed to restore access rules after backup restore", "domain", task.Domain, "error", rerr)
 		}
 	}
 
@@ -1461,15 +1469,85 @@ func (s *AgentServer) executeConfigureBotRules(taskID uint64, task models.AgentB
 	s.reportTaskResult(result)
 }
 
+// geoDeps gathers what country access needs besides the rules themselves:
+// provider IP ranges (pulled from the panel, which refreshes them weekly) and
+// this server's own addresses. Providers stays nil when the panel cannot be
+// reached; the agent then keeps whatever ranges it already has on disk.
+func (s *AgentServer) geoDeps() agentsecurity.GeoDeps {
+	deps := agentsecurity.GeoDeps{SelfIPs: agentsecurity.LocalIPs()}
+
+	req, _ := http.NewRequest("GET", s.apiURL+"/api/v1/agent/geo/providers", nil)
+	req.Header.Set("X-Agent-Key", s.apiKey)
+	resp, err := (&http.Client{Timeout: 60 * time.Second}).Do(req)
+	if err != nil {
+		slog.Warn("Could not fetch provider IP ranges", "error", err)
+		return deps
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		slog.Warn("Could not fetch provider IP ranges", "status", resp.StatusCode)
+		return deps
+	}
+	var body struct {
+		Data models.AgentGeoProviders `json:"data"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 32<<20)).Decode(&body); err != nil || len(body.Data.Providers) == 0 {
+		slog.Warn("Provider IP ranges response was empty or invalid", "error", err)
+		return deps
+	}
+	deps.Providers = body.Data.Providers
+	return deps
+}
+
+func (s *AgentServer) executeConfigureGeoRules(taskID uint64, task models.AgentGeoRulesTask) {
+	result := models.AgentTaskResult{TaskID: taskID}
+
+	// Same locking discipline as bot rules: every domain, sorted, de-duplicated.
+	seen := map[string]bool{}
+	domains := make([]string, 0, len(task.Sites))
+	for _, site := range task.Sites {
+		if err := validateTaskDomain(site.Domain); err != nil {
+			result.Error = err.Error()
+			s.reportTaskResult(result)
+			return
+		}
+		if !seen[site.Domain] {
+			seen[site.Domain] = true
+			domains = append(domains, site.Domain)
+		}
+	}
+	sort.Strings(domains)
+	for _, d := range domains {
+		unlock := s.lockDomain(d)
+		defer unlock()
+	}
+
+	slog.Info("Configuring country access", "sites", len(task.Sites))
+	if err := agentsecurity.ApplyGeoRules(task, s.geoDeps()); err != nil {
+		slog.Error("Country access configuration failed", "error", err)
+		result.Error = err.Error()
+	}
+	s.reportTaskResult(result)
+}
+
+func (s *AgentServer) executeRefreshGeoData(taskID uint64) {
+	result := models.AgentTaskResult{TaskID: taskID}
+	if err := agentsecurity.RefreshGeoData(s.geoDeps()); err != nil {
+		slog.Error("Country access data refresh failed", "error", err)
+		result.Error = err.Error()
+	}
+	s.reportTaskResult(result)
+}
+
 // rebuildNginxVhost regenerates a vhost from the template and then puts back
-// the bot-control include, which the template does not know about.
+// the bot-control and country-access includes, which the template does not know about.
 func (s *AgentServer) rebuildNginxVhost(domain string, configData map[string]string) (*agentconfig.RebuildResult, error) {
-	botSiteID, hadBotRules := agentsecurity.BotSiteIDForDomain(domain)
+	includes := agentsecurity.ManagedIncludesForDomain(domain)
 	r, err := agentconfig.RebuildNginxVhost(domain, configData)
-	if err == nil && r != nil && r.Success && hadBotRules {
-		if rerr := agentsecurity.RestoreBotInclude(domain, botSiteID); rerr != nil {
-			slog.Error("Failed to restore bot rules after vhost rebuild", "domain", domain, "error", rerr)
-			r.Message += " (warning: bot control rules were not restored — save them again in the panel)"
+	if err == nil && r != nil && r.Success && includes.Any() {
+		if rerr := agentsecurity.RestoreManagedIncludes(domain, includes); rerr != nil {
+			slog.Error("Failed to restore access rules after vhost rebuild", "domain", domain, "error", rerr)
+			r.Message += " (warning: bot control / country access rules were not restored — save them again in the panel)"
 		}
 	}
 	return r, err

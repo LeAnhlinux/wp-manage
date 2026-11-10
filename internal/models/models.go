@@ -240,6 +240,36 @@ type BotRule struct {
 	UpdatedAt  time.Time `json:"updated_at"`
 }
 
+// GeoConfig holds country-access settings for one scope.
+// Server scope uses Enabled; site scope uses Inherit (true = use the server's
+// settings, false = this row replaces them entirely). No gorm default tags on
+// the bools — see BotConfig.
+type GeoConfig struct {
+	ID            uint64    `json:"id" gorm:"primaryKey;autoIncrement"`
+	ScopeType     string    `json:"scope_type" gorm:"type:enum('server','site');uniqueIndex:idx_geo_cfg_scope;not null"`
+	ScopeID       uint64    `json:"scope_id" gorm:"uniqueIndex:idx_geo_cfg_scope;not null"`
+	Enabled       bool      `json:"enabled"`
+	Inherit       bool      `json:"inherit"`
+	Mode          string    `json:"mode" gorm:"type:enum('off','blacklist','whitelist');not null"`
+	Countries     string    `json:"countries" gorm:"type:text"`      // comma-separated ISO codes
+	ProviderRules string    `json:"provider_rules" gorm:"type:text"` // JSON object: provider key -> allow|deny
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+// IPProvider caches the published IP ranges of one provider (see GeoProviders).
+// Refreshed weekly by GeoProviderWorker; agents pull the lists from the API.
+type IPProvider struct {
+	ID         uint64     `json:"id" gorm:"primaryKey;autoIncrement"`
+	Key        string     `json:"key" gorm:"column:provider_key;size:40;uniqueIndex;not null"`
+	CIDRs      string     `json:"-" gorm:"column:cidrs;type:longtext"` // newline-separated
+	RangeCount int        `json:"range_count"`
+	LastError  string     `json:"last_error" gorm:"type:text"`
+	FetchedAt  *time.Time `json:"fetched_at"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+}
+
 // MalwareScan stores scan results per site
 type MalwareScan struct {
 	ID            uint64     `json:"id" gorm:"primaryKey;autoIncrement"`

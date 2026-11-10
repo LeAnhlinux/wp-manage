@@ -50,6 +50,7 @@ func main() {
 	backupService := services.NewBackupService(db)
 	securityService := services.NewSecurityService(db, fileService)
 	botService := services.NewBotService(db)
+	geoService := services.NewGeoService(db)
 	rolloutService := services.NewRolloutService(db)
 	performanceService := services.NewPerformanceService(db, cfg)
 	multisiteService := services.NewMultisiteService(db)
@@ -99,8 +100,13 @@ func main() {
 	botHandler := handlers.NewBotHandler(botService, userService)
 	// Sites that appear on a server outside of a rule save (created, imported,
 	// migrated) still need the server's bot rules pushed to the agent.
-	serverHandler.SetSiteReadyHook(botService.QueueForSite)
-	migrationService.SetSiteMovedHook(botService.QueueForSite)
+	geoHandler := handlers.NewGeoHandler(geoService, userService)
+	pushSiteAccessRules := func(siteID uint64) {
+		botService.QueueForSite(siteID)
+		geoService.QueueForSite(siteID)
+	}
+	serverHandler.SetSiteReadyHook(pushSiteAccessRules)
+	migrationService.SetSiteMovedHook(pushSiteAccessRules)
 	wordpressHandler := handlers.NewWordPressHandler(wordpressService)
 	rolloutHandler := handlers.NewRolloutHandler(rolloutService)
 	performanceHandler := handlers.NewPerformanceHandler(performanceService)
@@ -185,7 +191,7 @@ func main() {
 
 	// API routes
 	routes.Setup(app, cfg, authHandler, serverHandler, siteHandler, deployHandler, fileHandler,
-		userHandler, apiKeyHandler, backupHandler, migrationHandler, securityHandler, wordpressHandler, rolloutHandler, performanceHandler, multisiteHandler, imageOptHandler, teamHandler, infraHandler, activityHandler, cronHandler, domainHandler, redisHandler, sshHandler, sftpHandler, hardeningHandler, uptimeHandler, alertHandler, wpcliHandler, cacheHandler, importHandler, dnsHandler, sslHandler, storageHandler, fail2banHandler, panelUpdateHandler, ionCubeHandler, updateCheckHandler, transferHandler, botHandler, userService, apiKeyService, rateLimiter)
+		userHandler, apiKeyHandler, backupHandler, migrationHandler, securityHandler, wordpressHandler, rolloutHandler, performanceHandler, multisiteHandler, imageOptHandler, teamHandler, infraHandler, activityHandler, cronHandler, domainHandler, redisHandler, sshHandler, sftpHandler, hardeningHandler, uptimeHandler, alertHandler, wpcliHandler, cacheHandler, importHandler, dnsHandler, sslHandler, storageHandler, fail2banHandler, panelUpdateHandler, ionCubeHandler, updateCheckHandler, transferHandler, botHandler, geoHandler, userService, apiKeyService, rateLimiter)
 
 	// Mobile API routes — separate prefix /api/mobile/v1/
 	routes.SetupMobile(app, cfg,
@@ -227,6 +233,9 @@ func main() {
 
 	transferSSLWorker := workers.NewTransferSSLWorker(db)
 	transferSSLWorker.Start()
+
+	geoProviderWorker := workers.NewGeoProviderWorker(geoService)
+	geoProviderWorker.Start()
 
 	cloudflareIPWorker := workers.NewCloudflareIPWorker(db, infraService)
 	cloudflareIPWorker.Start()

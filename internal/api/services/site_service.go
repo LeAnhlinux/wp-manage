@@ -157,6 +157,7 @@ func (s *SiteService) Delete(id uint64) error {
 		// Bot-control rows are keyed by (scope_type, scope_id), not site_id.
 		tx.Exec("DELETE FROM bot_rules WHERE scope_type = 'site' AND scope_id = ?", id)
 		tx.Exec("DELETE FROM bot_configs WHERE scope_type = 'site' AND scope_id = ?", id)
+		tx.Exec("DELETE FROM geo_configs WHERE scope_type = 'site' AND scope_id = ?", id)
 
 		for _, tbl := range tables {
 			if tbl == "staging_sites" {
@@ -538,6 +539,8 @@ var longRunningTaskTypes = []string{
 	"enable_multisite", "create_subsite", "delete_subsite", "sync_subsites",
 	"install_service", "install_clamav", "install_php_version",
 	"db_optimize", "harden_wordpress", "agent_update",
+	// first apply on a server runs apt install + a 4 MB database download
+	"configure_geo_rules", "refresh_geo_data",
 }
 
 const (
