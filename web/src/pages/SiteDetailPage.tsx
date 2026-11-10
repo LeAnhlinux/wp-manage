@@ -29,6 +29,7 @@ const RedisPanel = lazy(() => import('./site-tabs/RedisPanel').then(m => ({ defa
 const CronPanel = lazy(() => import('./site-tabs/CronPanel').then(m => ({ default: m.CronPanel })))
 const SFTPPanel = lazy(() => import('./site-tabs/SFTPPanel').then(m => ({ default: m.SFTPPanel })))
 const WAFPanel = lazy(() => import('./site-tabs/WAFPanel').then(m => ({ default: m.WAFPanel })))
+const BotControlPanel = lazy(() => import('./site-tabs/BotControlPanel').then(m => ({ default: m.BotControlPanel })))
 const SecurityPanel = lazy(() => import('./site-tabs/SecurityPanel').then(m => ({ default: m.SecurityPanel })))
 const WPCLIPanel = lazy(() => import('./site-tabs/WPCLIPanel').then(m => ({ default: m.WPCLIPanel })))
 const CachePanel = lazy(() => import('./site-tabs/CachePanel').then(m => ({ default: m.CachePanel })))
@@ -245,6 +246,7 @@ export default function SiteDetailPage() {
           {activeTab === 'security' && (
             <div className="space-y-6">
               <WAFPanel siteId={site.id} canManage={can('sites', 'manage')} />
+              <BotControlPanel siteId={site.id} canManage={can('sites', 'manage')} />
               <SecurityPanel siteId={site.id} canManage={can('sites', 'manage')} />
             </div>
           )}

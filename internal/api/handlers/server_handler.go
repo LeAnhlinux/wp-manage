@@ -16,6 +16,7 @@ import (
 type ServerHandler struct {
 	svc         *services.ServerService
 	siteSvc     *services.SiteService
+	onSiteReady func(siteID uint64)
 	backupSvc   *services.BackupService
 	cfg         *config.Config
 	hub         *ws.Hub
@@ -24,6 +25,18 @@ type ServerHandler struct {
 
 func (h *ServerHandler) SetAlertWorker(w *workers.AlertWorker) {
 	h.alertWorker = w
+}
+
+// siteReadyTaskTypes are the tasks whose success means a site now exists on the server.
+var siteReadyTaskTypes = map[string]bool{
+	"create_site":          true,
+	"transfer_import_site": true,
+	"import_external":      true,
+}
+
+// SetSiteReadyHook registers a callback run after a site is created or imported.
+func (h *ServerHandler) SetSiteReadyHook(fn func(siteID uint64)) {
+	h.onSiteReady = fn
 }
 
 func NewServerHandler(svc *services.ServerService, siteSvc *services.SiteService, backupSvc *services.BackupService, cfg *config.Config, hub *ws.Hub) *ServerHandler {
@@ -252,6 +265,15 @@ func (h *ServerHandler) TaskComplete(c *fiber.Ctx) error {
 			h.siteSvc.CompleteTaskWithOutput(result.TaskID, status, result.Output, errMsg)
 		} else {
 			h.siteSvc.CompleteTask(result.TaskID, status, errMsg)
+		}
+
+		// A site just came into existence on this server: let interested
+		// services (bot control) push their per-site config to the agent.
+		if status == "completed" && h.onSiteReady != nil {
+			taskType, taskSiteID := h.siteSvc.GetTaskInfo(result.TaskID)
+			if taskSiteID > 0 && siteReadyTaskTypes[taskType] {
+				h.onSiteReady(taskSiteID)
+			}
 		}
 	}
 

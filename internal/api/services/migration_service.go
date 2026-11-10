@@ -10,8 +10,9 @@ import (
 )
 
 type MigrationService struct {
-	db         *gorm.DB
-	dnsService *DNSService // optional — used to auto-update DNS after keep_domain migration
+	db          *gorm.DB
+	dnsService  *DNSService // optional — used to auto-update DNS after keep_domain migration
+	onSiteMoved func(siteID uint64)
 }
 
 func NewMigrationService(db *gorm.DB, dnsService *DNSService) *MigrationService {
@@ -157,6 +158,11 @@ func (s *MigrationService) List(userID uint64, role string, page, perPage int) (
 	return migrations, total, err
 }
 
+// SetSiteMovedHook registers a callback run after a migration moves a site.
+func (s *MigrationService) SetSiteMovedHook(fn func(siteID uint64)) {
+	s.onSiteMoved = fn
+}
+
 // UpdateMigration updates migration status from agent reports
 func (s *MigrationService) UpdateMigration(update models.AgentMigrationUpdate) error {
 	updates := map[string]interface{}{
@@ -200,6 +206,11 @@ func (s *MigrationService) UpdateMigration(update models.AgentMigrationUpdate) e
 				})
 			} else {
 				s.db.Model(&models.Site{}).Where("id = ?", migration.SiteID).Update("server_id", migration.TargetServerID)
+			}
+
+			// The site now lives on another server and/or under another domain.
+			if s.onSiteMoved != nil {
+				s.onSiteMoved(migration.SiteID)
 			}
 
 			// Auto-update DNS A record for keep_domain mode

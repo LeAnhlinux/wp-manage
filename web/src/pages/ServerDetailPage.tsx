@@ -1,10 +1,10 @@
-import React, { useState } from 'react'
+import React, { useState, lazy, Suspense } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, Server, Globe, HardDrive, Cpu, MemoryStick, Clock, Wifi, WifiOff,
   Plus, Trash2, ExternalLink, RefreshCw, Activity, Shield, Settings, Zap, Wrench,
   HeartPulse, ToggleLeft, ToggleRight, Database, Terminal, FileText, Key, Copy, Check, Bell, AlertTriangle,
-  Loader2, Save, CheckCircle2, XCircle, Play, Archive, ChevronLeft, ChevronRight, Upload
+  Loader2, Save, CheckCircle2, XCircle, Play, Archive, ChevronLeft, ChevronRight, Upload, Bot
 } from 'lucide-react'
 import { useServer, useDeleteServer } from '@/hooks/useServers'
 import {
@@ -34,6 +34,8 @@ import { StatusBadge } from '@/components/ui/Badge'
 import { formatDate } from '@/lib/utils'
 import api from '@/lib/api'
 import type { CronJob, CreateFirewallRuleRequest, CreateNginxConfigRequest, CreateCronJobRequest, CreateSSHKeyRequest, CreateAlertRuleRequest, CreateStorageCredentialRequest, PHPFPMPoolConfig, MariaDBUserRequest, MariaDBConfig, CreateDatabaseRequest, Backup } from '@/types'
+
+const BotControlTab = lazy(() => import('@/components/server/BotControlTab').then(m => ({ default: m.BotControlTab })))
 
 export default function ServerDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -147,6 +149,7 @@ export default function ServerDetailPage() {
             { group: 'Security', items: [
               { id: 'firewall',  icon: <Shield size={15} />,   label: 'Firewall' },
               { id: 'fail2ban',  icon: <Shield size={15} />,   label: 'Fail2Ban' },
+              { id: 'bot-control', icon: <Bot size={15} />,    label: 'Bot Control' },
               { id: 'ssh-keys',  icon: <Key size={15} />,      label: 'SSH Keys' },
             ]},
             { group: 'Web Server', items: [
@@ -363,6 +366,11 @@ export default function ServerDetailPage() {
       {activeTab === 'config' && <ConfigTab serverId={serverId} />}
       {activeTab === 'storage' && <StorageTab serverId={serverId} />}
       {activeTab === 'fail2ban' && <Fail2BanTab serverId={serverId} />}
+      {activeTab === 'bot-control' && (
+        <Suspense fallback={<div className="flex justify-center py-10"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600" /></div>}>
+          <BotControlTab serverId={serverId} canManage={canManage} />
+        </Suspense>
+      )}
       {activeTab === 'redis' && <RedisServerTab serverId={serverId} canManage={canManage} />}
       {activeTab === 'backups' && <BackupArchivesTab serverId={serverId} canManage={canManage} />}
         </div> {/* end right content */}

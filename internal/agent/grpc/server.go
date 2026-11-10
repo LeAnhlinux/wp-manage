@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -352,6 +353,11 @@ func (s *AgentServer) pollTasks() {
 			var wafTask models.AgentWAFTask
 			json.Unmarshal(task.Data, &wafTask)
 			go s.executeConfigureWAF(task.TaskID, wafTask)
+
+		case "configure_bot_rules":
+			var botTask models.AgentBotRulesTask
+			json.Unmarshal(task.Data, &botTask)
+			go s.executeConfigureBotRules(task.TaskID, botTask)
 
 		case "malware_scan":
 			var scanTask models.AgentMalwareScanTask
@@ -925,7 +931,13 @@ func (s *AgentServer) executeDeleteSite(taskID uint64, domain, dbName, dbUser st
 	defer unlock()
 
 	slog.Info("Deleting site", "domain", domain)
+	// Read before the vhost is deleted: it is the only place the agent can
+	// learn which bot-control files belong to this domain.
+	botSiteID, hadBotRules := agentsecurity.BotSiteIDForDomain(domain)
 	err := s.DeleteSite(domain, dbName, dbUser)
+	if err == nil && hadBotRules {
+		agentsecurity.RemoveBotFiles(botSiteID)
+	}
 
 	result := models.AgentTaskResult{TaskID: taskID}
 	if err != nil {
@@ -1278,7 +1290,7 @@ func (s *AgentServer) RenewSSL(domain string) error {
 func (s *AgentServer) RebuildConfig(configType, domain string, configData map[string]string) (*agentconfig.RebuildResult, error) {
 	switch configType {
 	case "nginx_vhost":
-		return agentconfig.RebuildNginxVhost(domain, configData)
+		return s.rebuildNginxVhost(domain, configData)
 	case "php_fpm_pool":
 		phpVer := configData["php_version"]
 		if phpVer == "" {
@@ -1357,7 +1369,16 @@ func (s *AgentServer) executeRestoreBackup(taskID uint64, siteID uint64, task mo
 		EncryptionKey: s.apiKey, // used to AES-decrypt DBPass from manifest
 	}
 
+	// A restore can overwrite the vhost with the copy stored in the backup,
+	// which predates (or simply lacks) the bot-control include.
+	botSiteID, hadBotRules := agentsecurity.BotSiteIDForDomain(task.Domain)
+
 	manifest, err := agentbackup.RunRestore(params)
+	if err == nil && hadBotRules {
+		if rerr := agentsecurity.RestoreBotInclude(task.Domain, botSiteID); rerr != nil {
+			slog.Error("Failed to restore bot rules after backup restore", "domain", task.Domain, "error", rerr)
+		}
+	}
 
 	taskResult := models.AgentTaskResult{TaskID: taskID, SiteID: siteID}
 	if err != nil {
@@ -1406,6 +1427,52 @@ func (s *AgentServer) executeConfigureWAF(taskID uint64, task models.AgentWAFTas
 		slog.Info("WAF configured successfully", "domain", task.Domain)
 	}
 	s.reportTaskResult(result)
+}
+
+func (s *AgentServer) executeConfigureBotRules(taskID uint64, task models.AgentBotRulesTask) {
+	result := models.AgentTaskResult{TaskID: taskID}
+
+	// Lock every domain in the task. Sorted + de-duplicated so two concurrent
+	// multi-site tasks always take the locks in the same order (no deadlock).
+	seen := map[string]bool{}
+	domains := make([]string, 0, len(task.Sites))
+	for _, site := range task.Sites {
+		if err := validateTaskDomain(site.Domain); err != nil {
+			result.Error = err.Error()
+			s.reportTaskResult(result)
+			return
+		}
+		if !seen[site.Domain] {
+			seen[site.Domain] = true
+			domains = append(domains, site.Domain)
+		}
+	}
+	sort.Strings(domains)
+	for _, d := range domains {
+		unlock := s.lockDomain(d)
+		defer unlock()
+	}
+
+	slog.Info("Configuring bot rules", "sites", len(task.Sites))
+	if err := agentsecurity.ApplyBotRules(task); err != nil {
+		slog.Error("Bot rules configuration failed", "error", err)
+		result.Error = err.Error()
+	}
+	s.reportTaskResult(result)
+}
+
+// rebuildNginxVhost regenerates a vhost from the template and then puts back
+// the bot-control include, which the template does not know about.
+func (s *AgentServer) rebuildNginxVhost(domain string, configData map[string]string) (*agentconfig.RebuildResult, error) {
+	botSiteID, hadBotRules := agentsecurity.BotSiteIDForDomain(domain)
+	r, err := agentconfig.RebuildNginxVhost(domain, configData)
+	if err == nil && r != nil && r.Success && hadBotRules {
+		if rerr := agentsecurity.RestoreBotInclude(domain, botSiteID); rerr != nil {
+			slog.Error("Failed to restore bot rules after vhost rebuild", "domain", domain, "error", rerr)
+			r.Message += " (warning: bot control rules were not restored — save them again in the panel)"
+		}
+	}
+	return r, err
 }
 
 func (s *AgentServer) executeMalwareScan(taskID uint64, task models.AgentMalwareScanTask) {
@@ -2204,7 +2271,7 @@ func (s *AgentServer) executeRebuildConfig(taskID uint64, task models.AgentRebui
 		for _, configType := range task.ConfigTypes {
 			switch configType {
 			case "nginx_vhost":
-				r, err := agentconfig.RebuildNginxVhost(domain, map[string]string{
+				r, err := s.rebuildNginxVhost(domain, map[string]string{
 					"php_version": phpVersion,
 				})
 				if err != nil {

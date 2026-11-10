@@ -134,6 +134,8 @@ func AutoMigrate(db *gorm.DB) error {
 		&models.APIKeyModel{},
 		&models.MigrationLog{},
 		&models.WAFConfig{},
+		&models.BotConfig{},
+		&models.BotRule{},
 		&models.MalwareScan{},
 		&models.MalwareScanSchedule{},
 		&models.ThreatWhitelist{},

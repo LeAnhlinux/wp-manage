@@ -325,6 +325,43 @@ export interface MigrateRequest {
   cleanup_source?: boolean
 }
 
+// Bot control types
+export type BotAction = 'allow' | 'deny' | 'rate_limit'
+export type BotCategory = 'search' | 'ai' | 'seo' | 'scraper'
+
+export interface BotCatalogEntry {
+  key: string
+  name: string
+  category: BotCategory
+  pattern: string
+}
+
+export interface BotCatalog {
+  bots: BotCatalogEntry[]
+  rate_tiers: number[]
+}
+
+export interface BotRule {
+  bot_key: string
+  user_agent: string
+  action: BotAction
+  rate_per_min: number
+}
+
+export interface BotRulesResponse {
+  enabled: boolean
+  inherit: boolean
+  rules: BotRule[]
+  server_enabled: boolean
+  server_rules?: BotRule[]
+}
+
+export interface UpdateBotRulesRequest {
+  enabled?: boolean
+  inherit?: boolean
+  rules: BotRule[]
+}
+
 // Security types
 export interface WAFConfig {
   id: number

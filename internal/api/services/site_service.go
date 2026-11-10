@@ -154,6 +154,10 @@ func (s *SiteService) Delete(id uint64) error {
 			"threat_whitelists", "quarantined_files",
 			"external_imports", "subsites", "staging_sites",
 		}
+		// Bot-control rows are keyed by (scope_type, scope_id), not site_id.
+		tx.Exec("DELETE FROM bot_rules WHERE scope_type = 'site' AND scope_id = ?", id)
+		tx.Exec("DELETE FROM bot_configs WHERE scope_type = 'site' AND scope_id = ?", id)
+
 		for _, tbl := range tables {
 			if tbl == "staging_sites" {
 				tx.Exec("DELETE FROM staging_sites WHERE production_id = ? OR staging_site_id = ?", id, id)
@@ -565,6 +569,15 @@ func (s *SiteService) GetPendingTasks(serverID uint64) ([]models.TaskQueue, erro
 	err := s.db.Where("server_id = ? AND status = ?", serverID, "pending").
 		Order("created_at ASC").Find(&tasks).Error
 	return tasks, err
+}
+
+// GetTaskInfo returns the type and site of a queued task ("" / 0 if not found).
+func (s *SiteService) GetTaskInfo(taskID uint64) (taskType string, siteID uint64) {
+	var task models.TaskQueue
+	if err := s.db.Select("task_type", "site_id").First(&task, taskID).Error; err != nil {
+		return "", 0
+	}
+	return task.TaskType, task.SiteID
 }
 
 func (s *SiteService) CompleteTask(taskID uint64, status, errMsg string) error {

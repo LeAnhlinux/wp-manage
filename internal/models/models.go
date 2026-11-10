@@ -212,6 +212,34 @@ type WAFConfig struct {
 	Site            *Site     `json:"site,omitempty" gorm:"foreignKey:SiteID"`
 }
 
+// BotConfig holds the bot-control switch for one scope.
+// Server scope uses Enabled (apply server defaults to its sites);
+// site scope uses Inherit (take the server defaults). No gorm default tags on
+// the bools: with `default:true` GORM writes true when the Go value is false.
+type BotConfig struct {
+	ID        uint64    `json:"id" gorm:"primaryKey;autoIncrement"`
+	ScopeType string    `json:"scope_type" gorm:"type:enum('server','site');uniqueIndex:idx_bot_cfg_scope;not null"`
+	ScopeID   uint64    `json:"scope_id" gorm:"uniqueIndex:idx_bot_cfg_scope;not null"`
+	Enabled   bool      `json:"enabled"`
+	Inherit   bool      `json:"inherit"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// BotRule is one allow / deny / rate_limit rule for a bot in a scope.
+// BotKey is a BotCatalog key, or "custom:<lowercased pattern>" with UserAgent set.
+type BotRule struct {
+	ID         uint64    `json:"id" gorm:"primaryKey;autoIncrement"`
+	ScopeType  string    `json:"scope_type" gorm:"type:enum('server','site');uniqueIndex:idx_bot_rule;not null"`
+	ScopeID    uint64    `json:"scope_id" gorm:"uniqueIndex:idx_bot_rule;not null"`
+	BotKey     string    `json:"bot_key" gorm:"size:120;uniqueIndex:idx_bot_rule;not null"`
+	UserAgent  string    `json:"user_agent" gorm:"size:100"`
+	Action     string    `json:"action" gorm:"type:enum('allow','deny','rate_limit');not null"`
+	RatePerMin int       `json:"rate_per_min"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
 // MalwareScan stores scan results per site
 type MalwareScan struct {
 	ID            uint64     `json:"id" gorm:"primaryKey;autoIncrement"`

@@ -49,6 +49,7 @@ func main() {
 	apiKeyService := services.NewAPIKeyService(db)
 	backupService := services.NewBackupService(db)
 	securityService := services.NewSecurityService(db, fileService)
+	botService := services.NewBotService(db)
 	rolloutService := services.NewRolloutService(db)
 	performanceService := services.NewPerformanceService(db, cfg)
 	multisiteService := services.NewMultisiteService(db)
@@ -95,6 +96,11 @@ func main() {
 	backupHandler := handlers.NewBackupHandler(backupService)
 	migrationHandler := handlers.NewMigrationHandler(migrationService)
 	securityHandler := handlers.NewSecurityHandler(securityService)
+	botHandler := handlers.NewBotHandler(botService, userService)
+	// Sites that appear on a server outside of a rule save (created, imported,
+	// migrated) still need the server's bot rules pushed to the agent.
+	serverHandler.SetSiteReadyHook(botService.QueueForSite)
+	migrationService.SetSiteMovedHook(botService.QueueForSite)
 	wordpressHandler := handlers.NewWordPressHandler(wordpressService)
 	rolloutHandler := handlers.NewRolloutHandler(rolloutService)
 	performanceHandler := handlers.NewPerformanceHandler(performanceService)
@@ -179,7 +185,7 @@ func main() {
 
 	// API routes
 	routes.Setup(app, cfg, authHandler, serverHandler, siteHandler, deployHandler, fileHandler,
-		userHandler, apiKeyHandler, backupHandler, migrationHandler, securityHandler, wordpressHandler, rolloutHandler, performanceHandler, multisiteHandler, imageOptHandler, teamHandler, infraHandler, activityHandler, cronHandler, domainHandler, redisHandler, sshHandler, sftpHandler, hardeningHandler, uptimeHandler, alertHandler, wpcliHandler, cacheHandler, importHandler, dnsHandler, sslHandler, storageHandler, fail2banHandler, panelUpdateHandler, ionCubeHandler, updateCheckHandler, transferHandler, userService, apiKeyService, rateLimiter)
+		userHandler, apiKeyHandler, backupHandler, migrationHandler, securityHandler, wordpressHandler, rolloutHandler, performanceHandler, multisiteHandler, imageOptHandler, teamHandler, infraHandler, activityHandler, cronHandler, domainHandler, redisHandler, sshHandler, sftpHandler, hardeningHandler, uptimeHandler, alertHandler, wpcliHandler, cacheHandler, importHandler, dnsHandler, sslHandler, storageHandler, fail2banHandler, panelUpdateHandler, ionCubeHandler, updateCheckHandler, transferHandler, botHandler, userService, apiKeyService, rateLimiter)
 
 	// Mobile API routes — separate prefix /api/mobile/v1/
 	routes.SetupMobile(app, cfg,

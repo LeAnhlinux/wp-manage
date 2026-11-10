@@ -1,6 +1,9 @@
 package models
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 type LoginRequest struct {
 	Email    string `json:"email" validate:"required,email"`
@@ -269,6 +272,71 @@ type AgentWAFTask struct {
 	Enabled        bool   `json:"enabled"`
 	ParanoidLevel  int    `json:"paranoid_level"`
 	WhitelistedIPs string `json:"whitelisted_ips"`
+}
+
+// --- Bot control ---
+
+type BotRuleInput struct {
+	BotKey     string `json:"bot_key"`
+	UserAgent  string `json:"user_agent"`
+	Action     string `json:"action"`
+	RatePerMin int    `json:"rate_per_min"`
+}
+
+type UpdateBotRulesRequest struct {
+	Enabled *bool          `json:"enabled"` // server scope
+	Inherit *bool          `json:"inherit"` // site scope
+	Rules   []BotRuleInput `json:"rules"`
+}
+
+type BotRulesResponse struct {
+	Enabled       bool      `json:"enabled"`
+	Inherit       bool      `json:"inherit"`
+	Rules         []BotRule `json:"rules"`
+	ServerEnabled bool      `json:"server_enabled"`         // site scope only
+	ServerRules   []BotRule `json:"server_rules,omitempty"` // site scope only
+}
+
+// AgentBotRule is one effective rule, already merged and ordered by the API.
+type AgentBotRule struct {
+	Name       string `json:"name"`    // bot key; reduced to [a-z0-9_] for the limit_req key
+	Pattern    string `json:"pattern"` // literal User-Agent substring, matched case-insensitively
+	Action     string `json:"action"`
+	RatePerMin int    `json:"rate_per_min"`
+}
+
+type AgentBotSite struct {
+	SiteID  uint64         `json:"site_id"`
+	Domain  string         `json:"domain"`
+	Rules   []AgentBotRule `json:"rules,omitempty"`
+	RuleSet *int           `json:"rule_set,omitempty"` // index into AgentBotRulesTask.RuleSets
+}
+
+// AgentBotRulesTask carries the effective rules for one or more sites
+// (task type "configure_bot_rules"). The agent reloads nginx once per task.
+//
+// Most sites on a server share the same rules (the server defaults), and the
+// task payload lives in a 64 KB text column, so identical rule lists are sent
+// once in RuleSets and referenced by index.
+type AgentBotRulesTask struct {
+	RuleSets [][]AgentBotRule `json:"rule_sets,omitempty"`
+	Sites    []AgentBotSite   `json:"sites"`
+}
+
+// Resolve expands RuleSet references into each site's Rules.
+func (t *AgentBotRulesTask) Resolve() error {
+	for i := range t.Sites {
+		ref := t.Sites[i].RuleSet
+		if ref == nil {
+			continue
+		}
+		if *ref < 0 || *ref >= len(t.RuleSets) {
+			return fmt.Errorf("bot rules: site %d references unknown rule set %d", t.Sites[i].SiteID, *ref)
+		}
+		t.Sites[i].Rules = t.RuleSets[*ref]
+		t.Sites[i].RuleSet = nil
+	}
+	return nil
 }
 
 type AgentMalwareScanTask struct {

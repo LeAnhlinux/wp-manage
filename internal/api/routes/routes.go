@@ -161,6 +161,7 @@ func Setup(
 	ionCubeHandler *handlers.IonCubeHandler,
 	updateCheckHandler *handlers.UpdateCheckHandler,
 	transferHandler *handlers.TransferHandler,
+	botHandler *handlers.BotHandler,
 	userSvc *services.UserService,
 	apiKeySvc *services.APIKeyService,
 	rateLimiter *middleware.RateLimiter,
@@ -300,6 +301,15 @@ func Setup(
 	siteWAF := sites.Group("/:siteId/waf")
 	siteWAF.Get("/", securityHandler.GetWAFConfig)
 	siteWAF.Put("/", middleware.PermissionRequired("sites", "manage"), securityHandler.UpdateWAFConfig)
+
+	// Bot control (allow / deny / rate-limit by User-Agent): server defaults + site overrides
+	protected.Get("/bot-catalog", botHandler.GetCatalog)
+	serverBots := servers.Group("/:id/bot-rules", serverAccess)
+	serverBots.Get("/", botHandler.GetServerRules)
+	serverBots.Put("/", middleware.PermissionRequired("infrastructure", "manage"), botHandler.UpdateServerRules)
+	siteBots := sites.Group("/:siteId/bot-rules")
+	siteBots.Get("/", botHandler.GetSiteRules)
+	siteBots.Put("/", middleware.PermissionRequired("sites", "manage"), botHandler.UpdateSiteRules)
 
 	scans := protected.Group("/scans")
 	scans.Get("/", securityHandler.ListAllScans) // all scans filtered by role
