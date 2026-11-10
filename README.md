@@ -397,4 +397,4 @@ GOOS=linux GOARCH=amd64 go build -o bin/wp-manage-agent-linux ./cmd/agent
 
 ## License
 
-Proprietary - GoFiber Team
+Proprietary - KienThucLinux Team
