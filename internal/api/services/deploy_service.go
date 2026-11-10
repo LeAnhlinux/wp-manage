@@ -17,6 +17,9 @@ import (
 	"github.com/gofiber-team/wp-manage/internal/models"
 )
 
+// agentMirrorURL is the public release mirror the agent binary is fetched from.
+const agentMirrorURL = "https://mirrors.bucloud.com"
+
 type DeployService struct {
 	db  *gorm.DB
 	cfg *config.Config
@@ -82,18 +85,30 @@ func (s *DeployService) Deploy(req models.AutoDeployRequest, progress ProgressFu
 	// Step 4: Upload agent binary
 	progress(models.DeployProgress{Step: 4, Total: totalSteps, Message: "Uploading agent binary...", Status: "running"})
 
+	// The binary is written next to the target and renamed into place: writing
+	// straight over a running agent fails with "Text file busy" on a re-deploy.
+	const agentPath = "/usr/local/bin/wp-manage-agent"
+	const agentTmp = agentPath + ".new"
 	binaryName := fmt.Sprintf("wp-manage-agent-linux-%s", goarch)
-	localBinary := s.findAgentBinary(binaryName)
-	if localBinary == "" {
-		return fmt.Errorf("agent binary not found: %s. Run 'make build-linux' first", binaryName)
+
+	// Prefer the current release from the mirror. The copy next to the API
+	// binary dates from when the panel was installed and is not refreshed by
+	// panel updates, so it is only the fallback for servers without outbound
+	// access to the mirror.
+	dlCmd := fmt.Sprintf("curl -fsSL --max-time 120 %s/%s -o %s && test -s %s",
+		agentMirrorURL, binaryName, agentTmp, agentTmp)
+	if _, err := s.runCommand(client, dlCmd); err != nil {
+		localBinary := s.findAgentBinary(binaryName)
+		if localBinary == "" {
+			return fmt.Errorf("agent binary could not be downloaded from the mirror and no local copy was found: %s", binaryName)
+		}
+		if err := s.uploadFile(client, localBinary, agentTmp); err != nil {
+			return fmt.Errorf("failed to upload agent binary: %w", err)
+		}
 	}
 
-	if err := s.uploadFile(client, localBinary, "/usr/local/bin/wp-manage-agent"); err != nil {
-		return fmt.Errorf("failed to upload agent binary: %w", err)
-	}
-
-	if _, err := s.runCommand(client, "chmod +x /usr/local/bin/wp-manage-agent"); err != nil {
-		return fmt.Errorf("chmod failed: %w", err)
+	if _, err := s.runCommand(client, fmt.Sprintf("chmod +x %s && mv -f %s %s", agentTmp, agentTmp, agentPath)); err != nil {
+		return fmt.Errorf("failed to install agent binary: %w", err)
 	}
 
 	// Step 5: Create systemd service

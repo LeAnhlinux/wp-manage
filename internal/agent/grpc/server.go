@@ -1226,12 +1226,11 @@ func (s *AgentServer) executeAgentUpdateLegacy(task models.AgentUpdateTask, stag
 	agentBin := updater.AgentBinaryPath
 	backupBin := agentBin + updater.BackupSuffix
 	exec.Command("cp", agentBin, backupBin).Run()
-	if out, err := exec.Command("cp", stagedPath, agentBin).CombinedOutput(); err != nil {
-		exec.Command("cp", backupBin, agentBin).Run()
+	if err := replaceRunningBinary(stagedPath, agentBin); err != nil {
 		s.reportAgentUpdateResult(models.AgentUpdateResult{
 			RolloutPlanID: task.RolloutPlanID, ServerID: task.ServerID,
 			OldVersion: Version, NewVersion: task.NewVersion,
-			Status: "failed", Error: fmt.Sprintf("replace failed: %v — %s", err, string(out)),
+			Status: "failed", Error: "replace failed: " + err.Error(),
 		})
 		return
 	}
@@ -1240,7 +1239,29 @@ func (s *AgentServer) executeAgentUpdateLegacy(task models.AgentUpdateTask, stag
 		OldVersion: Version, NewVersion: task.NewVersion, Status: "completed",
 	})
 	exec.Command("rm", "-f", stagedPath).Run()
-	exec.Command("systemctl", "restart", "wp-manage-agent").Run()
+	// --no-block: the restart stops this process, so do not wait on the job.
+	exec.Command("systemctl", "--no-block", "restart", "wp-manage-agent").Run()
+}
+
+// replaceRunningBinary installs src as dst while dst may be executing. Writing
+// into a running executable fails with ETXTBSY ("Text file busy"), so the new
+// file is written beside it and renamed over it — rename only swaps the
+// directory entry and the running process keeps its old inode.
+func replaceRunningBinary(src, dst string) error {
+	tmp := dst + ".new"
+	if out, err := exec.Command("cp", "-f", src, tmp).CombinedOutput(); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("%v — %s", err, strings.TrimSpace(string(out)))
+	}
+	if err := os.Chmod(tmp, 0755); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 func (s *AgentServer) reportAgentUpdateResult(result models.AgentUpdateResult) {
