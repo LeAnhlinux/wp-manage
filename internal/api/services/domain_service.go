@@ -253,7 +253,7 @@ func (s *DomainService) checkDNSByIP(serverIP, domain string) *models.DNSCheckRe
 
 	addrs := lookupHostPublic(domain)
 	if len(addrs) == 0 {
-		res.Message = fmt.Sprintf("DNS lookup failed: không tìm thấy bản ghi A cho %s", domain)
+		res.Message = fmt.Sprintf("DNS lookup failed: no A record found for %s", domain)
 	} else {
 		res.ResolvedIPs = addrs
 		for _, a := range addrs {
@@ -263,9 +263,9 @@ func (s *DomainService) checkDNSByIP(serverIP, domain string) *models.DNSCheckRe
 			}
 		}
 		if res.Pointing {
-			res.Message = fmt.Sprintf("Domain đang trỏ đúng về %s", serverIP)
+			res.Message = fmt.Sprintf("Domain points to this server (%s)", serverIP)
 		} else {
-			res.Message = fmt.Sprintf("Domain đang trỏ về %v, cần trỏ về %s", addrs, serverIP)
+			res.Message = fmt.Sprintf("Domain points to %s — it must point to %s", strings.Join(addrs, ", "), serverIP)
 		}
 	}
 

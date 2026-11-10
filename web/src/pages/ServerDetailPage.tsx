@@ -635,7 +635,8 @@ function FirewallTab({ serverId }: { serverId: number }) {
                     <td className="py-2.5 font-mono text-gray-500">{rule.source || <span className="text-gray-300">Anywhere</span>}</td>
                     <td className="py-2.5 text-gray-500 text-xs">{rule.comment}</td>
                     <td className="py-2.5">
-                      <button onClick={() => deleteRule.mutate({ serverId, ruleId: rule.id })}
+                      <button onClick={() => { if (confirm(`Delete the firewall rule for port ${rule.port}?`)) deleteRule.mutate({ serverId, ruleId: rule.id }) }}
+                        aria-label={`Delete firewall rule for port ${rule.port}`}
                         className="p-1 text-gray-400 hover:text-red-600 rounded hover:bg-red-50 transition-colors">
                         <Trash2 size={14} />
                       </button>
@@ -742,7 +743,8 @@ function NginxConfigTab({ serverId }: { serverId: number }) {
                       {cfg.enabled ? 'Enabled' : 'Disabled'}
                     </span>
                   </div>
-                  <button onClick={() => deleteConfig.mutate({ serverId, configId: cfg.id })}
+                  <button onClick={() => { if (confirm(`Delete the Nginx config "${cfg.name}"? Nginx reloads without it.`)) deleteConfig.mutate({ serverId, configId: cfg.id }) }}
+                    aria-label={`Delete Nginx config ${cfg.name}`}
                     className="p-1 text-gray-400 hover:text-red-600">
                     <Trash2 size={14} />
                   </button>
@@ -3206,6 +3208,7 @@ function RedisServerTab({ serverId, canManage }: { serverId: number; canManage: 
   }
 
   const handleFlush = () => {
+    if (!confirm('Flush the Redis cache for every site on this server? Sites rebuild their cache on the next requests, which can slow them down briefly.')) return
     setFlushMsg(null)
     flushServer.mutate({ serverId }, {
       onSuccess: () => setFlushMsg('All Redis cache flushed successfully.'),

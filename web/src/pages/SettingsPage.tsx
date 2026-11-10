@@ -811,7 +811,9 @@ function UpdatesSection() {
               </div>
               {result.latest.release_notes ? (
                 <ul className="space-y-1">
-                  {result.latest.release_notes.split('\\n').filter(Boolean).map((line, i) => (
+                  {/* Notes arrive either with real newlines or with a literal "\n"
+                      (older manifests); one bullet per line in both cases. */}
+                  {result.latest.release_notes.split(/\r?\n|\\n/).map(l => l.trim()).filter(Boolean).map((line, i) => (
                     <li key={i} className="text-xs text-gray-600 leading-relaxed">
                       {line.startsWith('•') ? line : `• ${line}`}
                     </li>

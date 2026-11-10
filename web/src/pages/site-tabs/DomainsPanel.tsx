@@ -195,7 +195,7 @@ export function DomainsPanel({ siteId, canManage }: { siteId: number; canManage:
                       <CornerDownRight size={14} />
                     </button>
                     {/* Delete */}
-                    <button onClick={() => deleteDomain.mutate({ siteId, domainId: d.id })}
+                    <button onClick={() => { if (confirm(`Remove the domain ${d.domain} from this site?`)) deleteDomain.mutate({ siteId, domainId: d.id }) }}
                       title="Remove domain"
                       className="p-1.5 text-gray-400 hover:text-red-600 rounded hover:bg-gray-50">
                       <Trash2 size={14} />
