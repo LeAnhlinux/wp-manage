@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"os/exec"
 	"regexp"
 	"sort"
@@ -1757,6 +1758,18 @@ func (s *AgentServer) executeStagingCreate(taskID uint64, data map[string]interf
 	exec.Command("wp", "config", "set", "DB_USER", stagingDBUser, "--path="+wpPath, "--allow-root").Run()
 	exec.Command("wp", "config", "set", "DB_PASSWORD", stagingDBPassword, "--path="+wpPath, "--allow-root").Run()
 
+	// The copied wp-config.php still carries production's object-cache
+	// namespace. Left alone, staging reads production's cached options from
+	// Redis (siteurl/home → every link and wp-admin redirect goes to production)
+	// and its writes land in production's cache.
+	stagingSiteID, _ := data["staging_site_id"].(float64)
+	cacheNS := fmt.Sprintf("stg_%d_", uint64(stagingSiteID))
+	for _, key := range []string{"WP_REDIS_PREFIX", "WP_CACHE_KEY_SALT"} {
+		if exec.Command("wp", "config", "has", key, "--path="+wpPath, "--allow-root").Run() == nil {
+			exec.Command("wp", "config", "set", key, cacheNS, "--path="+wpPath, "--allow-root").Run()
+		}
+	}
+
 	// Fix #5 — search-replace production URL → staging URL in DB
 	stagingURL := "http://" + stagingDomain
 	for _, prodURL := range []string{"https://" + productionDomain, "http://" + productionDomain} {
@@ -1883,6 +1896,9 @@ func (s *AgentServer) executeStagingPush(taskID uint64, data map[string]interfac
 		exec.Command("wp", "search-replace", "http://"+productionDomain, prodURL,
 			"--path="+wpPath, "--skip-themes", "--skip-plugins", "--allow-root").Run()
 	}
+
+	// The production DB was replaced underneath its object cache.
+	exec.Command("wp", "cache", "flush", "--path="+wpPath, "--skip-themes", "--skip-plugins", "--allow-root").Run()
 
 	// rsync staging files to production (excluding wp-config.php)
 	srcDir := fmt.Sprintf("/var/www/%s/public/", stagingDomain)
@@ -3217,7 +3233,6 @@ func (s *AgentServer) executeTailLogs(taskID uint64, logType string, lines int) 
 	// Try common alternative paths
 	if _, err := os.Stat(logPath); os.IsNotExist(err) {
 		altPaths := map[string][]string{
-			"php_error":   {"/var/log/php8.3-fpm.log", "/var/log/php8.2-fpm.log", "/var/log/php8.1-fpm.log"},
 			"mysql_error": {"/var/log/mariadb/mariadb.log", "/var/log/mysqld.log"},
 		}
 		if alts, ok := altPaths[logType]; ok {
@@ -3230,13 +3245,38 @@ func (s *AgentServer) executeTailLogs(taskID uint64, logType string, lines int) 
 		}
 	}
 
-	out, err := exec.Command("tail", "-n", fmt.Sprintf("%d", lines), logPath).CombinedOutput()
+	// PHP-FPM writes one log per installed version (/var/log/php8.5-fpm.log).
+	// Show all of them, most recently written last; tail labels each file.
+	tailArgs := []string{"-n", fmt.Sprintf("%d", lines)}
+	if fpmLogs := phpFPMLogFiles("/var/log"); logType == "php_error" && len(fpmLogs) > 0 {
+		tailArgs = append(tailArgs, fpmLogs...)
+	} else {
+		tailArgs = append(tailArgs, logPath)
+	}
+
+	out, err := exec.Command("tail", tailArgs...).CombinedOutput()
 	if err != nil {
 		result.Error = fmt.Sprintf("failed to read logs: %s", err.Error())
 	} else {
 		result.Output = string(out)
 	}
 	s.reportTaskResult(result)
+}
+
+// phpFPMLogFiles returns the per-version PHP-FPM logs in dir (php8.5-fpm.log,
+// php8.3-fpm.log, …), ordered oldest-modified first so the log that was
+// written to last ends up at the bottom of the output.
+func phpFPMLogFiles(dir string) []string {
+	files, _ := filepath.Glob(filepath.Join(dir, "php*-fpm.log"))
+	sort.SliceStable(files, func(i, j int) bool {
+		fi, errI := os.Stat(files[i])
+		fj, errJ := os.Stat(files[j])
+		if errI != nil || errJ != nil {
+			return files[i] < files[j]
+		}
+		return fi.ModTime().Before(fj.ModTime())
+	})
+	return files
 }
 
 func (s *AgentServer) executeManageSSHKey(taskID uint64, task models.AgentSSHKeyTask) {
