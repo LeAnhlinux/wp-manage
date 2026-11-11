@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/gofiber-team/wp-manage/internal/models"
+
+	"github.com/gofiber-team/wp-manage/pkg/utils"
 )
 
 const (
@@ -45,7 +47,7 @@ func OptimizeImages(task models.AgentImageOptTask, progressFn func(models.AgentI
 	}
 
 	uploadsDir := fmt.Sprintf("/var/www/%s/public/wp-content/uploads", task.Domain)
-	siteUser := "wp_" + strings.ReplaceAll(task.Domain, ".", "_")
+	siteUser := utils.SiteLinuxUser(task.Domain)
 
 	// Check if uploads dir exists
 	if _, err := os.Stat(uploadsDir); os.IsNotExist(err) {
@@ -383,7 +385,7 @@ func GetOriginalsStats(domain string) (count int, sizeBytes int64) {
 // can be re-optimized in the future.  Returns the number of files reverted.
 func RevertImages(domain string) (reverted int, errMsg string) {
 	uploadsDir := fmt.Sprintf("/var/www/%s/public/wp-content/uploads", domain)
-	siteUser := "wp_" + strings.ReplaceAll(domain, ".", "_")
+	siteUser := utils.SiteLinuxUser(domain)
 
 	filepath.Walk(uploadsDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() {
@@ -500,7 +502,7 @@ function wpmanage_imageopt_on_upload( $upload ) {
 	}
 
 	// Fix ownership to site user
-	siteUser := "wp_" + strings.ReplaceAll(domain, ".", "_")
+	siteUser := utils.SiteLinuxUser(domain)
 	exec.Command("chown", "-R", siteUser+":"+siteUser, muDir).Run()
 
 	slog.Info("Image opt mu-plugin installed", "domain", domain, "quality", quality, "webp", webpEnabled)

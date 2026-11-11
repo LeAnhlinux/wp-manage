@@ -1,8 +1,11 @@
 package utils
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"regexp"
+	"strings"
 )
 
 // domainRegex matches valid hostnames per RFC 1123:
@@ -27,4 +30,22 @@ func ValidateDomain(domain string) error {
 		return fmt.Errorf("invalid domain %q: must be a valid hostname (lowercase letters, digits, hyphens, dots only)", domain)
 	}
 	return nil
+}
+
+// maxLinuxUserLen is the longest user name useradd accepts.
+const maxLinuxUserLen = 32
+
+// SiteLinuxUser returns the Linux user that owns a site's files and runs its
+// PHP-FPM pool: "wp_" + the domain with dots and hyphens turned into
+// underscores. Names that would exceed the 32-character limit of useradd are
+// shortened to a prefix plus a short hash of the domain, so they stay unique
+// and stable. Every package must derive the name through this function.
+func SiteLinuxUser(domain string) string {
+	name := "wp_" + strings.NewReplacer(".", "_", "-", "_").Replace(domain)
+	if len(name) <= maxLinuxUserLen {
+		return name
+	}
+	sum := sha256.Sum256([]byte(domain))
+	suffix := "_" + hex.EncodeToString(sum[:])[:6]
+	return name[:maxLinuxUserLen-len(suffix)] + suffix
 }

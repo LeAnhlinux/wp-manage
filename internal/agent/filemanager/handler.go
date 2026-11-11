@@ -23,6 +23,8 @@ import (
 	"time"
 
 	"github.com/gofiber-team/wp-manage/internal/models"
+
+	"github.com/gofiber-team/wp-manage/pkg/utils"
 )
 
 const maxFileReadSize = 10 * 1024 * 1024 // 10MB max for file content read
@@ -123,8 +125,7 @@ func NewHandler(apiKey string) *Handler {
 // siteUser derives the Linux username for a WordPress site.
 // Matches the convention in internal/agent/site/manager.go SiteUser().
 func siteUser(domain string) string {
-	r := strings.NewReplacer(".", "_", "-", "_")
-	return "wp_" + r.Replace(domain)
+	return utils.SiteLinuxUser(domain)
 }
 
 // RegisterRoutes registers file manager routes on the given mux

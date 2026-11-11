@@ -24,7 +24,7 @@ import (
 // Convention: "wp_" + domain with dots and hyphens replaced by underscores.
 // e.g. "example.com" → "wp_example_com", "my-site.co.uk" → "wp_my_site_co_uk"
 func SiteUser(domain string) string {
-	return "wp_" + strings.NewReplacer(".", "_", "-", "_").Replace(domain)
+	return utils.SiteLinuxUser(domain)
 }
 
 // SiteRoot returns the site's root directory path.

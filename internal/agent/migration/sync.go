@@ -15,6 +15,8 @@ import (
 
 	agentsecurity "github.com/gofiber-team/wp-manage/internal/agent/security"
 	"github.com/gofiber-team/wp-manage/internal/models"
+
+	"github.com/gofiber-team/wp-manage/pkg/utils"
 )
 
 type MigrationRunner struct {
@@ -48,8 +50,7 @@ func (r *MigrationRunner) RunMigration(task models.AgentMigrateTask) {
 	// NEVER fall back to www-data — derive from domain if not set.
 	linuxUser := task.LinuxUser
 	if linuxUser == "" {
-		sanitized := strings.NewReplacer(".", "_", "-", "_").Replace(task.Domain)
-		linuxUser = "wp_" + sanitized
+		linuxUser = utils.SiteLinuxUser(task.Domain)
 	}
 
 	// Effective domain/root on target

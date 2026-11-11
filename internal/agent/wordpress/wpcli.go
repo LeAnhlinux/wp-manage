@@ -6,11 +6,13 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/gofiber-team/wp-manage/pkg/utils"
 )
 
 // siteUserForDomain derives the Linux username for a WordPress site (matches site/manager.go).
 func siteUserForDomain(domain string) string {
-	return "wp_" + strings.NewReplacer(".", "_", "-", "_").Replace(domain)
+	return utils.SiteLinuxUser(domain)
 }
 
 type WPCLIResult struct {

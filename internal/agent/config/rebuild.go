@@ -5,13 +5,14 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
-	"strings"
 	"time"
+
+	"github.com/gofiber-team/wp-manage/pkg/utils"
 )
 
 // siteUser derives the Linux username for a WordPress site (matches site/manager.go).
 func siteUser(domain string) string {
-	return "wp_" + strings.NewReplacer(".", "_", "-", "_").Replace(domain)
+	return utils.SiteLinuxUser(domain)
 }
 
 type RebuildResult struct {
@@ -304,6 +305,14 @@ func backupConfig(filePath string) string {
 }
 
 func restoreConfig(filePath, backupPath string) {
+	if _, err := os.Stat(backupPath); err != nil {
+		// No backup means the file did not exist before: a rollback must remove
+		// it, otherwise a rejected new pool/vhost stays on disk and takes the
+		// whole service down on its next restart.
+		os.Remove(filePath)
+		slog.Info("New config removed after failed test", "path", filePath)
+		return
+	}
 	exec.Command("cp", backupPath, filePath).Run()
 	slog.Info("Config restored from backup", "path", filePath)
 }

@@ -1689,9 +1689,15 @@ func (s *AgentServer) executeStagingCreate(taskID uint64, data map[string]interf
 	}
 
 	// Fix #2 — create Linux user for staging site
-	stagingLinuxUser := "wp_" + strings.ReplaceAll(strings.ReplaceAll(stagingDomain, ".", "_"), "-", "_")
-	exec.Command("useradd", "--system", "--no-create-home", "--shell", "/usr/sbin/nologin",
-		"--home-dir", fmt.Sprintf("/var/www/%s", stagingDomain), stagingLinuxUser).Run()
+	stagingLinuxUser := utils.SiteLinuxUser(stagingDomain)
+	// The PHP-FPM pool runs as this user, and one pool with a missing user stops
+	// the whole php-fpm service from starting — so a failure here must abort.
+	if out, err := exec.Command("useradd", "--system", "--no-create-home", "--shell", "/usr/sbin/nologin",
+		"--home-dir", fmt.Sprintf("/var/www/%s", stagingDomain), stagingLinuxUser).CombinedOutput(); err != nil &&
+		!strings.Contains(string(out), "already exists") {
+		fail("Could not create Linux user " + stagingLinuxUser + ": " + strings.TrimSpace(string(out)))
+		return
+	}
 
 	// 1. Create staging DB & user
 	sqlCmds := []string{
@@ -1775,9 +1781,18 @@ func (s *AgentServer) executeStagingCreate(taskID uint64, data map[string]interf
 	os.Remove(nginxEnabled) // remove stale symlink if any
 	os.Symlink(nginxConf, nginxEnabled)
 
-	agentconfig.RebuildPHPFPMPool(stagingDomain, phpVersion, map[string]string{})
+	// RebuildPHPFPMPool tests the config, rolls the pool back if php-fpm rejects
+	// it, and restarts the service itself on success.
+	poolRes, poolErr := agentconfig.RebuildPHPFPMPool(stagingDomain, phpVersion, map[string]string{})
+	if poolErr != nil {
+		fail("Could not write PHP-FPM pool: " + poolErr.Error())
+		return
+	}
+	if poolRes != nil && !poolRes.Success {
+		fail("PHP-FPM pool rejected: " + strings.TrimSpace(poolRes.Message))
+		return
+	}
 	exec.Command("systemctl", "reload", "nginx").Run()
-	exec.Command("systemctl", "restart", fmt.Sprintf("php%s-fpm", phpVersion)).Run()
 
 	// Fix #8 — report success and complete task
 	s.reportStagingResult(map[string]interface{}{
@@ -1917,7 +1932,7 @@ func (s *AgentServer) executeStagingDelete(taskID uint64, data map[string]interf
 	}
 
 	// Fix #11 — remove the staging Linux user
-	stagingLinuxUser := "wp_" + strings.ReplaceAll(strings.ReplaceAll(stagingDomain, ".", "_"), "-", "_")
+	stagingLinuxUser := utils.SiteLinuxUser(stagingDomain)
 	exec.Command("userdel", stagingLinuxUser).Run()
 
 	// Fix #13 — report success and complete task

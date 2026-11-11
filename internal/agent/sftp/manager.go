@@ -7,11 +7,13 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/gofiber-team/wp-manage/pkg/utils"
 )
 
 // siteUser derives the Linux username for a WordPress site (must match site/manager.go).
 func siteUser(domain string) string {
-	return "wp_" + strings.NewReplacer(".", "_", "-", "_").Replace(domain)
+	return utils.SiteLinuxUser(domain)
 }
 
 const sshdConfigPath = "/etc/ssh/sshd_config"

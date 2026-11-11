@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/gofiber-team/wp-manage/internal/models"
+
+	"github.com/gofiber-team/wp-manage/pkg/utils"
 )
 
 // CheckUpdates uses WP-CLI to check for available updates
@@ -17,7 +19,7 @@ func CheckUpdates(task models.AgentCheckUpdatesTask) models.AgentCheckUpdatesRes
 	}
 
 	wpPath := fmt.Sprintf("/var/www/%s/public", task.Domain)
-	wpUser := "wp_" + strings.ReplaceAll(strings.ReplaceAll(task.Domain, ".", "_"), "-", "_")
+	wpUser := utils.SiteLinuxUser(task.Domain)
 	phpBin := phpBinaryForVersion(task.PHPVersion)
 
 	// Always get current WP version (even if no updates available)
@@ -47,7 +49,7 @@ func ApplyUpdates(task models.AgentApplyUpdatesTask) models.AgentApplyUpdatesRes
 	}
 
 	wpPath := fmt.Sprintf("/var/www/%s/public", task.Domain)
-	wpUser := "wp_" + strings.ReplaceAll(strings.ReplaceAll(task.Domain, ".", "_"), "-", "_")
+	wpUser := utils.SiteLinuxUser(task.Domain)
 	phpBin := phpBinaryForVersion(task.PHPVersion)
 
 	// Update WordPress core
