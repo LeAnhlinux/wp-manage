@@ -177,10 +177,15 @@ export function useOPcacheAction() {
 // ==================== PHP Version Management ====================
 
 export function useInstallPHPVersion() {
+  const qc = useQueryClient()
   return useMutation({
     mutationFn: async ({ serverId, version }: { serverId: number; version: string }) => {
       const { data } = await api.post<APIResponse>(`/servers/${serverId}/phpfpm/install`, { version })
       return data
+    },
+    onSuccess: (_data, { serverId }) => {
+      qc.invalidateQueries({ queryKey: ['installed-php', serverId] })
+      qc.invalidateQueries({ queryKey: ['php-updates', serverId] })
     },
   })
 }
@@ -401,6 +406,7 @@ export function useInstallService(serverId: number) {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['server-services', serverId] })
+      qc.invalidateQueries({ queryKey: ['installed-php', serverId] })
     },
   })
 }

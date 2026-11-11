@@ -68,15 +68,19 @@ export function useAutoDeploy() {
 
 // Fetch list of PHP versions installed on a specific server.
 // Uses existing GET /servers/:id/phpfpm/installed (synchronous agent task).
+// Shares the 'installed-php' cache with useInstalledPHPVersions so installing a
+// PHP version on the server page is reflected here, and always re-reads from the
+// agent when the form mounts or the server changes.
 export function useServerInstalledPHP(serverId: number) {
   return useQuery({
-    queryKey: ['server-php-versions', serverId],
+    queryKey: ['installed-php', serverId],
     queryFn: async () => {
       const { data } = await api.get<APIResponse<InstalledPHPVersion[]>>(`/servers/${serverId}/phpfpm/installed`)
       return data.data ?? []
     },
     enabled: !!serverId && serverId > 0,
-    staleTime: 5 * 60 * 1000, // 5 minutes — PHP versions rarely change
+    staleTime: 0,
+    refetchOnMount: 'always',
     retry: false,
   })
 }
